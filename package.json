@@ -1,0 +1,23 @@
+{
+  "name": "@baijimu/connector-codex",
+  "version": "0.1.0",
+  "description": "Baijimu Local connector for Codex app-server.",
+  "type": "module",
+  "bin": {
+    "baijimu-connector-codex": "./bin/baijimu-connector-codex.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "start": "node ./bin/baijimu-connector-codex.js start"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "baijimu",
+    "connector",
+    "codex",
+    "app-server"
+  ],
+  "license": "MIT"
+}

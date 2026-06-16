@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "1.0",
+  "id": "com.baijimu.connector.codex",
+  "name": "Codex Connector",
+  "version": "0.1.0",
+  "description": "Expose a local Codex app-server session through Baijimu Local.",
+  "publisher": {
+    "name": "Baijimu",
+    "homepage": "https://baijimu.com"
+  },
+  "source": {
+    "type": "gitee",
+    "repo": "zxflimit_admin/baijimu-connector-codex",
+    "revision": "v0.1.0"
+  },
+  "runtime": {
+    "type": "process",
+    "command": "baijimu-connector-codex",
+    "args": ["start", "--daemon"],
+    "healthCheck": {
+      "type": "http",
+      "url": "http://127.0.0.1:18110/healthz",
+      "timeoutSecs": 2,
+      "expectStatus": 200
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "port": {
+        "type": "integer",
+        "default": 18110,
+        "minimum": 1024,
+        "maximum": 65535
+      },
+      "codexBinary": {
+        "type": "string",
+        "default": "codex"
+      },
+      "listen": {
+        "type": "string",
+        "default": "stdio://"
+      }
+    },
+    "additionalProperties": false
+  },
+  "remoteCapabilities": [
+    {
+      "name": "codex.thread.read",
+      "risk": "medium",
+      "description": "Read local Codex thread metadata and streamed output."
+    },
+    {
+      "name": "codex.turn.write",
+      "risk": "medium",
+      "description": "Send prompts and steering instructions to local Codex."
+    },
+    {
+      "name": "codex.raw.request",
+      "risk": "high",
+      "description": "Forward an advanced JSON-RPC request to local Codex app-server."
+    },
+    {
+      "name": "codex.turn.interrupt",
+      "risk": "medium",
+      "description": "Interrupt an active Codex turn."
+    }
+  ],
+  "serviceRegistrationFiles": ["service-registration.json"]
+}

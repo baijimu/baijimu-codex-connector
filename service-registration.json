@@ -1,0 +1,176 @@
+{
+  "name": "codexSession",
+  "description": "Local Codex app-server session control.",
+  "transport": {
+    "type": "http",
+    "baseUrl": "http://127.0.0.1:18110"
+  },
+  "healthCheck": {
+    "type": "http",
+    "path": "/healthz",
+    "timeoutSecs": 2,
+    "expectStatus": 200
+  },
+  "startCommand": {
+    "type": "shell_command",
+    "command": ["baijimu-connector-codex", "start", "--daemon"]
+  },
+  "methods": [
+    {
+      "name": "status",
+      "description": "Return connector and Codex app-server connection status.",
+      "path": "/invoke/status",
+      "httpMethod": "POST",
+      "timeoutSecs": 5,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "startThread",
+      "description": "Start a new Codex thread through local Codex app-server.",
+      "path": "/invoke/startThread",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "model": { "type": "string" },
+          "cwd": { "type": "string" },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "resumeThread",
+      "description": "Resume an existing Codex thread.",
+      "path": "/invoke/resumeThread",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": ["threadId"],
+        "properties": {
+          "threadId": { "type": "string" },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "startTurn",
+      "description": "Start a Codex turn in a thread.",
+      "path": "/invoke/startTurn",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": ["threadId", "input"],
+        "properties": {
+          "threadId": { "type": "string" },
+          "input": {},
+          "model": { "type": "string" },
+          "cwd": { "type": "string" },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "steerTurn",
+      "description": "Append steering input to an active Codex turn.",
+      "path": "/invoke/steerTurn",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": ["input"],
+        "properties": {
+          "threadId": { "type": "string" },
+          "turnId": { "type": "string" },
+          "input": {},
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "interruptTurn",
+      "description": "Interrupt an active Codex turn.",
+      "path": "/invoke/interruptTurn",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "threadId": { "type": "string" },
+          "turnId": { "type": "string" },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "recentEvents",
+      "description": "Read recent Codex app-server notifications cached by the connector.",
+      "path": "/invoke/recentEvents",
+      "httpMethod": "POST",
+      "timeoutSecs": 5,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "afterSequence": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 500, "default": 100 }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "request",
+      "description": "Forward a raw JSON-RPC request to local Codex app-server.",
+      "path": "/invoke/request",
+      "httpMethod": "POST",
+      "timeoutSecs": 60,
+      "input_schema": {
+        "type": "object",
+        "required": ["method"],
+        "properties": {
+          "method": { "type": "string" },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 600000 }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "codexNotification",
+      "description": "Notification emitted by local Codex app-server.",
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  ]
+}
