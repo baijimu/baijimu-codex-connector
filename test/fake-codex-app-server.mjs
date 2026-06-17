@@ -44,6 +44,77 @@ rl.on("line", (line) => {
     });
     return;
   }
+  if (message.method === "thread/list") {
+    send({
+      id: message.id,
+      result: {
+        data: [
+          {
+            id: "thr_listed",
+            name: "Listed Thread",
+            cwd: "/tmp/listed",
+            source: "cli",
+            preview: "Listed preview",
+            gitInfo: null,
+          },
+        ],
+        nextCursor: null,
+        backwardsCursor: "cursor_back",
+      },
+    });
+    return;
+  }
+  if (message.method === "thread/search") {
+    send({
+      id: message.id,
+      result: {
+        data: [
+          {
+            thread: {
+              id: "thr_search",
+              name: "Search Thread",
+              cwd: "/tmp/search",
+            },
+            matches: [],
+          },
+        ],
+        nextCursor: null,
+        backwardsCursor: null,
+      },
+    });
+    return;
+  }
+  if (message.method === "thread/read") {
+    send({
+      id: message.id,
+      result: {
+        thread: {
+          id: message.params.threadId,
+          name: "Read Thread",
+          cwd: "/tmp/read",
+          turns: message.params.includeTurns ? [{ id: "turn_read", items: [] }] : [],
+        },
+      },
+    });
+    return;
+  }
+  if (message.method === "app/list") {
+    send({
+      id: message.id,
+      result: {
+        data: [
+          {
+            id: "app_test",
+            name: "Test App",
+            isAccessible: true,
+            isEnabled: true,
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    return;
+  }
   if (message.method === "thread/resume") {
     send({
       id: message.id,

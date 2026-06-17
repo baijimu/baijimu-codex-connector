@@ -3,12 +3,12 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
 const DEFAULT_CODEX_BINARY = "codex";
@@ -48,6 +48,7 @@ class CodexAppServerClient {
     this.eventSequence = 0;
     this.startedAt = null;
     this.lastExit = null;
+    this.initializing = null;
   }
 
   status() {
@@ -83,7 +84,12 @@ class CodexAppServerClient {
     }
 
     if (!this.initialized) {
-      await this.initialize();
+      if (!this.initializing) {
+        this.initializing = this.initialize().finally(() => {
+          this.initializing = null;
+        });
+      }
+      await this.initializing;
     }
   }
 
@@ -100,6 +106,7 @@ class CodexAppServerClient {
     this.startedAt = new Date().toISOString();
     this.lastExit = null;
     this.initialized = false;
+    this.initializing = null;
 
     this.rl = createInterface({ input: this.proc.stdout });
     this.rl.on("line", (line) => this.handleLine(line));
@@ -344,8 +351,55 @@ function serverOptions(options) {
   };
 }
 
-function daemonize(options) {
+async function connectorHealth(options, timeoutMs = 1000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`http://${options.host}:${options.port}/healthz`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForConnectorHealth(options, expectedPid) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const health = await connectorHealth(options, 500);
+    if (health?.ok) {
+      if (!expectedPid || health.status?.connector?.pid === expectedPid) {
+        return health;
+      }
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+  }
+  return null;
+}
+
+async function daemonize(options) {
   ensureConnectorHome();
+  const existingHealth = await connectorHealth(options);
+  if (existingHealth?.ok) {
+    const pid = existingHealth.status?.connector?.pid ?? null;
+    if (pid) {
+      writeFileSync(pidPath(), `${pid}\n`);
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      pid,
+      existing: true,
+      url: `http://${options.host}:${options.port}`,
+      logPath: logPath(),
+    }));
+    return;
+  }
+
   const childArgs = [
     __filename,
     "start",
@@ -362,18 +416,30 @@ function daemonize(options) {
     childArgs.push("--codex-args", JSON.stringify(options.extraArgs));
   }
 
-  const log = createWriteStream(logPath(), { flags: "a" });
-  const child = spawn(process.execPath, childArgs, {
-    cwd: packageRoot,
-    detached: true,
-    stdio: ["ignore", log, log],
-    env: process.env,
-  });
+  const stdoutFd = openSync(logPath(), "a");
+  const stderrFd = openSync(logPath(), "a");
+  let child;
+  try {
+    child = spawn(process.execPath, childArgs, {
+      cwd: packageRoot,
+      detached: true,
+      stdio: ["ignore", stdoutFd, stderrFd],
+      env: process.env,
+    });
+  } finally {
+    closeSync(stdoutFd);
+    closeSync(stderrFd);
+  }
   child.unref();
-  writeFileSync(pidPath(), `${child.pid}\n`);
+  const health = await waitForConnectorHealth(options, child.pid);
+  if (!health?.ok) {
+    throw new Error(`connector daemon did not become healthy at http://${options.host}:${options.port}`);
+  }
+  const pid = health.status?.connector?.pid ?? child.pid;
+  writeFileSync(pidPath(), `${pid}\n`);
   console.log(JSON.stringify({
     ok: true,
-    pid: child.pid,
+    pid,
     url: `http://${options.host}:${options.port}`,
     logPath: logPath(),
   }));
@@ -413,10 +479,71 @@ function mergeParams(body, base = {}) {
   return { ...base, ...params };
 }
 
+function pickParams(body, keys) {
+  const params = {};
+  for (const key of keys) {
+    if (body[key] !== undefined) {
+      params[key] = body[key];
+    }
+  }
+  return params;
+}
+
 async function handleInvoke(pathname, body, client) {
   switch (pathname) {
     case "/invoke/status":
       return client.status();
+    case "/invoke/listThreads": {
+      const params = mergeParams(body, pickParams(body, [
+        "cursor",
+        "limit",
+        "sortKey",
+        "sortDirection",
+        "modelProviders",
+        "sourceKinds",
+        "archived",
+        "cwd",
+        "useStateDbOnly",
+        "searchTerm",
+      ]));
+      const result = await client.request("thread/list", params, body.timeoutMs);
+      return { result, status: client.status() };
+    }
+    case "/invoke/searchThreads": {
+      if (!body.searchTerm && !(body.params && body.params.searchTerm)) {
+        throw new HttpError(400, "searchTerm is required");
+      }
+      const params = mergeParams(body, pickParams(body, [
+        "cursor",
+        "limit",
+        "sortKey",
+        "sortDirection",
+        "sourceKinds",
+        "archived",
+        "searchTerm",
+      ]));
+      const result = await client.request("thread/search", params, body.timeoutMs);
+      return { result, status: client.status() };
+    }
+    case "/invoke/readThread": {
+      const threadId = body.threadId ?? body.params?.threadId;
+      if (!threadId) {
+        throw new HttpError(400, "threadId is required");
+      }
+      const params = mergeParams(body, pickParams(body, ["threadId", "includeTurns"]));
+      const result = await client.request("thread/read", params, body.timeoutMs);
+      return { result, status: client.status() };
+    }
+    case "/invoke/listApps": {
+      const params = mergeParams(body, pickParams(body, [
+        "cursor",
+        "limit",
+        "threadId",
+        "forceRefetch",
+      ]));
+      const result = await client.request("app/list", params, body.timeoutMs);
+      return { result, status: client.status() };
+    }
     case "/invoke/startThread": {
       const params = mergeParams(body, {
         ...(body.model ? { model: body.model } : {}),
@@ -486,7 +613,7 @@ async function handleInvoke(pathname, body, client) {
 async function startServer(options) {
   const resolved = serverOptions(options);
   if (options.daemon) {
-    daemonize(resolved);
+    await daemonize(resolved);
     return;
   }
 

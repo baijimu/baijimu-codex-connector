@@ -51,6 +51,10 @@ CODEX_CONNECTOR_CODEX_ARGS='["app-server","--listen","stdio://"]'
 The connector registers one service:
 
 - `codexSession.status`
+- `codexSession.listThreads`
+- `codexSession.searchThreads`
+- `codexSession.readThread`
+- `codexSession.listApps`
 - `codexSession.startThread`
 - `codexSession.resumeThread`
 - `codexSession.startTurn`
@@ -60,6 +64,8 @@ The connector registers one service:
 - `codexSession.request`
 
 `request` is an advanced raw JSON-RPC forwarder and should be treated as high risk in remote authorization policies.
+
+Thread list responses include the Codex `cwd`, source, git metadata, title, preview, and pagination cursors so callers can choose the right workspace before starting or resuming work.
 
 ## Development
 
