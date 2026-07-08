@@ -98,6 +98,28 @@ rl.on("line", (line) => {
     });
     return;
   }
+  if (message.method === "thread/turns/list") {
+    send({
+      id: message.id,
+      result: {
+        data: [
+          {
+            id: "turn_recent",
+            items: [
+              {
+                id: "item_recent",
+                type: "agent_message",
+                text: `limit=${message.params.limit};direction=${message.params.sortDirection};items=${message.params.itemsView}`,
+              },
+            ],
+          },
+        ],
+        nextCursor: message.params.cursor ? null : "older_cursor",
+        backwardsCursor: "newer_cursor",
+      },
+    });
+    return;
+  }
   if (message.method === "app/list") {
     send({
       id: message.id,
@@ -121,6 +143,16 @@ rl.on("line", (line) => {
       result: {
         thread: {
           id: message.params.threadId,
+          initialTurnsPage: message.params.initialTurnsPage ? {
+            data: [
+              {
+                id: "turn_resume",
+                items: [],
+              },
+            ],
+            nextCursor: null,
+            backwardsCursor: "resume_back",
+          } : null,
         },
       },
     });

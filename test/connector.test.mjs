@@ -162,6 +162,16 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     assert.equal(thread.data.result.thread.id, "thr_read");
     assert.equal(thread.data.result.thread.turns[0].id, "turn_read");
 
+    const turns = await postJson(port, "/invoke/listThreadTurns", {
+      threadId: "thr_read",
+      limit: 8,
+      sortDirection: "desc",
+      itemsView: "full",
+    });
+    assert.equal(turns.data.result.data[0].id, "turn_recent");
+    assert.equal(turns.data.result.data[0].items[0].text, "limit=8;direction=desc;items=full");
+    assert.equal(turns.data.result.nextCursor, "older_cursor");
+
     const apps = await postJson(port, "/invoke/listApps", { limit: 10 });
     assert.equal(apps.data.result.data[0].id, "app_test");
     assert.equal(apps.data.result.data[0].isAccessible, true);

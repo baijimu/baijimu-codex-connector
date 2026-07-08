@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
 const DEFAULT_CODEX_BINARY = "codex";
@@ -796,6 +796,21 @@ async function handleInvoke(pathname, body, client) {
       const result = await client.request("thread/read", params, body.timeoutMs);
       return { result, status: client.status() };
     }
+    case "/invoke/listThreadTurns": {
+      const threadId = body.threadId ?? body.params?.threadId;
+      if (!threadId) {
+        throw new HttpError(400, "threadId is required");
+      }
+      const params = mergeParams(body, pickParams(body, [
+        "threadId",
+        "cursor",
+        "limit",
+        "sortDirection",
+        "itemsView",
+      ]));
+      const result = await client.request("thread/turns/list", params, body.timeoutMs);
+      return { result, status: client.status() };
+    }
     case "/invoke/listApps": {
       const params = mergeParams(body, pickParams(body, [
         "cursor",
@@ -818,7 +833,11 @@ async function handleInvoke(pathname, body, client) {
       if (!body.threadId) {
         throw new HttpError(400, "threadId is required");
       }
-      const params = mergeParams(body, { threadId: body.threadId });
+      const params = mergeParams(body, {
+        threadId: body.threadId,
+        ...(body.excludeTurns !== undefined ? { excludeTurns: body.excludeTurns } : {}),
+        ...(body.initialTurnsPage !== undefined ? { initialTurnsPage: body.initialTurnsPage } : {}),
+      });
       const result = await client.request("thread/resume", params, body.timeoutMs);
       return { result, status: client.status() };
     }

@@ -230,6 +230,29 @@
       }
     },
     {
+      "name": "listThreadTurns",
+      "description": "List one page of Codex thread turns with optional full item history.",
+      "path": "/invoke/listThreadTurns",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": ["threadId"],
+        "properties": {
+          "threadId": { "type": "string" },
+          "cursor": { "type": ["string", "null"] },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "sortDirection": { "type": "string", "enum": ["asc", "desc"] },
+          "itemsView": { "type": "string", "enum": ["notLoaded", "summary", "full"] },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "listApps",
       "description": "List Codex app-server apps/connectors visible to the local Codex account.",
       "path": "/invoke/listApps",
@@ -280,6 +303,16 @@
         "required": ["threadId"],
         "properties": {
           "threadId": { "type": "string" },
+          "excludeTurns": { "type": "boolean" },
+          "initialTurnsPage": {
+            "type": "object",
+            "properties": {
+              "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+              "sortDirection": { "type": "string", "enum": ["asc", "desc"] },
+              "itemsView": { "type": "string", "enum": ["notLoaded", "summary", "full"] }
+            },
+            "additionalProperties": false
+          },
           "params": {
             "type": "object",
             "additionalProperties": true
