@@ -5,16 +5,19 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
 const DEFAULT_CODEX_BINARY = "codex";
 const DEFAULT_LISTEN = "stdio://";
 const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
 const MAX_EVENTS = 1000;
+const DEFAULT_PROJECT_LIMIT = 100;
+const DEFAULT_PROJECT_THREAD_PAGE_LIMIT = 100;
+const DEFAULT_PROJECT_THREAD_MAX_PAGES = 100;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -318,6 +321,10 @@ function connectorHome() {
   return process.env.CODEX_CONNECTOR_HOME || join(homedir(), ".baijimu-connector-codex");
 }
 
+function codexHome() {
+  return process.env.CODEX_HOME || join(homedir(), ".codex");
+}
+
 function pidPath() {
   return join(connectorHome(), "connector.pid");
 }
@@ -489,26 +496,281 @@ function pickParams(body, keys) {
   return params;
 }
 
+function readJsonFile(path, fallback) {
+  if (!existsSync(path)) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+function uniqueStrings(values) {
+  return [...new Set((Array.isArray(values) ? values : []).filter((value) => typeof value === "string" && value.trim()))];
+}
+
+function normalizeProjectPath(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const expanded = trimmed === "~" ? homedir() : trimmed.replace(/^~(?=\/|\\)/, homedir());
+  return resolve(expanded);
+}
+
+function displayProjectTitle(path) {
+  const name = basename(path);
+  return name || path;
+}
+
+function parseCodexProjectConfig(path) {
+  if (!existsSync(path)) {
+    return new Map();
+  }
+  const projects = new Map();
+  let currentProject = null;
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/u)) {
+    const section = line.match(/^\s*\[projects\."((?:\\"|[^"])*)"\]\s*$/u);
+    if (section) {
+      currentProject = normalizeProjectPath(section[1].replace(/\\"/gu, "\""));
+      if (currentProject && !projects.has(currentProject)) {
+        projects.set(currentProject, {});
+      }
+      continue;
+    }
+    if (!currentProject) {
+      continue;
+    }
+    const trustLevel = line.match(/^\s*trust_level\s*=\s*"([^"]+)"\s*$/u);
+    if (trustLevel) {
+      projects.get(currentProject).trustLevel = trustLevel[1];
+    }
+  }
+  return projects;
+}
+
+function upsertProject(projects, projectPath, source, fields = {}) {
+  const normalizedPath = normalizeProjectPath(projectPath);
+  if (!normalizedPath) {
+    return null;
+  }
+  let project = projects.get(normalizedPath);
+  if (!project) {
+    project = {
+      id: normalizedPath,
+      path: normalizedPath,
+      cwd: normalizedPath,
+      title: displayProjectTitle(normalizedPath),
+      exists: existsSync(normalizedPath),
+      pinned: false,
+      active: false,
+      trustLevel: null,
+      sessionCount: 0,
+      lastActiveAt: null,
+      gitBranch: null,
+      gitOriginUrl: null,
+      sources: [],
+    };
+    projects.set(normalizedPath, project);
+  }
+  if (source && !project.sources.includes(source)) {
+    project.sources.push(source);
+  }
+  Object.assign(project, fields);
+  return project;
+}
+
+function threadTimestamp(thread) {
+  return thread?.updatedAt
+    ?? thread?.updated_at
+    ?? thread?.recencyAt
+    ?? thread?.recency_at
+    ?? thread?.createdAt
+    ?? thread?.created_at
+    ?? null;
+}
+
+function newerTimestamp(left, right) {
+  if (!left) {
+    return right ?? null;
+  }
+  if (!right) {
+    return left;
+  }
+  return Date.parse(right) > Date.parse(left) ? right : left;
+}
+
+function applyThreadToProject(project, thread) {
+  project.sessionCount += 1;
+  project.lastActiveAt = newerTimestamp(project.lastActiveAt, threadTimestamp(thread));
+  const gitInfo = thread.gitInfo ?? thread.git_info ?? null;
+  if (gitInfo && typeof gitInfo === "object") {
+    project.gitBranch ??= gitInfo.branch ?? gitInfo.gitBranch ?? null;
+    project.gitOriginUrl ??= gitInfo.originUrl ?? gitInfo.origin_url ?? gitInfo.remoteUrl ?? null;
+  }
+}
+
+async function readThreadProjects(body, client, projects) {
+  const includeThreadStats = body.includeThreadStats ?? body.params?.includeThreadStats ?? true;
+  if (!includeThreadStats) {
+    return;
+  }
+
+  let cursor = body.threadCursor ?? body.params?.threadCursor ?? null;
+  const maxPages = Math.max(1, Math.min(
+    Number(body.maxThreadPages ?? body.params?.maxThreadPages ?? DEFAULT_PROJECT_THREAD_MAX_PAGES) || DEFAULT_PROJECT_THREAD_MAX_PAGES,
+    500,
+  ));
+  const limit = Math.max(1, Math.min(
+    Number(body.threadPageLimit ?? body.params?.threadPageLimit ?? DEFAULT_PROJECT_THREAD_PAGE_LIMIT) || DEFAULT_PROJECT_THREAD_PAGE_LIMIT,
+    100,
+  ));
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const result = await client.request("thread/list", {
+      cursor,
+      limit,
+      archived: body.archived ?? body.params?.archived,
+      useStateDbOnly: body.useStateDbOnly ?? body.params?.useStateDbOnly,
+    }, body.timeoutMs);
+    const threads = Array.isArray(result?.data) ? result.data : [];
+    for (const thread of threads) {
+      const project = upsertProject(projects, thread.cwd, "threads");
+      if (project) {
+        applyThreadToProject(project, thread);
+      }
+    }
+    cursor = result?.nextCursor ?? null;
+    if (!cursor || threads.length === 0) {
+      return;
+    }
+  }
+}
+
+function projectSortIndex(projectPath, order) {
+  const index = order.indexOf(projectPath);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+async function listProjects(body, client) {
+  const home = codexHome();
+  const globalState = readJsonFile(join(home, ".codex-global-state.json"), {});
+  const configuredProjects = parseCodexProjectConfig(join(home, "config.toml"));
+  const projects = new Map();
+
+  const savedRoots = uniqueStrings([
+    ...uniqueStrings(globalState["project-order"]),
+    ...uniqueStrings(globalState["electron-saved-workspace-roots"]),
+  ]);
+  const savedOrder = savedRoots.map(normalizeProjectPath).filter(Boolean);
+
+  if (body.includeSaved ?? body.params?.includeSaved ?? true) {
+    for (const path of savedOrder) {
+      upsertProject(projects, path, "saved");
+    }
+  }
+
+  const activeRoots = uniqueStrings(globalState["active-workspace-roots"])
+    .map(normalizeProjectPath)
+    .filter(Boolean);
+  for (const path of activeRoots) {
+    upsertProject(projects, path, "active", { active: true });
+  }
+
+  const pinnedRoots = uniqueStrings(globalState["pinned-project-ids"])
+    .map(normalizeProjectPath)
+    .filter(Boolean);
+  for (const path of pinnedRoots) {
+    upsertProject(projects, path, "pinned", { pinned: true });
+  }
+
+  if (body.includeTrusted ?? body.params?.includeTrusted ?? true) {
+    for (const [path, metadata] of configuredProjects.entries()) {
+      upsertProject(projects, path, "trusted", {
+        trustLevel: metadata.trustLevel ?? null,
+      });
+    }
+  }
+
+  await readThreadProjects(body, client, projects);
+
+  const searchTerm = (body.searchTerm ?? body.params?.searchTerm ?? "").trim().toLowerCase();
+  const existsOnly = body.existsOnly ?? body.params?.existsOnly ?? false;
+  let items = [...projects.values()].filter((project) => {
+    if (existsOnly && !project.exists) {
+      return false;
+    }
+    if (!searchTerm) {
+      return true;
+    }
+    return project.title.toLowerCase().includes(searchTerm)
+      || project.path.toLowerCase().includes(searchTerm);
+  });
+
+  items.sort((left, right) => {
+    if (left.pinned !== right.pinned) {
+      return left.pinned ? -1 : 1;
+    }
+    const leftIndex = projectSortIndex(left.path, savedOrder);
+    const rightIndex = projectSortIndex(right.path, savedOrder);
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+    if (left.lastActiveAt !== right.lastActiveAt) {
+      return Date.parse(right.lastActiveAt || "1970-01-01T00:00:00.000Z") - Date.parse(left.lastActiveAt || "1970-01-01T00:00:00.000Z");
+    }
+    return left.title.localeCompare(right.title);
+  });
+
+  const total = items.length;
+  const cursor = Math.max(0, Number(body.cursor ?? body.params?.cursor ?? 0) || 0);
+  const limit = Math.max(1, Math.min(Number(body.limit ?? body.params?.limit ?? DEFAULT_PROJECT_LIMIT) || DEFAULT_PROJECT_LIMIT, 500));
+  items = items.slice(cursor, cursor + limit);
+  const nextCursor = cursor + limit < total ? String(cursor + limit) : null;
+
+  return {
+    result: {
+      projects: items,
+      items,
+      total,
+      nextCursor,
+      codexHome: home,
+    },
+    status: client.status(),
+  };
+}
+
+async function listThreads(body, client) {
+  const params = mergeParams(body, pickParams(body, [
+    "cursor",
+    "limit",
+    "sortKey",
+    "sortDirection",
+    "modelProviders",
+    "sourceKinds",
+    "archived",
+    "cwd",
+    "useStateDbOnly",
+    "searchTerm",
+  ]));
+  const result = await client.request("thread/list", params, body.timeoutMs);
+  return { result, status: client.status() };
+}
+
 async function handleInvoke(pathname, body, client) {
   switch (pathname) {
     case "/invoke/status":
       return client.status();
-    case "/invoke/listThreads": {
-      const params = mergeParams(body, pickParams(body, [
-        "cursor",
-        "limit",
-        "sortKey",
-        "sortDirection",
-        "modelProviders",
-        "sourceKinds",
-        "archived",
-        "cwd",
-        "useStateDbOnly",
-        "searchTerm",
-      ]));
-      const result = await client.request("thread/list", params, body.timeoutMs);
-      return { result, status: client.status() };
-    }
+    case "/invoke/listThreads":
+    case "/invoke/listSessions":
+      return listThreads(body, client);
+    case "/invoke/listProjects":
+      return listProjects(body, client);
     case "/invoke/searchThreads": {
       if (!body.searchTerm && !(body.params && body.params.searchTerm)) {
         throw new HttpError(400, "searchTerm is required");

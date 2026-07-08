@@ -2,7 +2,7 @@
   "schemaVersion": "1.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex Connector",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Expose a local Codex app-server session through Baijimu Local.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "gitee",
     "repo": "zxflimit_admin/baijimu-connector-codex",
-    "revision": "v0.2.0"
+    "revision": "v0.2.1"
   },
   "runtime": {
     "type": "process",
@@ -45,6 +45,11 @@
     "additionalProperties": false
   },
   "remoteCapabilities": [
+    {
+      "name": "codex.project.read",
+      "risk": "medium",
+      "description": "Read local Codex project roots from Codex desktop state, trusted project config, and thread cwd metadata."
+    },
     {
       "name": "codex.thread.read",
       "risk": "medium",

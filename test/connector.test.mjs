@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -183,6 +183,82 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
         await exited;
       }
     }
+  }
+});
+
+test("lists Codex projects separately from sessions", async () => {
+  const port = await freePort();
+  const codexHome = await mkdtemp(join(tmpdir(), "codex-home-"));
+  const savedProject = join(codexHome, "saved-project");
+  const activeProject = join(codexHome, "active-project");
+  const trustedProject = join(codexHome, "trusted-project");
+  await mkdir(savedProject, { recursive: true });
+  await mkdir(activeProject, { recursive: true });
+  await mkdir(trustedProject, { recursive: true });
+  await writeFile(join(codexHome, ".codex-global-state.json"), JSON.stringify({
+    "project-order": [savedProject],
+    "electron-saved-workspace-roots": [savedProject, activeProject],
+    "active-workspace-roots": [activeProject],
+    "pinned-project-ids": [savedProject],
+  }));
+  await writeFile(join(codexHome, "config.toml"), `[projects."${trustedProject}"]\ntrust_level = "trusted"\n`);
+
+  const proc = spawn(process.execPath, [
+    cli,
+    "start",
+    "--port",
+    String(port),
+    "--codex-binary",
+    process.execPath,
+    "--codex-args",
+    JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+
+    const response = await postJson(port, "/invoke/listProjects", { limit: 20 });
+    const projects = response.data.result.projects;
+    const byPath = new Map(projects.map((project) => [project.path, project]));
+
+    assert.equal(response.data.result.total, 4);
+    assert.equal(byPath.get(savedProject).pinned, true);
+    assert.ok(byPath.get(savedProject).sources.includes("saved"));
+    assert.equal(byPath.get(activeProject).active, true);
+    assert.ok(byPath.get(activeProject).sources.includes("active"));
+    assert.equal(byPath.get(trustedProject).trustLevel, "trusted");
+    assert.ok(byPath.get("/tmp/listed").sources.includes("threads"));
+    assert.equal(byPath.get("/tmp/listed").sessionCount, 1);
+
+    const sessions = await postJson(port, "/invoke/listSessions", { limit: 5 });
+    assert.equal(sessions.data.result.data[0].id, "thr_listed");
+  } finally {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/__shutdown`, { method: "POST" });
+      } catch {
+        proc.kill("SIGTERM");
+      }
+      const exited = once(proc, "exit");
+      await Promise.race([
+        exited,
+        delay(1000).then(() => {
+          proc.kill("SIGKILL");
+        }),
+      ]);
+      if (proc.exitCode === null && proc.signalCode === null) {
+        await exited;
+      }
+    }
+    await rm(codexHome, { recursive: true, force: true });
   }
 });
 
