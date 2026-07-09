@@ -213,6 +213,63 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
   }
 });
 
+test("flattens wrapped Codex thread list items", async () => {
+  const port = await freePort();
+  const proc = spawn(process.execPath, [
+    cli,
+    "start",
+    "--port",
+    String(port),
+    "--codex-binary",
+    process.execPath,
+    "--codex-args",
+    JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+      CODEX_FAKE_WRAP_THREAD_LIST: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+
+    const threads = await postJson(port, "/invoke/listThreads", { limit: 5 });
+    const thread = threads.data.result.data[0];
+    assert.equal(thread.id, "thr_wrapped");
+    assert.equal(thread.name, "Wrapped Thread");
+    assert.equal(thread.cwd, "/tmp/wrapped");
+    assert.equal(thread.thread.id, "thr_wrapped");
+    assert.equal(thread.wrapperMeta, "kept");
+    assert.equal(thread.requestParams.sortKey, "recency_at");
+
+    const sessions = await postJson(port, "/invoke/listSessions", { limit: 5 });
+    assert.equal(sessions.data.result.data[0].id, "thr_wrapped");
+    assert.equal(sessions.data.result.data[0].thread.id, "thr_wrapped");
+  } finally {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/__shutdown`, { method: "POST" });
+      } catch {
+        proc.kill("SIGTERM");
+      }
+      const exited = once(proc, "exit");
+      await Promise.race([
+        exited,
+        delay(1000).then(() => {
+          proc.kill("SIGKILL");
+        }),
+      ]);
+      if (proc.exitCode === null && proc.signalCode === null) {
+        await exited;
+      }
+    }
+  }
+});
+
 test("lists Codex projects separately from sessions", async () => {
   const port = await freePort();
   const codexHome = await mkdtemp(join(tmpdir(), "codex-home-"));

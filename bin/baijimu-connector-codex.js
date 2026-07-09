@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.2.3";
+const VERSION = "0.2.4";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
 const DEFAULT_CODEX_BINARY = "codex";
@@ -661,6 +661,20 @@ function applyThreadToProject(project, thread) {
   }
 }
 
+function normalizeThreadListItem(item) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return item;
+  }
+  if (!item.thread || typeof item.thread !== "object" || Array.isArray(item.thread)) {
+    return item;
+  }
+  return {
+    ...item,
+    ...item.thread,
+    thread: item.thread,
+  };
+}
+
 async function readThreadProjects(body, client, projects) {
   const includeThreadStats = body.includeThreadStats ?? body.params?.includeThreadStats ?? true;
   if (!includeThreadStats) {
@@ -686,7 +700,7 @@ async function readThreadProjects(body, client, projects) {
       archived: body.archived ?? body.params?.archived,
       useStateDbOnly: body.useStateDbOnly ?? body.params?.useStateDbOnly,
     }, body.timeoutMs);
-    const threads = Array.isArray(result?.data) ? result.data : [];
+    const threads = Array.isArray(result?.data) ? result.data.map(normalizeThreadListItem) : [];
     for (const thread of threads) {
       const project = upsertProject(projects, thread.cwd, "threads");
       if (project) {
@@ -807,6 +821,15 @@ async function listThreads(body, client) {
     "searchTerm",
   ])));
   const result = await client.request("thread/list", params, body.timeoutMs);
+  if (Array.isArray(result?.data)) {
+    return {
+      result: {
+        ...result,
+        data: result.data.map(normalizeThreadListItem),
+      },
+      status: client.status(),
+    };
+  }
   return { result, status: client.status() };
 }
 

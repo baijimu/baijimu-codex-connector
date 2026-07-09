@@ -45,19 +45,25 @@ rl.on("line", (line) => {
     return;
   }
   if (message.method === "thread/list") {
+    const wrapped = process.env.CODEX_FAKE_WRAP_THREAD_LIST === "1";
+    const thread = {
+      id: wrapped ? "thr_wrapped" : "thr_listed",
+      name: wrapped ? "Wrapped Thread" : "Listed Thread",
+      cwd: wrapped ? "/tmp/wrapped" : "/tmp/listed",
+      source: "cli",
+      preview: wrapped ? "Wrapped preview" : "Listed preview",
+      gitInfo: null,
+      requestParams: message.params,
+    };
     send({
       id: message.id,
       result: {
         data: [
-          {
-            id: "thr_listed",
-            name: "Listed Thread",
-            cwd: "/tmp/listed",
-            source: "cli",
-            preview: "Listed preview",
-            gitInfo: null,
+          wrapped ? {
+            thread,
+            wrapperMeta: "kept",
             requestParams: message.params,
-          },
+          } : thread,
         ],
         nextCursor: null,
         backwardsCursor: "cursor_back",
