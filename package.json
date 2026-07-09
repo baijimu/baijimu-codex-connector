@@ -1,6 +1,6 @@
 {
   "name": "@baijimu/connector-codex",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Baijimu Local connector for Codex app-server.",
   "type": "module",
   "bin": {

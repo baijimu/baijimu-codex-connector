@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
 const DEFAULT_CODEX_BINARY = "codex";
@@ -18,6 +18,8 @@ const MAX_EVENTS = 1000;
 const DEFAULT_PROJECT_LIMIT = 100;
 const DEFAULT_PROJECT_THREAD_PAGE_LIMIT = 100;
 const DEFAULT_PROJECT_THREAD_MAX_PAGES = 100;
+const DEFAULT_THREAD_SORT_KEY = "recency_at";
+const DEFAULT_THREAD_SORT_DIRECTION = "desc";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -586,13 +588,35 @@ function upsertProject(projects, projectPath, source, fields = {}) {
 }
 
 function threadTimestamp(thread) {
-  return thread?.updatedAt
-    ?? thread?.updated_at
-    ?? thread?.recencyAt
+  return thread?.recencyAt
     ?? thread?.recency_at
+    ?? thread?.updatedAt
+    ?? thread?.updated_at
     ?? thread?.createdAt
     ?? thread?.created_at
     ?? null;
+}
+
+function timestampEpochMs(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 10_000_000_000 ? value * 1000 : value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+      const numeric = Number(trimmed);
+      return Number.isFinite(numeric) ? timestampEpochMs(numeric) : null;
+    }
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function newerTimestamp(left, right) {
@@ -602,7 +626,29 @@ function newerTimestamp(left, right) {
   if (!right) {
     return left;
   }
-  return Date.parse(right) > Date.parse(left) ? right : left;
+  const leftMs = timestampEpochMs(left);
+  const rightMs = timestampEpochMs(right);
+  if (leftMs === null) {
+    return right;
+  }
+  if (rightMs === null) {
+    return left;
+  }
+  return rightMs > leftMs ? right : left;
+}
+
+function compareTimestampsDesc(left, right) {
+  const leftMs = timestampEpochMs(left) ?? 0;
+  const rightMs = timestampEpochMs(right) ?? 0;
+  return rightMs - leftMs;
+}
+
+function withThreadSortDefaults(params) {
+  return {
+    sortKey: DEFAULT_THREAD_SORT_KEY,
+    sortDirection: DEFAULT_THREAD_SORT_DIRECTION,
+    ...params,
+  };
 }
 
 function applyThreadToProject(project, thread) {
@@ -635,6 +681,8 @@ async function readThreadProjects(body, client, projects) {
     const result = await client.request("thread/list", {
       cursor,
       limit,
+      sortKey: body.sortKey ?? body.params?.sortKey ?? DEFAULT_THREAD_SORT_KEY,
+      sortDirection: body.sortDirection ?? body.params?.sortDirection ?? DEFAULT_THREAD_SORT_DIRECTION,
       archived: body.archived ?? body.params?.archived,
       useStateDbOnly: body.useStateDbOnly ?? body.params?.useStateDbOnly,
     }, body.timeoutMs);
@@ -722,7 +770,7 @@ async function listProjects(body, client) {
       return leftIndex - rightIndex;
     }
     if (left.lastActiveAt !== right.lastActiveAt) {
-      return Date.parse(right.lastActiveAt || "1970-01-01T00:00:00.000Z") - Date.parse(left.lastActiveAt || "1970-01-01T00:00:00.000Z");
+      return compareTimestampsDesc(left.lastActiveAt, right.lastActiveAt);
     }
     return left.title.localeCompare(right.title);
   });
@@ -746,7 +794,7 @@ async function listProjects(body, client) {
 }
 
 async function listThreads(body, client) {
-  const params = mergeParams(body, pickParams(body, [
+  const params = withThreadSortDefaults(mergeParams(body, pickParams(body, [
     "cursor",
     "limit",
     "sortKey",
@@ -757,9 +805,57 @@ async function listThreads(body, client) {
     "cwd",
     "useStateDbOnly",
     "searchTerm",
-  ]));
+  ])));
   const result = await client.request("thread/list", params, body.timeoutMs);
   return { result, status: client.status() };
+}
+
+function emptyTurnsPage() {
+  return {
+    data: [],
+    nextCursor: null,
+    backwardsCursor: null,
+  };
+}
+
+async function listThreadTurns(body, client) {
+  const threadId = body.threadId ?? body.params?.threadId;
+  if (!threadId) {
+    return { result: emptyTurnsPage(), status: client.status() };
+  }
+
+  const params = mergeParams(body, pickParams(body, [
+    "threadId",
+    "cursor",
+    "limit",
+    "sortDirection",
+    "itemsView",
+  ]));
+
+  try {
+    const result = await client.request("thread/turns/list", params, body.timeoutMs);
+    return { result, status: client.status() };
+  } catch (error) {
+    client.pushEvent("connector/threadTurnsListFallback", {
+      threadId,
+      error: error.message,
+      code: error.code,
+    });
+    const result = await client.request("thread/read", {
+      threadId,
+      includeTurns: true,
+    }, body.timeoutMs);
+    const turns = Array.isArray(result?.thread?.turns) ? result.thread.turns : [];
+    return {
+      result: {
+        data: turns,
+        nextCursor: null,
+        backwardsCursor: null,
+        fallback: "thread/read",
+      },
+      status: client.status(),
+    };
+  }
 }
 
 async function handleInvoke(pathname, body, client) {
@@ -796,21 +892,8 @@ async function handleInvoke(pathname, body, client) {
       const result = await client.request("thread/read", params, body.timeoutMs);
       return { result, status: client.status() };
     }
-    case "/invoke/listThreadTurns": {
-      const threadId = body.threadId ?? body.params?.threadId;
-      if (!threadId) {
-        throw new HttpError(400, "threadId is required");
-      }
-      const params = mergeParams(body, pickParams(body, [
-        "threadId",
-        "cursor",
-        "limit",
-        "sortDirection",
-        "itemsView",
-      ]));
-      const result = await client.request("thread/turns/list", params, body.timeoutMs);
-      return { result, status: client.status() };
-    }
+    case "/invoke/listThreadTurns":
+      return listThreadTurns(body, client);
     case "/invoke/listApps": {
       const params = mergeParams(body, pickParams(body, [
         "cursor",

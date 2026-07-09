@@ -151,6 +151,16 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     const threads = await postJson(port, "/invoke/listThreads", { limit: 5 });
     assert.equal(threads.data.result.data[0].id, "thr_listed");
     assert.equal(threads.data.result.data[0].cwd, "/tmp/listed");
+    assert.equal(threads.data.result.data[0].requestParams.sortKey, "recency_at");
+    assert.equal(threads.data.result.data[0].requestParams.sortDirection, "desc");
+
+    const explicitlySortedThreads = await postJson(port, "/invoke/listThreads", {
+      limit: 5,
+      sortKey: "created_at",
+      sortDirection: "asc",
+    });
+    assert.equal(explicitlySortedThreads.data.result.data[0].requestParams.sortKey, "created_at");
+    assert.equal(explicitlySortedThreads.data.result.data[0].requestParams.sortDirection, "asc");
 
     const search = await postJson(port, "/invoke/searchThreads", { searchTerm: "Search" });
     assert.equal(search.data.result.data[0].thread.id, "thr_search");
@@ -171,6 +181,13 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     assert.equal(turns.data.result.data[0].id, "turn_recent");
     assert.equal(turns.data.result.data[0].items[0].text, "limit=8;direction=desc;items=full");
     assert.equal(turns.data.result.nextCursor, "older_cursor");
+
+    const emptyTurns = await postJson(port, "/invoke/listThreadTurns", {
+      threadId: "",
+      limit: 8,
+    });
+    assert.deepEqual(emptyTurns.data.result.data, []);
+    assert.equal(emptyTurns.data.result.nextCursor, null);
 
     const apps = await postJson(port, "/invoke/listApps", { limit: 10 });
     assert.equal(apps.data.result.data[0].id, "app_test");
@@ -250,6 +267,8 @@ test("lists Codex projects separately from sessions", async () => {
 
     const sessions = await postJson(port, "/invoke/listSessions", { limit: 5 });
     assert.equal(sessions.data.result.data[0].id, "thr_listed");
+    assert.equal(sessions.data.result.data[0].requestParams.sortKey, "recency_at");
+    assert.equal(sessions.data.result.data[0].requestParams.sortDirection, "desc");
   } finally {
     if (proc.exitCode === null && proc.signalCode === null) {
       try {
@@ -269,6 +288,64 @@ test("lists Codex projects separately from sessions", async () => {
       }
     }
     await rm(codexHome, { recursive: true, force: true });
+  }
+});
+
+test("falls back to readThread when paginated turn listing is unavailable", async () => {
+  const port = await freePort();
+  const proc = spawn(process.execPath, [
+    cli,
+    "start",
+    "--port",
+    String(port),
+    "--codex-binary",
+    process.execPath,
+    "--codex-args",
+    JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+      CODEX_FAKE_DISABLE_TURNS_LIST: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+
+    const turns = await postJson(port, "/invoke/listThreadTurns", {
+      threadId: "thr_read",
+      limit: 8,
+      itemsView: "full",
+    });
+    assert.equal(turns.data.result.data[0].id, "turn_read");
+    assert.equal(turns.data.result.fallback, "thread/read");
+
+    const events = await postJson(port, "/invoke/recentEvents", {
+      afterSequence: 0,
+      limit: 20,
+    });
+    assert.ok(events.data.events.some((event) => event.method === "connector/threadTurnsListFallback"));
+  } finally {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/__shutdown`, { method: "POST" });
+      } catch {
+        proc.kill("SIGTERM");
+      }
+      const exited = once(proc, "exit");
+      await Promise.race([
+        exited,
+        delay(1000).then(() => {
+          proc.kill("SIGKILL");
+        }),
+      ]);
+      if (proc.exitCode === null && proc.signalCode === null) {
+        await exited;
+      }
+    }
   }
 });
 

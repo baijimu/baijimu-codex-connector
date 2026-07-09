@@ -56,6 +56,7 @@ rl.on("line", (line) => {
             source: "cli",
             preview: "Listed preview",
             gitInfo: null,
+            requestParams: message.params,
           },
         ],
         nextCursor: null,
@@ -99,6 +100,16 @@ rl.on("line", (line) => {
     return;
   }
   if (message.method === "thread/turns/list") {
+    if (process.env.CODEX_FAKE_DISABLE_TURNS_LIST === "1") {
+      send({
+        id: message.id,
+        error: {
+          code: -32601,
+          message: "method not found",
+        },
+      });
+      return;
+    }
     send({
       id: message.id,
       result: {
