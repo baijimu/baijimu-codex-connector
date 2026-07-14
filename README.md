@@ -6,24 +6,28 @@ It is a connector package for `bridge-agent`, not a replacement for Codex. Codex
 
 ## Requirements
 
-- Node.js 18 or newer.
 - Codex CLI with `codex app-server` available on `PATH`.
 - Baijimu Local / `bridge-agent` with connector installation support.
+
+The official market package ships a Rust/native `baijimu-connector-codex`
+binary under `bin/<platform>-<arch>/`. The legacy Node.js implementation is
+kept for reference and compatibility, but the platform-managed entrypoint is
+the native binary.
 
 ## Install
 
 From a checkout:
 
 ```bash
-npm install -g .
+cargo build --release
 bridge-agent connector install /path/to/baijimu-connector-codex --replace
 bridge-agent connector start com.baijimu.connector.codex
 ```
 
-Or install the package from a Git remote first:
+Or install the tagged package from a Git remote first:
 
 ```bash
-npm install -g git+https://gitee.com/zxflimit_admin/baijimu-connector-codex.git
+git clone https://gitee.com/zxflimit_admin/baijimu-connector-codex.git
 bridge-agent connector install /path/to/baijimu-connector-codex --replace
 ```
 
@@ -70,7 +74,9 @@ Thread list responses include the Codex `cwd`, source, git metadata, title, prev
 ## Development
 
 ```bash
-npm test
+cargo test
+npm run test:rust
 ```
 
-The tests use a fake app-server process and do not require Codex credentials.
+The integration tests use a fake app-server process and do not require Codex
+credentials.
