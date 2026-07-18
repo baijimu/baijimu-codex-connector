@@ -355,6 +355,73 @@ test("lists Codex projects separately from sessions", async () => {
   }
 });
 
+test("resolves current Codex project IDs to their real roots", async () => {
+  const port = await freePort();
+  const codexHome = await mkdtemp(join(tmpdir(), "codex-home-current-projects-"));
+  const projectRoot = "/tmp/listed";
+  await writeFile(join(codexHome, ".codex-global-state.json"), JSON.stringify({
+    "project-order": ["local-listed", "local-unresolved"],
+    "pinned-project-ids": ["local-listed"],
+    "local-projects": {
+      "local-listed": {
+        id: "local-listed",
+        name: "Listed Project",
+        rootPaths: [projectRoot],
+      },
+    },
+  }));
+
+  const proc = spawn(process.execPath, [
+    cli,
+    "start",
+    "--port",
+    String(port),
+    "--codex-binary",
+    process.execPath,
+    "--codex-args",
+    JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+    const response = await postJson(port, "/invoke/listProjects", { limit: 20 });
+    assert.equal(response.data.result.total, 1);
+    const [project] = response.data.result.projects;
+    assert.equal(project.id, projectRoot);
+    assert.equal(project.path, projectRoot);
+    assert.equal(project.projectId, "local-listed");
+    assert.equal(project.projectName, "Listed Project");
+    assert.equal(project.title, "Listed Project");
+    assert.deepEqual(project.rootPaths, [projectRoot]);
+    assert.equal(project.pinned, true);
+    assert.equal(project.sessionCount, 1);
+    assert.deepEqual(project.sources, ["saved", "pinned", "threads"]);
+    assert.ok(!project.path.includes("local-unresolved"));
+  } finally {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/__shutdown`, { method: "POST" });
+      } catch {
+        proc.kill("SIGTERM");
+      }
+      const exited = once(proc, "exit");
+      await Promise.race([
+        exited,
+        delay(1000).then(() => proc.kill("SIGKILL")),
+      ]);
+    }
+    await rm(codexHome, { recursive: true, force: true });
+  }
+});
+
 test("falls back to readThread when paginated turn listing is unavailable", async () => {
   const port = await freePort();
   const proc = spawn(process.execPath, [

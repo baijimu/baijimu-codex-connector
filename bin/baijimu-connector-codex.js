@@ -5,10 +5,10 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.2.4";
+const VERSION = "0.4.1";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
 const DEFAULT_CODEX_BINARY = "codex";
@@ -525,6 +525,18 @@ function normalizeProjectPath(value) {
   return resolve(expanded);
 }
 
+function normalizeStateProjectPath(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const expanded = trimmed === "~" ? homedir() : trimmed.replace(/^~(?=\/|\\)/u, homedir());
+  return isAbsolute(expanded) ? resolve(expanded) : null;
+}
+
 function displayProjectTitle(path) {
   const name = basename(path);
   return name || path;
@@ -572,6 +584,9 @@ function upsertProject(projects, projectPath, source, fields = {}) {
       pinned: false,
       active: false,
       trustLevel: null,
+      projectId: null,
+      projectName: null,
+      rootPaths: [normalizedPath],
       sessionCount: 0,
       lastActiveAt: null,
       gitBranch: null,
@@ -585,6 +600,94 @@ function upsertProject(projects, projectPath, source, fields = {}) {
   }
   Object.assign(project, fields);
   return project;
+}
+
+function uniqueStateProjectRoots(projects) {
+  const seen = new Set();
+  return projects.filter((project) => {
+    if (seen.has(project.path)) {
+      return false;
+    }
+    seen.add(project.path);
+    return true;
+  });
+}
+
+function stateProjectRoots(globalState) {
+  const projects = [];
+  const localProjects = globalState?.["local-projects"];
+  if (localProjects && typeof localProjects === "object" && !Array.isArray(localProjects)) {
+    for (const [fallbackId, value] of Object.entries(localProjects)) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const projectId = typeof value.id === "string" && value.id.trim() ? value.id : fallbackId;
+      const projectName = typeof value.name === "string" && value.name.trim() ? value.name : null;
+      const rootPaths = uniqueStrings(value.rootPaths)
+        .map(normalizeStateProjectPath)
+        .filter(Boolean);
+      for (const path of rootPaths) {
+        projects.push({ path, projectId, projectName, rootPaths });
+      }
+    }
+  }
+
+  const assignmentRoots = new Map();
+  const assignments = globalState?.["thread-project-assignments"];
+  if (assignments && typeof assignments === "object" && !Array.isArray(assignments)) {
+    for (const assignment of Object.values(assignments)) {
+      const projectId = typeof assignment?.projectId === "string" ? assignment.projectId.trim() : "";
+      const path = normalizeStateProjectPath(assignment?.cwd);
+      if (!projectId || !path) {
+        continue;
+      }
+      const roots = assignmentRoots.get(projectId) ?? [];
+      if (!roots.includes(path)) {
+        roots.push(path);
+      }
+      assignmentRoots.set(projectId, roots);
+    }
+  }
+  for (const [projectId, rootPaths] of assignmentRoots) {
+    if (projects.some((project) => project.projectId === projectId)) {
+      continue;
+    }
+    for (const path of rootPaths) {
+      projects.push({ path, projectId, projectName: null, rootPaths });
+    }
+  }
+  return uniqueStateProjectRoots(projects);
+}
+
+function resolveStateProjectReferences(globalState, references) {
+  const knownProjects = stateProjectRoots(globalState);
+  const resolved = [];
+  for (const reference of uniqueStrings(references)) {
+    const matches = knownProjects.filter((project) => project.projectId === reference);
+    if (matches.length > 0) {
+      resolved.push(...matches);
+      continue;
+    }
+    const path = normalizeStateProjectPath(reference);
+    if (!path) {
+      continue;
+    }
+    resolved.push(knownProjects.find((project) => project.path === path) ?? {
+      path,
+      projectId: null,
+      projectName: null,
+      rootPaths: [path],
+    });
+  }
+  return uniqueStateProjectRoots(resolved);
+}
+
+function stateProjectFields(project) {
+  return {
+    ...(project.projectId ? { projectId: project.projectId } : {}),
+    ...(project.projectName ? { projectName: project.projectName, title: project.projectName } : {}),
+    rootPaths: project.rootPaths,
+  };
 }
 
 function threadTimestamp(thread) {
@@ -725,30 +828,32 @@ async function listProjects(body, client) {
   const configuredProjects = parseCodexProjectConfig(join(home, "config.toml"));
   const projects = new Map();
 
-  const savedRoots = uniqueStrings([
-    ...uniqueStrings(globalState["project-order"]),
-    ...uniqueStrings(globalState["electron-saved-workspace-roots"]),
+  const savedRoots = uniqueStateProjectRoots([
+    ...resolveStateProjectReferences(globalState, globalState["project-order"]),
+    ...resolveStateProjectReferences(globalState, globalState["electron-saved-workspace-roots"]),
   ]);
-  const savedOrder = savedRoots.map(normalizeProjectPath).filter(Boolean);
+  const savedOrder = savedRoots.map((project) => project.path);
 
   if (body.includeSaved ?? body.params?.includeSaved ?? true) {
-    for (const path of savedOrder) {
-      upsertProject(projects, path, "saved");
+    for (const project of savedRoots) {
+      upsertProject(projects, project.path, "saved", stateProjectFields(project));
     }
   }
 
-  const activeRoots = uniqueStrings(globalState["active-workspace-roots"])
-    .map(normalizeProjectPath)
-    .filter(Boolean);
-  for (const path of activeRoots) {
-    upsertProject(projects, path, "active", { active: true });
+  const activeRoots = resolveStateProjectReferences(globalState, globalState["active-workspace-roots"]);
+  for (const project of activeRoots) {
+    upsertProject(projects, project.path, "active", {
+      ...stateProjectFields(project),
+      active: true,
+    });
   }
 
-  const pinnedRoots = uniqueStrings(globalState["pinned-project-ids"])
-    .map(normalizeProjectPath)
-    .filter(Boolean);
-  for (const path of pinnedRoots) {
-    upsertProject(projects, path, "pinned", { pinned: true });
+  const pinnedRoots = resolveStateProjectReferences(globalState, globalState["pinned-project-ids"]);
+  for (const project of pinnedRoots) {
+    upsertProject(projects, project.path, "pinned", {
+      ...stateProjectFields(project),
+      pinned: true,
+    });
   }
 
   if (body.includeTrusted ?? body.params?.includeTrusted ?? true) {

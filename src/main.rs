@@ -2,7 +2,7 @@ mod credential;
 
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Map, Value};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -65,6 +65,14 @@ struct AppState {
     client: Mutex<CodexClient>,
     credential_management: Mutex<()>,
     management_token: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StateProjectRoot {
+    path: String,
+    project_id: Option<String>,
+    project_name: Option<String>,
+    root_paths: Vec<String>,
 }
 
 impl CodexClient {
@@ -979,37 +987,44 @@ fn list_projects(body: &Value, client: &mut CodexClient) -> Result<Value, HttpEr
     let global_state = read_json_file(&home.join(".codex-global-state.json"));
     let configured = parse_codex_project_config(&home.join("config.toml"));
     let mut projects = Map::new();
-    let saved_roots = unique_strings(
-        [
-            array_strings(global_state.get("project-order")),
-            array_strings(global_state.get("electron-saved-workspace-roots")),
-        ]
-        .concat(),
+    let mut saved_roots = resolve_state_project_references(
+        &global_state,
+        array_strings(global_state.get("project-order")),
     );
+    saved_roots.extend(resolve_state_project_references(
+        &global_state,
+        array_strings(global_state.get("electron-saved-workspace-roots")),
+    ));
+    let saved_roots = unique_state_project_roots(saved_roots);
     let saved_order = saved_roots
         .iter()
-        .filter_map(|value| normalize_project_path(value))
+        .map(|project| project.path.clone())
         .collect::<Vec<_>>();
     if bool_param(body, "includeSaved", true) {
-        for path in &saved_order {
-            upsert_project(&mut projects, path, "saved", Map::new());
+        for project in &saved_roots {
+            upsert_project(
+                &mut projects,
+                &project.path,
+                "saved",
+                state_project_fields(project),
+            );
         }
     }
-    for path in array_strings(global_state.get("active-workspace-roots"))
-        .iter()
-        .filter_map(|value| normalize_project_path(value))
-    {
-        let mut fields = Map::new();
+    for project in resolve_state_project_references(
+        &global_state,
+        array_strings(global_state.get("active-workspace-roots")),
+    ) {
+        let mut fields = state_project_fields(&project);
         fields.insert("active".to_string(), Value::Bool(true));
-        upsert_project(&mut projects, &path, "active", fields);
+        upsert_project(&mut projects, &project.path, "active", fields);
     }
-    for path in array_strings(global_state.get("pinned-project-ids"))
-        .iter()
-        .filter_map(|value| normalize_project_path(value))
-    {
-        let mut fields = Map::new();
+    for project in resolve_state_project_references(
+        &global_state,
+        array_strings(global_state.get("pinned-project-ids")),
+    ) {
+        let mut fields = state_project_fields(&project);
         fields.insert("pinned".to_string(), Value::Bool(true));
-        upsert_project(&mut projects, &path, "pinned", fields);
+        upsert_project(&mut projects, &project.path, "pinned", fields);
     }
     if bool_param(body, "includeTrusted", true) {
         for (path, trust_level) in configured {
@@ -1086,6 +1101,175 @@ fn list_projects(body: &Value, client: &mut CodexClient) -> Result<Value, HttpEr
     )
 }
 
+fn resolve_state_project_references(
+    global_state: &Value,
+    references: Vec<String>,
+) -> Vec<StateProjectRoot> {
+    let known_projects = state_project_roots(global_state);
+    let mut resolved = Vec::new();
+    for reference in references {
+        let matches = known_projects
+            .iter()
+            .filter(|project| project.project_id.as_deref() == Some(reference.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !matches.is_empty() {
+            resolved.extend(matches);
+            continue;
+        }
+        let Some(path) = normalize_state_project_path(&reference) else {
+            continue;
+        };
+        if let Some(project) = known_projects
+            .iter()
+            .find(|project| project.path == path)
+            .cloned()
+        {
+            resolved.push(project);
+        } else {
+            resolved.push(StateProjectRoot {
+                path: path.clone(),
+                project_id: None,
+                project_name: None,
+                root_paths: vec![path],
+            });
+        }
+    }
+    unique_state_project_roots(resolved)
+}
+
+fn state_project_roots(global_state: &Value) -> Vec<StateProjectRoot> {
+    let mut projects = Vec::new();
+    if let Some(local_projects) = global_state
+        .get("local-projects")
+        .and_then(Value::as_object)
+    {
+        for (fallback_id, value) in local_projects {
+            let project_id = value
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or(fallback_id)
+                .to_string();
+            let project_name = value
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .map(str::to_string);
+            let root_paths = unique_strings(
+                array_strings(value.get("rootPaths"))
+                    .into_iter()
+                    .filter_map(|path| normalize_state_project_path(&path))
+                    .collect(),
+            );
+            for path in &root_paths {
+                projects.push(StateProjectRoot {
+                    path: path.clone(),
+                    project_id: Some(project_id.clone()),
+                    project_name: project_name.clone(),
+                    root_paths: root_paths.clone(),
+                });
+            }
+        }
+    }
+
+    let mut assignment_roots: HashMap<String, Vec<String>> = HashMap::new();
+    if let Some(assignments) = global_state
+        .get("thread-project-assignments")
+        .and_then(Value::as_object)
+    {
+        for assignment in assignments.values() {
+            let Some(project_id) = assignment.get("projectId").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(path) = assignment
+                .get("cwd")
+                .and_then(Value::as_str)
+                .and_then(normalize_state_project_path)
+            else {
+                continue;
+            };
+            let roots = assignment_roots.entry(project_id.to_string()).or_default();
+            if !roots.contains(&path) {
+                roots.push(path);
+            }
+        }
+    }
+    for (project_id, root_paths) in assignment_roots {
+        if projects
+            .iter()
+            .any(|project| project.project_id.as_deref() == Some(project_id.as_str()))
+        {
+            continue;
+        }
+        for path in &root_paths {
+            projects.push(StateProjectRoot {
+                path: path.clone(),
+                project_id: Some(project_id.clone()),
+                project_name: None,
+                root_paths: root_paths.clone(),
+            });
+        }
+    }
+    unique_state_project_roots(projects)
+}
+
+fn unique_state_project_roots(projects: Vec<StateProjectRoot>) -> Vec<StateProjectRoot> {
+    let mut out = Vec::new();
+    for project in projects {
+        if !out
+            .iter()
+            .any(|candidate: &StateProjectRoot| candidate.path == project.path)
+        {
+            out.push(project);
+        }
+    }
+    out
+}
+
+fn state_project_fields(project: &StateProjectRoot) -> Map<String, Value> {
+    let mut fields = Map::new();
+    if let Some(project_id) = &project.project_id {
+        fields.insert("projectId".to_string(), Value::String(project_id.clone()));
+    }
+    if let Some(project_name) = &project.project_name {
+        fields.insert(
+            "projectName".to_string(),
+            Value::String(project_name.clone()),
+        );
+        fields.insert("title".to_string(), Value::String(project_name.clone()));
+    }
+    fields.insert(
+        "rootPaths".to_string(),
+        Value::Array(
+            project
+                .root_paths
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+    fields
+}
+
+fn normalize_state_project_path(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = if trimmed == "~" {
+        home_dir()
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        home_dir().join(rest)
+    } else {
+        PathBuf::from(trimmed)
+    };
+    if !path.is_absolute() {
+        return None;
+    }
+    Some(path.display().to_string())
+}
+
 fn read_thread_projects(
     body: &Value,
     client: &mut CodexClient,
@@ -1138,9 +1322,8 @@ fn read_thread_projects(
                         .unwrap_or(0)
                         + 1;
                     project["sessionCount"] = Value::from(count);
-                    let timestamp = thread_timestamp(thread);
-                    if timestamp.is_some() {
-                        project["lastActiveAt"] = timestamp.unwrap();
+                    if let Some(timestamp) = thread_timestamp(thread) {
+                        project["lastActiveAt"] = timestamp;
                     }
                 }
             }
@@ -1274,6 +1457,9 @@ fn upsert_project<'a>(
             "pinned": false,
             "active": false,
             "trustLevel": null,
+            "projectId": null,
+            "projectName": null,
+            "rootPaths": [path],
             "sessionCount": 0,
             "lastActiveAt": null,
             "gitBranch": null,
@@ -1687,4 +1873,50 @@ fn print_help() {
     println!(
         "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex credential-state\n  baijimu-connector-codex list-workspace-projects --workspace-id <id>\n  baijimu-connector-codex switch-credential --workspace-id <id> --workspace-name <name> --project-id <id> [--project-name <name>] [--model <model>]\n  baijimu-connector-codex --version"
     );
+}
+
+#[cfg(test)]
+mod project_state_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_current_project_ids_and_keeps_legacy_paths() {
+        let local_root = env::temp_dir().join("codex-current-project");
+        let assigned_root = env::temp_dir().join("codex-assigned-project");
+        let legacy_root = env::temp_dir().join("codex-legacy-project");
+        let state = json!({
+            "local-projects": {
+                "local-current": {
+                    "id": "local-current",
+                    "name": "Current Project",
+                    "rootPaths": [local_root]
+                }
+            },
+            "thread-project-assignments": {
+                "thread-1": {
+                    "projectId": "remote-project-id",
+                    "cwd": assigned_root
+                }
+            }
+        });
+
+        let resolved = resolve_state_project_references(
+            &state,
+            vec![
+                "local-current".to_string(),
+                "remote-project-id".to_string(),
+                "local-unresolved".to_string(),
+                legacy_root.display().to_string(),
+            ],
+        );
+
+        assert_eq!(resolved.len(), 3);
+        assert_eq!(resolved[0].path, local_root.display().to_string());
+        assert_eq!(resolved[0].project_id.as_deref(), Some("local-current"));
+        assert_eq!(resolved[0].project_name.as_deref(), Some("Current Project"));
+        assert_eq!(resolved[1].path, assigned_root.display().to_string());
+        assert_eq!(resolved[1].project_id.as_deref(), Some("remote-project-id"));
+        assert_eq!(resolved[2].path, legacy_root.display().to_string());
+        assert_eq!(resolved[2].project_id, None);
+    }
 }

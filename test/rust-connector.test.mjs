@@ -200,6 +200,65 @@ test("rust connector lists Codex projects and falls back for turns", async () =>
   }
 });
 
+test("rust connector resolves current Codex project IDs to their real roots", async () => {
+  execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
+  const port = await freePort();
+  const codexHome = await mkdtemp(join(tmpdir(), "codex-home-current-projects-"));
+  const connectorHome = await mkdtemp(join(tmpdir(), "codex-app-data-"));
+  const projectRoot = "/tmp/listed";
+  await writeFile(join(codexHome, ".codex-global-state.json"), JSON.stringify({
+    "project-order": ["local-listed", "local-unresolved"],
+    "pinned-project-ids": ["local-listed"],
+    "local-projects": {
+      "local-listed": {
+        id: "local-listed",
+        name: "Listed Project",
+        rootPaths: [projectRoot],
+      },
+    },
+  }));
+
+  const proc = spawn(cli, [
+    "start",
+    "--port",
+    String(port),
+    "--codex-binary",
+    process.execPath,
+    "--codex-args",
+    JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+    const response = await postJson(port, "/invoke/listProjects", { limit: 20 });
+    assert.equal(response.data.result.total, 1);
+    const [project] = response.data.result.projects;
+    assert.equal(project.id, projectRoot);
+    assert.equal(project.path, projectRoot);
+    assert.equal(project.projectId, "local-listed");
+    assert.equal(project.projectName, "Listed Project");
+    assert.equal(project.title, "Listed Project");
+    assert.deepEqual(project.rootPaths, [projectRoot]);
+    assert.equal(project.pinned, true);
+    assert.equal(project.sessionCount, 1);
+    assert.deepEqual(project.sources, ["saved", "pinned", "threads"]);
+    assert.ok(!project.path.includes("local-unresolved"));
+  } finally {
+    await stopConnector(proc, port);
+    await rm(codexHome, { recursive: true, force: true });
+    await rm(connectorHome, { recursive: true, force: true });
+  }
+});
+
 test("rust connector daemon mode writes pid file", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const port = await freePort();
