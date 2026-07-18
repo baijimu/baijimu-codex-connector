@@ -803,7 +803,6 @@ async function listProjects(body, client) {
       nextCursor,
       codexHome: home,
     },
-    status: client.status(),
   };
 }
 
@@ -827,10 +826,9 @@ async function listThreads(body, client) {
         ...result,
         data: result.data.map(normalizeThreadListItem),
       },
-      status: client.status(),
     };
   }
-  return { result, status: client.status() };
+  return { result };
 }
 
 function emptyTurnsPage() {
@@ -844,7 +842,7 @@ function emptyTurnsPage() {
 async function listThreadTurns(body, client) {
   const threadId = body.threadId ?? body.params?.threadId;
   if (!threadId) {
-    return { result: emptyTurnsPage(), status: client.status() };
+    return { result: emptyTurnsPage() };
   }
 
   const params = mergeParams(body, pickParams(body, [
@@ -857,7 +855,7 @@ async function listThreadTurns(body, client) {
 
   try {
     const result = await client.request("thread/turns/list", params, body.timeoutMs);
-    return { result, status: client.status() };
+    return { result };
   } catch (error) {
     client.pushEvent("connector/threadTurnsListFallback", {
       threadId,
@@ -876,7 +874,6 @@ async function listThreadTurns(body, client) {
         backwardsCursor: null,
         fallback: "thread/read",
       },
-      status: client.status(),
     };
   }
 }
@@ -904,7 +901,7 @@ async function handleInvoke(pathname, body, client) {
         "searchTerm",
       ]));
       const result = await client.request("thread/search", params, body.timeoutMs);
-      return { result, status: client.status() };
+      return { result };
     }
     case "/invoke/readThread": {
       const threadId = body.threadId ?? body.params?.threadId;
@@ -913,7 +910,7 @@ async function handleInvoke(pathname, body, client) {
       }
       const params = mergeParams(body, pickParams(body, ["threadId", "includeTurns"]));
       const result = await client.request("thread/read", params, body.timeoutMs);
-      return { result, status: client.status() };
+      return { result };
     }
     case "/invoke/listThreadTurns":
       return listThreadTurns(body, client);
@@ -925,7 +922,7 @@ async function handleInvoke(pathname, body, client) {
         "forceRefetch",
       ]));
       const result = await client.request("app/list", params, body.timeoutMs);
-      return { result, status: client.status() };
+      return { result };
     }
     case "/invoke/startThread": {
       const params = mergeParams(body, {
@@ -933,7 +930,7 @@ async function handleInvoke(pathname, body, client) {
         ...(body.cwd ? { cwd: body.cwd } : {}),
       });
       const result = await client.request("thread/start", params, body.timeoutMs);
-      return { result, status: client.status() };
+      return { result };
     }
     case "/invoke/resumeThread": {
       if (!body.threadId) {
@@ -945,7 +942,7 @@ async function handleInvoke(pathname, body, client) {
         ...(body.initialTurnsPage !== undefined ? { initialTurnsPage: body.initialTurnsPage } : {}),
       });
       const result = await client.request("thread/resume", params, body.timeoutMs);
-      return { result, status: client.status() };
+      return { result };
     }
     case "/invoke/startTurn": {
       if (!body.threadId) {

@@ -1,8 +1,8 @@
-# Baijimu Codex Connector
+# Baijimu Codex Local App
 
-Baijimu Codex Connector exposes a local `codex app-server` session to Baijimu Local through a local HTTP service.
+Baijimu Codex is an independent Rust local application that manages local Codex sessions, Baijimu workspaces, and Codex LLM credentials through one loopback service.
 
-It is a connector package for `bridge-agent`, not a replacement for Codex. Codex authentication, model access, approvals, sandboxing, and workspace permissions remain owned by the local Codex installation. Baijimu Local controls which remote workspace may call the exposed connector methods.
+It is installed and supervised by `bridge-agent`, but credential issuance, ownership validation, atomic Codex configuration updates, and Codex process restart are executed inside this application. Bridge Agent never receives the LLM key. Baijimu Local still controls which remote workspace may call the exposed session methods.
 
 ## Requirements
 
@@ -33,6 +33,8 @@ bridge-agent connector install /path/to/baijimu-connector-codex --replace
 
 The connector listens on `127.0.0.1:18110` by default. It starts `codex app-server --listen stdio://` lazily on the first Codex request.
 
+Bridge Agent assigns a private application data directory through `BAIJIMU_CONNECTOR_DATA_DIR`. The application stores its `management-token` and credential profile metadata there with private permissions, and migrates pre-0.4 profile metadata from the old shared location on first use. Every `/management/v1/*` request requires the management token. These management routes are local-only and are never registered as relay capabilities.
+
 ## CLI
 
 ```bash
@@ -40,6 +42,9 @@ baijimu-connector-codex start
 baijimu-connector-codex start --daemon
 baijimu-connector-codex status
 baijimu-connector-codex stop
+baijimu-connector-codex credential-state
+baijimu-connector-codex list-workspace-projects --workspace-id 642
+baijimu-connector-codex switch-credential --workspace-id 642 --workspace-name "工作区" --project-id 7405 --project-name "项目"
 ```
 
 Configuration can be provided with flags or environment variables:
@@ -68,6 +73,16 @@ The connector registers one service:
 - `codexSession.request`
 
 `request` is an advanced raw JSON-RPC forwarder and should be treated as high risk in remote authorization policies.
+
+## Local management API
+
+The application exposes three authenticated operations for the Bridge Agent application panel:
+
+- `GET /management/v1/credential-state`
+- `POST /management/v1/workspace-projects`
+- `POST /management/v1/switch-credential`
+
+The local management token is not a Baijimu workspace token or an LLM credential. It only authenticates the loopback call between Bridge Agent and this application.
 
 Thread list responses include the Codex `cwd`, source, git metadata, title, preview, and pagination cursors so callers can choose the right workspace before starting or resuming work.
 

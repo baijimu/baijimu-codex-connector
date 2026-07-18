@@ -1,13 +1,13 @@
 {
   "name": "@baijimu/connector-codex",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Baijimu Local connector for Codex app-server.",
   "type": "module",
   "bin": {
     "baijimu-connector-codex": "./bin/baijimu-connector-codex.js"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
     "test:rust": "cargo test && node --test test/rust-connector.test.mjs",
     "start": "cargo run -- start"
   },

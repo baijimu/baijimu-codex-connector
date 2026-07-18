@@ -1,9 +1,14 @@
+mod credential;
+
+use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -22,6 +27,7 @@ const DEFAULT_PROJECT_THREAD_PAGE_LIMIT: usize = 100;
 const DEFAULT_PROJECT_THREAD_MAX_PAGES: usize = 100;
 const DEFAULT_THREAD_SORT_KEY: &str = "recency_at";
 const DEFAULT_THREAD_SORT_DIRECTION: &str = "desc";
+const MANAGEMENT_TOKEN_FILE: &str = "management-token";
 
 #[derive(Clone, Debug)]
 struct ServerOptions {
@@ -53,6 +59,12 @@ struct CodexClient {
     event_sequence: u64,
     started_at: Option<String>,
     last_exit: Option<Value>,
+}
+
+struct AppState {
+    client: Mutex<CodexClient>,
+    credential_management: Mutex<()>,
+    management_token: String,
 }
 
 impl CodexClient {
@@ -415,15 +427,87 @@ fn run(args: Vec<String>) -> Result<(), String> {
         "stop" => {
             let pid_file = pid_path();
             let Ok(pid) = fs::read_to_string(&pid_file) else {
-                println!("{}", json!({"ok": true, "stopped": false, "reason": "pid file not found"}));
+                println!(
+                    "{}",
+                    json!({"ok": true, "stopped": false, "reason": "pid file not found"})
+                );
                 return Ok(());
             };
             terminate_process(pid.trim());
-            println!("{}", json!({"ok": true, "stopped": true, "pid": pid.trim().parse::<u64>().ok()}));
+            println!(
+                "{}",
+                json!({"ok": true, "stopped": true, "pid": pid.trim().parse::<u64>().ok()})
+            );
+            Ok(())
+        }
+        "credential-state" => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &credential::state().map_err(|error| error.to_string())?
+                )
+                .map_err(|error| error.to_string())?
+            );
+            Ok(())
+        }
+        "list-workspace-projects" => {
+            let workspace_id = required_u64_arg(&parsed, "workspaceId")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &credential::list_workspace_projects(workspace_id)
+                        .map_err(|error| error.to_string())?
+                )
+                .map_err(|error| error.to_string())?
+            );
+            Ok(())
+        }
+        "switch-credential" => {
+            let request = credential::CredentialSwitchRequest {
+                workspace_id: required_u64_arg(&parsed, "workspaceId")?,
+                workspace_name: string_arg(&parsed, "workspaceName").unwrap_or_default(),
+                project_id: required_u64_arg(&parsed, "projectId")?,
+                project_name: string_arg(&parsed, "projectName"),
+                model: string_arg(&parsed, "model"),
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &credential::switch(request).map_err(|error| error.to_string())?
+                )
+                .map_err(|error| error.to_string())?
+            );
             Ok(())
         }
         other => Err(format!("unknown command: {other}")),
     }
+}
+
+fn string_arg(parsed: &ParsedArgs, key: &str) -> Option<String> {
+    parsed
+        .values
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn required_u64_arg(parsed: &ParsedArgs, key: &str) -> Result<u64, String> {
+    string_arg(parsed, key)
+        .ok_or_else(|| format!("--{} is required", to_kebab_case(key)))?
+        .parse::<u64>()
+        .map_err(|_| format!("--{} must be a positive integer", to_kebab_case(key)))
+        .and_then(|value| {
+            if value == 0 {
+                Err(format!(
+                    "--{} must be greater than zero",
+                    to_kebab_case(key)
+                ))
+            } else {
+                Ok(value)
+            }
+        })
 }
 
 #[derive(Default)]
@@ -514,19 +598,24 @@ fn server_options(parsed: &ParsedArgs) -> Result<ServerOptions, String> {
 }
 
 fn start_server(options: ServerOptions) -> Result<(), String> {
+    let management_token = load_or_create_management_token()?;
     let listener = TcpListener::bind((options.host.as_str(), options.port))
         .map_err(|error| error.to_string())?;
     println!(
         "{}",
         json!({"ok": true, "url": format!("http://{}:{}", options.host, options.port), "pid": std::process::id()})
     );
-    let client = Arc::new(Mutex::new(CodexClient::new(options)));
+    let state = Arc::new(AppState {
+        client: Mutex::new(CodexClient::new(options)),
+        credential_management: Mutex::new(()),
+        management_token,
+    });
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                let client = Arc::clone(&client);
+                let state = Arc::clone(&state);
                 thread::spawn(move || {
-                    let _ = handle_connection(stream, client);
+                    let _ = handle_connection(stream, state);
                 });
             }
             Err(error) => eprintln!("accept failed: {error}"),
@@ -535,7 +624,7 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn handle_connection(mut stream: TcpStream, client: Arc<Mutex<CodexClient>>) -> Result<(), String> {
+fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), String> {
     let request = read_http_request(&mut stream)?;
     let path = request
         .path
@@ -545,14 +634,23 @@ fn handle_connection(mut stream: TcpStream, client: Arc<Mutex<CodexClient>>) -> 
         .to_string();
     let response = match (request.method.as_str(), path.as_str()) {
         ("GET", "/healthz") => {
-            let mut client = client.lock().map_err(|_| "client lock poisoned".to_string())?;
+            let mut client = state
+                .client
+                .lock()
+                .map_err(|_| "client lock poisoned".to_string())?;
             (200, json!({"ok": true, "status": client.status()}))
         }
         ("POST", "/__shutdown")
-            if env::var("CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN").ok().as_deref() == Some("1") =>
+            if env::var("CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN")
+                .ok()
+                .as_deref()
+                == Some("1") =>
         {
             {
-                let mut client = client.lock().map_err(|_| "client lock poisoned".to_string())?;
+                let mut client = state
+                    .client
+                    .lock()
+                    .map_err(|_| "client lock poisoned".to_string())?;
                 client.shutdown();
             }
             thread::spawn(|| {
@@ -567,7 +665,10 @@ fn handle_connection(mut stream: TcpStream, client: Arc<Mutex<CodexClient>>) -> 
             } else {
                 serde_json::from_slice(&request.body).map_err(|error| error.to_string())?
             };
-            let mut client = client.lock().map_err(|_| "client lock poisoned".to_string())?;
+            let mut client = state
+                .client
+                .lock()
+                .map_err(|_| "client lock poisoned".to_string())?;
             match handle_invoke(path, &body, &mut client) {
                 Ok(data) => (200, json!({"ok": true, "data": data})),
                 Err(error) => (
@@ -583,9 +684,94 @@ fn handle_connection(mut stream: TcpStream, client: Arc<Mutex<CodexClient>>) -> 
                 ),
             }
         }
+        (method, path) if path.starts_with("/management/") => {
+            if !management_authorized(request.authorization.as_deref(), &state.management_token) {
+                (
+                    401,
+                    json!({"ok": false, "error": {"message": "management authorization required"}}),
+                )
+            } else {
+                let body = if request.body.is_empty() {
+                    json!({})
+                } else {
+                    serde_json::from_slice(&request.body).map_err(|error| error.to_string())?
+                };
+                match handle_management(method, path, &body, &state) {
+                    Ok(data) => (200, json!({"ok": true, "data": data})),
+                    Err(error) => (
+                        error.status,
+                        json!({"ok": false, "error": {"message": error.message, "code": error.code, "data": error.data}}),
+                    ),
+                }
+            }
+        }
         _ => (404, json!({"ok": false, "error": {"message": "not found"}})),
     };
     write_json(&mut stream, response.0, &response.1)
+}
+
+fn handle_management(
+    method: &str,
+    path: &str,
+    body: &Value,
+    state: &AppState,
+) -> Result<Value, HttpError> {
+    let _credential_guard = state
+        .credential_management
+        .lock()
+        .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+    match (method, path) {
+        ("GET", "/management/v1/credential-state") => serde_json::to_value(
+            credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
+        )
+        .map_err(|error| HttpError::internal(error.to_string())),
+        ("POST", "/management/v1/workspace-projects") => {
+            let workspace_id = body
+                .get("workspaceId")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?;
+            serde_json::to_value(
+                credential::list_workspace_projects(workspace_id)
+                    .map_err(|error| HttpError::internal(error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
+        }
+        ("POST", "/management/v1/switch-credential") => {
+            let request: credential::CredentialSwitchRequest = serde_json::from_value(body.clone())
+                .map_err(|error| HttpError::new(400, format!("invalid switch request: {error}")))?;
+            let result = credential::switch(request)
+                .map_err(|error| HttpError::internal(error.to_string()))?;
+            state
+                .client
+                .lock()
+                .map_err(|_| HttpError::internal("client lock poisoned"))?
+                .shutdown();
+            serde_json::to_value(result).map_err(|error| HttpError::internal(error.to_string()))
+        }
+        _ => Err(HttpError::new(
+            404,
+            format!("unknown management path: {path}"),
+        )),
+    }
+}
+
+fn management_authorized(header: Option<&str>, expected: &str) -> bool {
+    let provided = header
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default()
+        .as_bytes();
+    let expected = expected.as_bytes();
+    if provided.len() != expected.len() {
+        return false;
+    }
+    provided
+        .iter()
+        .zip(expected)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn handle_invoke(path: &str, body: &Value, client: &mut CodexClient) -> Result<Value, HttpError> {
@@ -595,7 +781,10 @@ fn handle_invoke(path: &str, body: &Value, client: &mut CodexClient) -> Result<V
         "/invoke/listProjects" => list_projects(body, client),
         "/invoke/searchThreads" => {
             if string_field(body, "searchTerm").is_none()
-                && body.pointer("/params/searchTerm").and_then(Value::as_str).is_none()
+                && body
+                    .pointer("/params/searchTerm")
+                    .and_then(Value::as_str)
+                    .is_none()
             {
                 return Err(HttpError::new(400, "searchTerm is required"));
             }
@@ -756,7 +945,10 @@ fn list_thread_turns(body: &Value, client: &mut CodexClient) -> Result<Value, Ht
     }) else {
         return Ok(json!({"result": {"data": [], "nextCursor": null, "backwardsCursor": null}}));
     };
-    let mut params = merge_params(body, &["threadId", "cursor", "limit", "sortDirection", "itemsView"]);
+    let mut params = merge_params(
+        body,
+        &["threadId", "cursor", "limit", "sortDirection", "itemsView"],
+    );
     params["threadId"] = Value::String(thread_id.clone());
     match client.request("thread/turns/list", params, timeout_ms(body)) {
         Ok(result) => Ok(json!({"result": result})),
@@ -775,7 +967,9 @@ fn list_thread_turns(body: &Value, client: &mut CodexClient) -> Result<Value, Ht
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            Ok(json!({"result": {"data": turns, "nextCursor": null, "backwardsCursor": null, "fallback": "thread/read"}}))
+            Ok(
+                json!({"result": {"data": turns, "nextCursor": null, "backwardsCursor": null, "fallback": "thread/read"}}),
+            )
         }
     }
 }
@@ -785,11 +979,13 @@ fn list_projects(body: &Value, client: &mut CodexClient) -> Result<Value, HttpEr
     let global_state = read_json_file(&home.join(".codex-global-state.json"));
     let configured = parse_codex_project_config(&home.join("config.toml"));
     let mut projects = Map::new();
-    let saved_roots = unique_strings([
-        array_strings(global_state.get("project-order")),
-        array_strings(global_state.get("electron-saved-workspace-roots")),
-    ]
-    .concat());
+    let saved_roots = unique_strings(
+        [
+            array_strings(global_state.get("project-order")),
+            array_strings(global_state.get("electron-saved-workspace-roots")),
+        ]
+        .concat(),
+    );
     let saved_order = saved_roots
         .iter()
         .filter_map(|value| normalize_project_path(value))
@@ -848,7 +1044,10 @@ fn list_projects(body: &Value, client: &mut CodexClient) -> Result<Value, HttpEr
         .collect::<Vec<_>>();
     items.sort_by(|left, right| {
         let lp = left.get("pinned").and_then(Value::as_bool).unwrap_or(false);
-        let rp = right.get("pinned").and_then(Value::as_bool).unwrap_or(false);
+        let rp = right
+            .get("pinned")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if lp != rp {
             return rp.cmp(&lp);
         }
@@ -882,7 +1081,9 @@ fn list_projects(body: &Value, client: &mut CodexClient) -> Result<Value, HttpEr
     } else {
         Value::Null
     };
-    Ok(json!({"result": {"projects": page, "items": page, "total": total, "nextCursor": next_cursor, "codexHome": home}}))
+    Ok(
+        json!({"result": {"projects": page, "items": page, "total": total, "nextCursor": next_cursor, "codexHome": home}}),
+    )
 }
 
 fn read_thread_projects(
@@ -898,8 +1099,10 @@ fn read_thread_projects(
         .or_else(|| body.pointer("/params/threadCursor"))
         .cloned()
         .unwrap_or(Value::Null);
-    let max_pages = usize_param(body, "maxThreadPages", DEFAULT_PROJECT_THREAD_MAX_PAGES).clamp(1, 500);
-    let limit = usize_param(body, "threadPageLimit", DEFAULT_PROJECT_THREAD_PAGE_LIMIT).clamp(1, 100);
+    let max_pages =
+        usize_param(body, "maxThreadPages", DEFAULT_PROJECT_THREAD_MAX_PAGES).clamp(1, 500);
+    let limit =
+        usize_param(body, "threadPageLimit", DEFAULT_PROJECT_THREAD_PAGE_LIMIT).clamp(1, 100);
     for _ in 0..max_pages {
         let mut params = json!({
             "cursor": cursor,
@@ -908,7 +1111,11 @@ fn read_thread_projects(
             "sortDirection": string_param(body, "sortDirection").unwrap_or_else(|| DEFAULT_THREAD_SORT_DIRECTION.to_string()),
         });
         for key in ["archived", "useStateDbOnly"] {
-            if let Some(value) = body.get(key).or_else(|| body.pointer(&format!("/params/{key}"))).cloned() {
+            if let Some(value) = body
+                .get(key)
+                .or_else(|| body.pointer(&format!("/params/{key}")))
+                .cloned()
+            {
                 params[key] = value;
             }
         }
@@ -1176,9 +1383,15 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     let header_text = String::from_utf8_lossy(&buffer[..headers_end]);
     let request_line = header_text.lines().next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
+    let authorization = header_text.lines().skip(1).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("authorization")
+            .then(|| value.trim().to_string())
+    });
     Ok(HttpRequest {
         method: parts.next().unwrap_or_default().to_string(),
         path: parts.next().unwrap_or_default().to_string(),
+        authorization,
         body: buffer[body_start..].to_vec(),
     })
 }
@@ -1186,6 +1399,7 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
 struct HttpRequest {
     method: String,
     path: String,
+    authorization: Option<String>,
     body: Vec<u8>,
 }
 
@@ -1194,6 +1408,8 @@ fn write_json(stream: &mut TcpStream, status: u16, payload: &Value) -> Result<()
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         500 => "Internal Server Error",
         _ => "OK",
@@ -1228,7 +1444,10 @@ fn daemonize(options: &ServerOptions) -> Result<(), String> {
     fs::create_dir_all(connector_home()).map_err(|error| error.to_string())?;
     if let Ok(body) = connector_health(options) {
         if body.get("ok").and_then(Value::as_bool) == Some(true) {
-            let pid = body.pointer("/status/connector/pid").cloned().unwrap_or(Value::Null);
+            let pid = body
+                .pointer("/status/connector/pid")
+                .cloned()
+                .unwrap_or(Value::Null);
             if let Some(pid) = pid.as_u64() {
                 fs::write(pid_path(), format!("{pid}\n")).map_err(|error| error.to_string())?;
             }
@@ -1261,13 +1480,14 @@ fn daemonize(options: &ServerOptions) -> Result<(), String> {
         args.push("--codex-args".to_string());
         args.push(serde_json::to_string(&options.extra_args).map_err(|error| error.to_string())?);
     }
-    let child = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err))
-        .spawn()
-        .map_err(|error| error.to_string())?;
+        .stderr(Stdio::from(log_err));
+    configure_detached_process(&mut command);
+    let child = command.spawn().map_err(|error| error.to_string())?;
     let pid = child.id();
     let health = wait_for_connector_health(options, Some(pid))?;
     let real_pid = health
@@ -1282,9 +1502,32 @@ fn daemonize(options: &ServerOptions) -> Result<(), String> {
     Ok(())
 }
 
+fn configure_detached_process(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+}
+
 fn connector_health(options: &ServerOptions) -> Result<Value, String> {
-    let mut stream =
-        TcpStream::connect((options.host.as_str(), options.port)).map_err(|error| error.to_string())?;
+    let mut stream = TcpStream::connect((options.host.as_str(), options.port))
+        .map_err(|error| error.to_string())?;
     stream
         .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .map_err(|error| error.to_string())?;
@@ -1300,14 +1543,18 @@ fn connector_health(options: &ServerOptions) -> Result<Value, String> {
     serde_json::from_str(body).map_err(|error| error.to_string())
 }
 
-fn wait_for_connector_health(options: &ServerOptions, expected_pid: Option<u32>) -> Result<Value, String> {
+fn wait_for_connector_health(
+    options: &ServerOptions,
+    expected_pid: Option<u32>,
+) -> Result<Value, String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut last = "not started".to_string();
     while Instant::now() < deadline {
         match connector_health(options) {
             Ok(body) => {
                 let pid_matches = expected_pid.is_none_or(|pid| {
-                    body.pointer("/status/connector/pid").and_then(Value::as_u64)
+                    body.pointer("/status/connector/pid")
+                        .and_then(Value::as_u64)
                         == Some(pid as u64)
                 });
                 if body.get("ok").and_then(Value::as_bool) == Some(true) && pid_matches {
@@ -1322,9 +1569,49 @@ fn wait_for_connector_health(options: &ServerOptions, expected_pid: Option<u32>)
 }
 
 fn connector_home() -> PathBuf {
-    env::var_os("CODEX_CONNECTOR_HOME")
+    env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
+        .or_else(|| env::var_os("CODEX_CONNECTOR_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))
+}
+
+fn management_token_path() -> PathBuf {
+    connector_home().join(MANAGEMENT_TOKEN_FILE)
+}
+
+fn load_or_create_management_token() -> Result<String, String> {
+    let home = connector_home();
+    fs::create_dir_all(&home).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o700))
+        .map_err(|error| error.to_string())?;
+    let path = management_token_path();
+    if let Ok(token) = fs::read_to_string(&path) {
+        let token = token.trim();
+        if token.len() >= 32 {
+            return Ok(token.to_string());
+        }
+    }
+    let mut bytes = [0_u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temporary, format!("{token}\n")).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
+        .map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    fs::rename(&temporary, &path).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| error.to_string())?;
+    Ok(token)
 }
 
 fn codex_home() -> PathBuf {
@@ -1373,9 +1660,24 @@ fn to_camel_case(value: &str) -> String {
     out
 }
 
+fn to_kebab_case(value: &str) -> String {
+    let mut out = String::new();
+    for character in value.chars() {
+        if character.is_ascii_uppercase() {
+            out.push('-');
+            out.push(character.to_ascii_lowercase());
+        } else {
+            out.push(character);
+        }
+    }
+    out
+}
+
 fn terminate_process(pid: &str) {
     if cfg!(target_os = "windows") {
-        let _ = Command::new("taskkill").args(["/PID", pid, "/T", "/F"]).status();
+        let _ = Command::new("taskkill")
+            .args(["/PID", pid, "/T", "/F"])
+            .status();
     } else {
         let _ = Command::new("kill").args(["-TERM", pid]).status();
     }
@@ -1383,6 +1685,6 @@ fn terminate_process(pid: &str) {
 
 fn print_help() {
     println!(
-        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex --version"
+        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex credential-state\n  baijimu-connector-codex list-workspace-projects --workspace-id <id>\n  baijimu-connector-codex switch-credential --workspace-id <id> --workspace-name <name> --project-id <id> [--project-name <name>] [--model <model>]\n  baijimu-connector-codex --version"
     );
 }

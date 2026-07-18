@@ -66,6 +66,7 @@ async function stopConnector(proc, port) {
 test("rust connector forwards Codex app-server calls", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const port = await freePort();
+  const connectorHome = await mkdtemp(join(tmpdir(), "codex-app-data-"));
   const proc = spawn(cli, [
     "start",
     "--port",
@@ -79,12 +80,22 @@ test("rust connector forwards Codex app-server calls", async () => {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
+      BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
       CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
     },
   });
 
   try {
     await waitForHealth(port);
+
+    const unauthorized = await fetch(`http://127.0.0.1:${port}/management/v1/credential-state`);
+    assert.equal(unauthorized.status, 401);
+    const managementToken = (await readFile(join(connectorHome, "management-token"), "utf8")).trim();
+    assert.ok(managementToken.length >= 32);
+    const authorizedUnknown = await fetch(`http://127.0.0.1:${port}/management/v1/unknown`, {
+      headers: { authorization: `Bearer ${managementToken}` },
+    });
+    assert.equal(authorizedUnknown.status, 404);
 
     const thread = await postJson(port, "/invoke/startThread", { model: "gpt-test" });
     assert.equal(thread.data.result.thread.id, "thr_test");
@@ -115,6 +126,7 @@ test("rust connector forwards Codex app-server calls", async () => {
     assert.ok(events.data.events.some((event) => event.method === "item/agentMessage/delta"));
   } finally {
     await stopConnector(proc, port);
+    await rm(connectorHome, { recursive: true, force: true });
   }
 });
 
@@ -122,6 +134,7 @@ test("rust connector lists Codex projects and falls back for turns", async () =>
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const port = await freePort();
   const codexHome = await mkdtemp(join(tmpdir(), "codex-home-"));
+  const connectorHome = await mkdtemp(join(tmpdir(), "codex-app-data-"));
   const savedProject = join(codexHome, "saved-project");
   const activeProject = join(codexHome, "active-project");
   const trustedProject = join(codexHome, "trusted-project");
@@ -150,6 +163,7 @@ test("rust connector lists Codex projects and falls back for turns", async () =>
     env: {
       ...process.env,
       CODEX_HOME: codexHome,
+      BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
       CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
       CODEX_FAKE_DISABLE_TURNS_LIST: "1",
     },
@@ -182,6 +196,7 @@ test("rust connector lists Codex projects and falls back for turns", async () =>
   } finally {
     await stopConnector(proc, port);
     await rm(codexHome, { recursive: true, force: true });
+    await rm(connectorHome, { recursive: true, force: true });
   }
 });
 
@@ -205,7 +220,7 @@ test("rust connector daemon mode writes pid file", async () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        CODEX_CONNECTOR_HOME: home,
+        BAIJIMU_CONNECTOR_DATA_DIR: home,
         CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
       },
     });
@@ -213,6 +228,8 @@ test("rust connector daemon mode writes pid file", async () => {
     assert.equal(started.ok, true);
     assert.equal(started.url, `http://127.0.0.1:${port}`);
 
+    await waitForHealth(port);
+    await delay(750);
     await waitForHealth(port);
     const pid = Number((await readFile(join(home, "connector.pid"), "utf8")).trim());
     assert.equal(pid, started.pid);

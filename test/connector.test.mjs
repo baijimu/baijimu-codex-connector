@@ -83,7 +83,10 @@ test("forwards thread and turn calls to Codex app-server", async () => {
       model: "gpt-test",
     });
     assert.equal(thread.data.result.thread.id, "thr_test");
-    assert.equal(thread.data.status.appServer.running, true);
+    assert.equal(thread.data.status, undefined);
+
+    const statusAfterStart = await postJson(port, "/invoke/status");
+    assert.equal(statusAfterStart.data.appServer.running, true);
 
     const turn = await postJson(port, "/invoke/startTurn", {
       threadId: "thr_test",
@@ -153,6 +156,7 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     assert.equal(threads.data.result.data[0].cwd, "/tmp/listed");
     assert.equal(threads.data.result.data[0].requestParams.sortKey, "recency_at");
     assert.equal(threads.data.result.data[0].requestParams.sortDirection, "desc");
+    assert.equal(threads.data.status, undefined);
 
     const explicitlySortedThreads = await postJson(port, "/invoke/listThreads", {
       limit: 5,
@@ -181,6 +185,7 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     assert.equal(turns.data.result.data[0].id, "turn_recent");
     assert.equal(turns.data.result.data[0].items[0].text, "limit=8;direction=desc;items=full");
     assert.equal(turns.data.result.nextCursor, "older_cursor");
+    assert.equal(turns.data.status, undefined);
 
     const emptyTurns = await postJson(port, "/invoke/listThreadTurns", {
       threadId: "",
@@ -192,6 +197,7 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     const apps = await postJson(port, "/invoke/listApps", { limit: 10 });
     assert.equal(apps.data.result.data[0].id, "app_test");
     assert.equal(apps.data.result.data[0].isAccessible, true);
+    assert.equal(apps.data.status, undefined);
   } finally {
     if (proc.exitCode === null && proc.signalCode === null) {
       try {
@@ -314,6 +320,7 @@ test("lists Codex projects separately from sessions", async () => {
     const byPath = new Map(projects.map((project) => [project.path, project]));
 
     assert.equal(response.data.result.total, 4);
+    assert.equal(response.data.status, undefined);
     assert.equal(byPath.get(savedProject).pinned, true);
     assert.ok(byPath.get(savedProject).sources.includes("saved"));
     assert.equal(byPath.get(activeProject).active, true);
@@ -379,6 +386,7 @@ test("falls back to readThread when paginated turn listing is unavailable", asyn
     });
     assert.equal(turns.data.result.data[0].id, "turn_read");
     assert.equal(turns.data.result.fallback, "thread/read");
+    assert.equal(turns.data.status, undefined);
 
     const events = await postJson(port, "/invoke/recentEvents", {
       afterSequence: 0,

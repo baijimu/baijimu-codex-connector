@@ -1,9 +1,9 @@
 {
   "schemaVersion": "1.0",
   "id": "com.baijimu.connector.codex",
-  "name": "Codex Connector",
-  "version": "0.3.0",
-  "description": "Expose a local Codex app-server session through Baijimu Local.",
+  "name": "Codex",
+  "version": "0.4.0",
+  "description": "Manage local Codex sessions, workspaces and Baijimu LLM credentials in one application.",
   "publisher": {
     "name": "Baijimu",
     "homepage": "https://baijimu.com"
@@ -11,7 +11,7 @@
   "source": {
     "type": "gitee",
     "repo": "zxflimit_admin/baijimu-connector-codex",
-    "revision": "v0.3.0"
+    "revision": "v0.4.0"
   },
   "runtime": {
     "type": "process",
@@ -22,6 +22,27 @@
       "url": "http://127.0.0.1:18110/healthz",
       "timeoutSecs": 2,
       "expectStatus": 200
+    }
+  },
+  "management": {
+    "type": "http",
+    "baseUrl": "http://127.0.0.1:18110",
+    "auth": {
+      "type": "connector_token"
+    },
+    "operations": {
+      "credentialState": {
+        "method": "GET",
+        "path": "/management/v1/credential-state"
+      },
+      "listWorkspaceProjects": {
+        "method": "POST",
+        "path": "/management/v1/workspace-projects"
+      },
+      "switchCredential": {
+        "method": "POST",
+        "path": "/management/v1/switch-credential"
+      }
     }
   },
   "configSchema": {
