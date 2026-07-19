@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Codex 账户与工作区</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <div class="brand-mark" aria-hidden="true">C</div>
+        <div class="hero-copy">
+          <p class="eyebrow">Codex Local App</p>
+          <h1>账户与工作区</h1>
+          <p>选择模型调用所属的百积木工作区和项目。凭证由本地应用签发并直接写入 Codex，不会返回给界面或 Bridge Agent。</p>
+        </div>
+        <button id="refresh-button" class="button secondary" type="button">刷新状态</button>
+      </header>
+
+      <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+      <div id="error" class="message error" role="alert" hidden></div>
+      <div id="warning" class="message warning" role="status" hidden></div>
+
+      <section class="panel active-panel" aria-labelledby="active-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">当前生效</p>
+            <h2 id="active-title">Codex 模型凭证</h2>
+          </div>
+          <span id="credential-badge" class="status-badge neutral">读取中</span>
+        </div>
+        <dl class="status-grid">
+          <div><dt>工作区</dt><dd id="active-workspace">—</dd></div>
+          <div><dt>项目</dt><dd id="active-project">—</dd></div>
+          <div><dt>模型</dt><dd id="active-model">—</dd></div>
+          <div><dt>Codex 配置</dt><dd id="codex-configured">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="panel" aria-labelledby="switch-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">个性化设置</p>
+            <h2 id="switch-title">切换工作区与项目</h2>
+          </div>
+          <p class="section-note">切换后会校验凭证归属、更新配置并重启 Codex。</p>
+        </div>
+
+        <form id="switch-form" class="form-grid">
+          <label class="field wide">
+            <span>工作区</span>
+            <select id="workspace-select" required disabled>
+              <option value="">正在读取工作区…</option>
+            </select>
+            <small>来自这台设备已经授权的百积木工作区。</small>
+          </label>
+
+          <label class="field">
+            <span>项目 ID</span>
+            <input id="project-id" type="number" min="1" inputmode="numeric" list="project-options" placeholder="例如 7405" required disabled />
+            <datalist id="project-options"></datalist>
+            <small id="project-hint">先选择工作区，再读取项目。</small>
+          </label>
+
+          <label class="field">
+            <span>项目名称</span>
+            <input id="project-name" type="text" maxlength="120" placeholder="选择项目后自动填充" disabled />
+            <small>只用于本机展示，不影响项目归属。</small>
+          </label>
+
+          <label class="field wide">
+            <span>模型</span>
+            <input id="model" type="text" maxlength="120" value="gpt-5.6-sol" required disabled />
+            <small>该配置会写入 Codex 的百积木 Router 配置块。</small>
+          </label>
+
+          <div class="form-actions wide">
+            <p>每次切换都会重新签发短范围凭证，本地不会保存多份明文 LLM key。</p>
+            <button id="switch-button" class="button primary" type="submit" disabled>签发并切换</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="recent-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">快捷切换</p>
+            <h2 id="recent-title">最近使用</h2>
+          </div>
+          <span id="profile-count" class="count">0 个配置</span>
+        </div>
+        <div id="profile-list" class="profile-list">
+          <div class="empty-state">正在读取本机配置…</div>
+        </div>
+      </section>
+
+      <footer class="privacy-note">
+        <strong>安全边界</strong>
+        <span>此页面不能直接访问网络、文件系统或远程服务，只能调用本应用清单声明的本机管理操作。</span>
+      </footer>
+    </main>
+  </body>
+</html>

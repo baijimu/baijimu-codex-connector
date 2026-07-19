@@ -719,7 +719,7 @@ fn restart_codex_desktop_app() -> (bool, String) {
             .args(["-f", &format!("{}/Contents", app_path.display())])
             .status();
         std::thread::sleep(Duration::from_millis(900));
-        return match Command::new("open").arg(&app_path).status() {
+        match Command::new("open").arg(&app_path).status() {
             Ok(status) if status.success() => (true, "Codex 已按新工作区重新启动".to_string()),
             Ok(status) => (
                 false,
@@ -729,7 +729,7 @@ fn restart_codex_desktop_app() -> (bool, String) {
                 false,
                 format!("Codex 配置已切换，但自动重新启动失败: {error}"),
             ),
-        };
+        }
     }
     #[cfg(target_os = "windows")]
     {

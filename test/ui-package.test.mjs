@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import {
+  buildSwitchPayload,
+  credentialStatusMeta,
+  normalizeCredentialState,
+  preferredWorkspaceId,
+} from "../ui/state.mjs";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+test("connector manifest declares the packaged embedded UI", async () => {
+  const manifest = JSON.parse(await readFile(join(root, "connector.json"), "utf8"));
+  assert.equal(manifest.schemaVersion, "1.1");
+  assert.deepEqual(manifest.ui, {
+    type: "embedded",
+    entry: "ui/index.html",
+    title: "账户与工作区",
+    defaultView: true,
+  });
+  assert.deepEqual(Object.keys(manifest.management.operations).sort(), [
+    "credentialState",
+    "listWorkspaceProjects",
+    "switchCredential",
+  ]);
+  const html = await readFile(join(root, manifest.ui.entry), "utf8");
+  assert.match(html, /src="\.\/app\.js"/);
+  assert.match(html, /href="\.\/styles\.css"/);
+  assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/i);
+  await readFile(join(root, "ui", "app.js"), "utf8");
+  await readFile(join(root, "ui", "state.mjs"), "utf8");
+  await readFile(join(root, "ui", "styles.css"), "utf8");
+});
+
+test("UI state normalizes management responses and keeps the active workspace", () => {
+  const state = normalizeCredentialState({
+    codexConfigured: true,
+    credentialStatus: "verified",
+    activeProfile: {
+      workspaceId: 642,
+      workspaceName: "研发",
+      projectId: 7405,
+      projectName: "Codex",
+      model: "gpt-5.6-sol",
+      activatedAtEpochSeconds: 123,
+    },
+    profiles: [],
+    workspaces: [
+      { workspaceId: 100, name: "其他" },
+      { workspaceId: 642, name: "研发" },
+    ],
+  });
+  assert.equal(state.codexConfigured, true);
+  assert.equal(preferredWorkspaceId(state), 642);
+  assert.deepEqual(credentialStatusMeta(state.credentialStatus), { label: "已验证", tone: "success" });
+});
+
+test("UI builds only complete, explicitly scoped credential switch requests", () => {
+  assert.deepEqual(buildSwitchPayload({
+    workspaceId: "642",
+    workspaceName: "研发",
+    projectId: "7405",
+    projectName: "Codex",
+    model: "gpt-5.6-sol",
+  }), {
+    workspaceId: 642,
+    workspaceName: "研发",
+    projectId: 7405,
+    projectName: "Codex",
+    model: "gpt-5.6-sol",
+  });
+  assert.throws(() => buildSwitchPayload({ workspaceId: 642, projectId: 0, model: "gpt-5.6-sol" }), /项目 ID/);
+  assert.throws(() => buildSwitchPayload({ workspaceId: 642, projectId: 7405, model: " " }), /模型不能为空/);
+});
