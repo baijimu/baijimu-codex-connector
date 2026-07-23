@@ -1,8 +1,8 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "0.4.1",
+  "version": "0.6.0",
   "description": "Manage local Codex sessions, workspaces and Baijimu LLM credentials in one application.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "gitee",
     "repo": "zxflimit_admin/baijimu-connector-codex",
-    "revision": "v0.4.1"
+    "revision": "v0.6.0"
   },
   "runtime": {
     "type": "process",
@@ -42,8 +42,46 @@
       "switchCredential": {
         "method": "POST",
         "path": "/management/v1/switch-credential"
+      },
+      "listCodexProjects": {
+        "method": "POST",
+        "path": "/management/v1/codex/projects"
+      },
+      "listCodexSessions": {
+        "method": "POST",
+        "path": "/management/v1/codex/sessions"
+      },
+      "readCodexSession": {
+        "method": "POST",
+        "path": "/management/v1/codex/sessions/read"
+      },
+      "startCodexSession": {
+        "method": "POST",
+        "path": "/management/v1/codex/sessions/start"
+      },
+      "listCodexTurns": {
+        "method": "POST",
+        "path": "/management/v1/codex/turns"
+      },
+      "startCodexTurn": {
+        "method": "POST",
+        "path": "/management/v1/codex/turns/start"
+      },
+      "interruptCodexTurn": {
+        "method": "POST",
+        "path": "/management/v1/codex/turns/interrupt"
+      },
+      "recentCodexEvents": {
+        "method": "POST",
+        "path": "/management/v1/codex/events"
       }
     }
+  },
+  "ui": {
+    "type": "embedded",
+    "entry": "ui/index.html",
+    "title": "Codex 远程开发",
+    "defaultView": true
   },
   "configSchema": {
     "type": "object",

@@ -1,6 +1,6 @@
 # Baijimu Codex Local App
 
-Baijimu Codex is an independent Rust local application that manages local Codex sessions, Baijimu workspaces, and Codex LLM credentials through one loopback service.
+Baijimu Codex is an independent Rust local application that manages local Codex sessions, Baijimu workspaces, and Codex LLM credentials through one loopback service. The application package also owns its embedded account and workspace interface; Bridge Agent only hosts that interface and proxies the management operations declared by this connector.
 
 It is installed and supervised by `bridge-agent`, but credential issuance, ownership validation, atomic Codex configuration updates, and Codex process restart are executed inside this application. Bridge Agent never receives the LLM key. Baijimu Local still controls which remote workspace may call the exposed session methods.
 
@@ -13,6 +13,8 @@ The official market package ships a Rust/native `baijimu-connector-codex`
 binary under `bin/<platform>-<arch>/`. The legacy Node.js implementation is
 kept for reference and compatibility, but the platform-managed entrypoint is
 the native binary.
+
+The package includes `ui/`, a static interface loaded inside the local-app detail panel. It provides Codex project/session browsing, newest-first session ordering, new-session creation, turn execution/interruption, and account/workspace switching. Every UI action goes through an explicitly declared `window.baijimuLocalApp` management operation protected by the connector token; the page cannot access Tauri commands, relay methods, local files, or arbitrary HTTP endpoints.
 
 ## Install
 

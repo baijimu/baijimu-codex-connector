@@ -154,7 +154,7 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     const threads = await postJson(port, "/invoke/listThreads", { limit: 5 });
     assert.equal(threads.data.result.data[0].id, "thr_listed");
     assert.equal(threads.data.result.data[0].cwd, "/tmp/listed");
-    assert.equal(threads.data.result.data[0].requestParams.sortKey, "recency_at");
+    assert.equal(threads.data.result.data[0].requestParams.sortKey, "updated_at");
     assert.equal(threads.data.result.data[0].requestParams.sortDirection, "desc");
     assert.equal(threads.data.status, undefined);
 
@@ -250,7 +250,7 @@ test("flattens wrapped Codex thread list items", async () => {
     assert.equal(thread.cwd, "/tmp/wrapped");
     assert.equal(thread.thread.id, "thr_wrapped");
     assert.equal(thread.wrapperMeta, "kept");
-    assert.equal(thread.requestParams.sortKey, "recency_at");
+    assert.equal(thread.requestParams.sortKey, "updated_at");
 
     const sessions = await postJson(port, "/invoke/listSessions", { limit: 5 });
     assert.equal(sessions.data.result.data[0].id, "thr_wrapped");
@@ -331,7 +331,7 @@ test("lists Codex projects separately from sessions", async () => {
 
     const sessions = await postJson(port, "/invoke/listSessions", { limit: 5 });
     assert.equal(sessions.data.result.data[0].id, "thr_listed");
-    assert.equal(sessions.data.result.data[0].requestParams.sortKey, "recency_at");
+    assert.equal(sessions.data.result.data[0].requestParams.sortKey, "updated_at");
     assert.equal(sessions.data.result.data[0].requestParams.sortDirection, "desc");
   } finally {
     if (proc.exitCode === null && proc.signalCode === null) {

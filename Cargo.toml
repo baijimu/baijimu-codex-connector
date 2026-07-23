@@ -1,6 +1,6 @@
 [package]
 name = "baijimu-connector-codex"
-version = "0.4.1"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "Baijimu Local connector for Codex app-server."

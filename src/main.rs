@@ -25,7 +25,7 @@ const MAX_EVENTS: usize = 1000;
 const DEFAULT_PROJECT_LIMIT: usize = 100;
 const DEFAULT_PROJECT_THREAD_PAGE_LIMIT: usize = 100;
 const DEFAULT_PROJECT_THREAD_MAX_PAGES: usize = 100;
-const DEFAULT_THREAD_SORT_KEY: &str = "recency_at";
+const DEFAULT_THREAD_SORT_KEY: &str = "updated_at";
 const DEFAULT_THREAD_SORT_DIRECTION: &str = "desc";
 const MANAGEMENT_TOKEN_FILE: &str = "management-token";
 
@@ -724,16 +724,22 @@ fn handle_management(
     body: &Value,
     state: &AppState,
 ) -> Result<Value, HttpError> {
-    let _credential_guard = state
-        .credential_management
-        .lock()
-        .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
     match (method, path) {
-        ("GET", "/management/v1/credential-state") => serde_json::to_value(
-            credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
-        )
-        .map_err(|error| HttpError::internal(error.to_string())),
+        ("GET", "/management/v1/credential-state") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+            serde_json::to_value(
+                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
+        }
         ("POST", "/management/v1/workspace-projects") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
             let workspace_id = body
                 .get("workspaceId")
                 .and_then(Value::as_u64)
@@ -746,6 +752,10 @@ fn handle_management(
             .map_err(|error| HttpError::internal(error.to_string()))
         }
         ("POST", "/management/v1/switch-credential") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
             let request: credential::CredentialSwitchRequest = serde_json::from_value(body.clone())
                 .map_err(|error| HttpError::new(400, format!("invalid switch request: {error}")))?;
             let result = credential::switch(request)
@@ -757,11 +767,47 @@ fn handle_management(
                 .shutdown();
             serde_json::to_value(result).map_err(|error| HttpError::internal(error.to_string()))
         }
+        ("POST", "/management/v1/codex/projects") => {
+            handle_management_invoke("/invoke/listProjects", body, state)
+        }
+        ("POST", "/management/v1/codex/sessions") => {
+            handle_management_invoke("/invoke/listSessions", body, state)
+        }
+        ("POST", "/management/v1/codex/sessions/read") => {
+            handle_management_invoke("/invoke/readThread", body, state)
+        }
+        ("POST", "/management/v1/codex/sessions/start") => {
+            handle_management_invoke("/invoke/startThread", body, state)
+        }
+        ("POST", "/management/v1/codex/turns") => {
+            handle_management_invoke("/invoke/listThreadTurns", body, state)
+        }
+        ("POST", "/management/v1/codex/turns/start") => {
+            handle_management_invoke("/invoke/startTurn", body, state)
+        }
+        ("POST", "/management/v1/codex/turns/interrupt") => {
+            handle_management_invoke("/invoke/interruptTurn", body, state)
+        }
+        ("POST", "/management/v1/codex/events") => {
+            handle_management_invoke("/invoke/recentEvents", body, state)
+        }
         _ => Err(HttpError::new(
             404,
             format!("unknown management path: {path}"),
         )),
     }
+}
+
+fn handle_management_invoke(
+    invoke_path: &str,
+    body: &Value,
+    state: &AppState,
+) -> Result<Value, HttpError> {
+    let mut client = state
+        .client
+        .lock()
+        .map_err(|_| HttpError::internal("client lock poisoned"))?;
+    handle_invoke(invoke_path, body, &mut client)
 }
 
 fn management_authorized(header: Option<&str>, expected: &str) -> bool {

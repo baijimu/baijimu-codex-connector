@@ -36,6 +36,21 @@ async function postJson(port, path, body = {}) {
   return payload;
 }
 
+async function postManagementJson(port, token, path, body = {}) {
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(payload));
+  assert.equal(payload.ok, true, JSON.stringify(payload));
+  return payload.data;
+}
+
 async function waitForHealth(port) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     try {
@@ -97,13 +112,38 @@ test("rust connector forwards Codex app-server calls", async () => {
     });
     assert.equal(authorizedUnknown.status, 404);
 
+    const managedSessions = await postManagementJson(
+      port,
+      managementToken,
+      "/management/v1/codex/sessions",
+      { limit: 5, sortKey: "updated_at", sortDirection: "desc" },
+    );
+    assert.equal(managedSessions.result.data[0].id, "thr_listed");
+    assert.equal(managedSessions.result.data[0].requestParams.sortKey, "updated_at");
+
+    const managedThread = await postManagementJson(
+      port,
+      managementToken,
+      "/management/v1/codex/sessions/start",
+      { model: "gpt-test", cwd: "/tmp/project" },
+    );
+    assert.equal(managedThread.result.thread.id, "thr_test");
+
+    const managedTurn = await postManagementJson(
+      port,
+      managementToken,
+      "/management/v1/codex/turns/start",
+      { threadId: "thr_test", input: "Say hello" },
+    );
+    assert.equal(managedTurn.result.turn.id, "turn_test");
+
     const thread = await postJson(port, "/invoke/startThread", { model: "gpt-test" });
     assert.equal(thread.data.result.thread.id, "thr_test");
     assert.equal(thread.data.status, undefined);
 
     const threads = await postJson(port, "/invoke/listThreads", { limit: 5 });
     assert.equal(threads.data.result.data[0].id, "thr_listed");
-    assert.equal(threads.data.result.data[0].requestParams.sortKey, "recency_at");
+    assert.equal(threads.data.result.data[0].requestParams.sortKey, "updated_at");
 
     const turns = await postJson(port, "/invoke/listThreadTurns", {
       threadId: "thr_read",
