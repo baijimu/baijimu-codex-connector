@@ -18,7 +18,7 @@ const MAX_EVENTS = 1000;
 const DEFAULT_PROJECT_LIMIT = 100;
 const DEFAULT_PROJECT_THREAD_PAGE_LIMIT = 100;
 const DEFAULT_PROJECT_THREAD_MAX_PAGES = 100;
-const DEFAULT_THREAD_SORT_KEY = "recency_at";
+const DEFAULT_THREAD_SORT_KEY = "updated_at";
 const DEFAULT_THREAD_SORT_DIRECTION = "desc";
 
 const __filename = fileURLToPath(import.meta.url);

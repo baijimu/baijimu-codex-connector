@@ -7,6 +7,8 @@ import {
   buildSwitchPayload,
   credentialStatusMeta,
   normalizeCredentialState,
+  normalizeCodexSessions,
+  codexTurnMessages,
   preferredWorkspaceId,
 } from "../ui/state.mjs";
 
@@ -18,12 +20,20 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.deepEqual(manifest.ui, {
     type: "embedded",
     entry: "ui/index.html",
-    title: "账户与工作区",
+    title: "Codex 远程开发",
     defaultView: true,
   });
   assert.deepEqual(Object.keys(manifest.management.operations).sort(), [
     "credentialState",
+    "interruptCodexTurn",
+    "listCodexProjects",
+    "listCodexSessions",
+    "listCodexTurns",
     "listWorkspaceProjects",
+    "readCodexSession",
+    "recentCodexEvents",
+    "startCodexSession",
+    "startCodexTurn",
     "switchCredential",
   ]);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
@@ -33,6 +43,24 @@ test("connector manifest declares the packaged embedded UI", async () => {
   await readFile(join(root, "ui", "app.js"), "utf8");
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
+});
+
+test("UI keeps Codex sessions newest-first and extracts conversation messages", () => {
+  const sessions = normalizeCodexSessions([
+    { id: "old", name: "Old", updated_at: 100 },
+    { id: "new", name: "New", updated_at: 200 },
+  ]);
+  assert.deepEqual(sessions.map((session) => session.id), ["new", "old"]);
+  assert.deepEqual(codexTurnMessages([{
+    id: "turn-1",
+    items: [
+      { id: "user-1", type: "user_message", text: "实现功能" },
+      { id: "agent-1", type: "agent_message", content: [{ text: "已经完成" }] },
+    ],
+  }]), [
+    { id: "user-1", role: "user", text: "实现功能" },
+    { id: "agent-1", role: "assistant", text: "已经完成" },
+  ]);
 });
 
 test("UI state normalizes management responses and keeps the active workspace", () => {
