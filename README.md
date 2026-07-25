@@ -57,22 +57,24 @@ CODEX_CONNECTOR_CODEX_BINARY=codex
 CODEX_CONNECTOR_CODEX_ARGS='["app-server","--listen","stdio://"]'
 ```
 
-## Bridge Service
+## Local App Capabilities
 
-The connector registers one service:
+The `schemaVersion: "2.0"` manifest declares these methods directly on
+`connectorId=com.baijimu.connector.codex`; installation does not create a runtime service or
+businessId:
 
-- `codexSession.status`
-- `codexSession.listThreads`
-- `codexSession.searchThreads`
-- `codexSession.readThread`
-- `codexSession.listApps`
-- `codexSession.startThread`
-- `codexSession.resumeThread`
-- `codexSession.startTurn`
-- `codexSession.steerTurn`
-- `codexSession.interruptTurn`
-- `codexSession.recentEvents`
-- `codexSession.request`
+- `status`
+- `listThreads`
+- `searchThreads`
+- `readThread`
+- `listApps`
+- `startThread`
+- `resumeThread`
+- `startTurn`
+- `steerTurn`
+- `interruptTurn`
+- `recentEvents`
+- `request`
 
 `request` is an advanced raw JSON-RPC forwarder and should be treated as high risk in remote authorization policies.
 

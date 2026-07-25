@@ -59,6 +59,14 @@ struct CodexClient {
     event_sequence: u64,
     started_at: Option<String>,
     last_exit: Option<Value>,
+    event_publisher: Option<EventPublisher>,
+}
+
+#[derive(Clone)]
+struct EventPublisher {
+    endpoint: String,
+    token: String,
+    client: reqwest::blocking::Client,
 }
 
 struct AppState {
@@ -76,7 +84,7 @@ struct StateProjectRoot {
 }
 
 impl CodexClient {
-    fn new(options: ServerOptions) -> Self {
+    fn new(options: ServerOptions, event_publisher: Option<EventPublisher>) -> Self {
         Self {
             options,
             child: None,
@@ -88,6 +96,7 @@ impl CodexClient {
             event_sequence: 0,
             started_at: None,
             last_exit: None,
+            event_publisher,
         }
     }
 
@@ -319,12 +328,16 @@ impl CodexClient {
 
     fn push_event(&mut self, method: &str, params: Value) {
         self.event_sequence += 1;
-        self.events.push_back(ConnectorEvent {
+        let event = ConnectorEvent {
             sequence: self.event_sequence,
             received_at: timestamp(),
             method: method.to_string(),
             params,
-        });
+        };
+        if let Some(publisher) = self.event_publisher.clone() {
+            publisher.publish(event.clone());
+        }
+        self.events.push_back(event);
         while self.events.len() > MAX_EVENTS {
             self.events.pop_front();
         }
@@ -366,6 +379,50 @@ impl CodexClient {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+}
+
+impl EventPublisher {
+    fn from_env() -> Option<Self> {
+        let endpoint = env::var("BAIJIMU_CONNECTOR_EVENT_ENDPOINT").ok()?;
+        let token_path = env::var("BAIJIMU_CONNECTOR_EVENT_TOKEN_FILE").ok()?;
+        let token = fs::read_to_string(token_path).ok()?.trim().to_string();
+        if endpoint.trim().is_empty() || token.is_empty() {
+            return None;
+        }
+        Some(Self {
+            endpoint,
+            token,
+            client: reqwest::blocking::Client::new(),
+        })
+    }
+
+    fn publish(&self, event: ConnectorEvent) {
+        let publisher = self.clone();
+        thread::spawn(move || {
+            let event_id = random_event_id();
+            let payload = json!({
+                "sequence": event.sequence,
+                "receivedAt": event.received_at,
+                "method": event.method,
+                "params": event.params,
+            });
+            if let Err(error) = publisher
+                .client
+                .post(&publisher.endpoint)
+                .bearer_auth(&publisher.token)
+                .json(&json!({
+                    "connectorId": "com.baijimu.connector.codex",
+                    "event": "codexNotification",
+                    "eventId": event_id,
+                    "payload": payload,
+                    "occurredAt": event.received_at,
+                }))
+                .send()
+            {
+                eprintln!("failed to publish codexNotification: {error}");
+            }
+        });
     }
 }
 
@@ -614,7 +671,7 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         json!({"ok": true, "url": format!("http://{}:{}", options.host, options.port), "pid": std::process::id()})
     );
     let state = Arc::new(AppState {
-        client: Mutex::new(CodexClient::new(options)),
+        client: Mutex::new(CodexClient::new(options, EventPublisher::from_env())),
         credential_management: Mutex::new(()),
         management_token,
     });
@@ -1872,6 +1929,16 @@ fn timestamp() -> String {
         .unwrap_or_default()
         .as_secs();
     format!("{secs}")
+}
+
+fn random_event_id() -> String {
+    let mut bytes = [0_u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    let suffix = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("codex_evt_{suffix}")
 }
 
 fn to_camel_case(value: &str) -> String {

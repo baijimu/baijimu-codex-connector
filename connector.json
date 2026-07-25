@@ -1,8 +1,8 @@
 {
-  "schemaVersion": "1.1",
+  "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "0.6.0",
+  "version": "1.0.0",
   "description": "Manage local Codex sessions, workspaces and Baijimu LLM credentials in one application.",
   "publisher": {
     "name": "Baijimu",
@@ -16,7 +16,10 @@
   "runtime": {
     "type": "process",
     "command": "baijimu-connector-codex",
-    "args": ["start", "--daemon"],
+    "args": [
+      "start",
+      "--daemon"
+    ],
     "healthCheck": {
       "type": "http",
       "url": "http://127.0.0.1:18110/healthz",
@@ -135,5 +138,639 @@
       "description": "Interrupt an active Codex turn."
     }
   ],
-  "serviceRegistrationFiles": ["service-registration.json"]
+  "transport": {
+    "type": "http",
+    "baseUrl": "http://127.0.0.1:18110"
+  },
+  "methods": [
+    {
+      "name": "status",
+      "description": "Return connector and Codex app-server connection status.",
+      "path": "/invoke/status",
+      "httpMethod": "POST",
+      "timeoutSecs": 5,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "listThreads",
+      "description": "List local Codex threads with cwd, source, git metadata, title, preview, and pagination.",
+      "path": "/invoke/listThreads",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "sortKey": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at"
+            ]
+          },
+          "sortDirection": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "modelProviders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sourceKinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "cli",
+                "vscode",
+                "exec",
+                "appServer",
+                "subAgent",
+                "subAgentReview",
+                "subAgentCompact",
+                "subAgentThreadSpawn",
+                "subAgentOther",
+                "unknown"
+              ]
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "cwd": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "useStateDbOnly": {
+            "type": "boolean"
+          },
+          "searchTerm": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "listProjects",
+      "description": "List local Codex projects from Codex desktop state, trusted project config, and thread cwd metadata.",
+      "path": "/invoke/listProjects",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "searchTerm": {
+            "type": "string"
+          },
+          "existsOnly": {
+            "type": "boolean"
+          },
+          "includeSaved": {
+            "type": "boolean"
+          },
+          "includeTrusted": {
+            "type": "boolean"
+          },
+          "includeThreadStats": {
+            "type": "boolean"
+          },
+          "threadCursor": {
+            "type": "string"
+          },
+          "threadPageLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "maxThreadPages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "useStateDbOnly": {
+            "type": "boolean"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "listSessions",
+      "description": "List local Codex sessions with cwd, source, git metadata, title, preview, and pagination.",
+      "path": "/invoke/listSessions",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "sortKey": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at"
+            ]
+          },
+          "sortDirection": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "modelProviders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sourceKinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "cli",
+                "vscode",
+                "exec",
+                "appServer",
+                "subAgent",
+                "subAgentReview",
+                "subAgentCompact",
+                "subAgentThreadSpawn",
+                "subAgentOther",
+                "unknown"
+              ]
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "cwd": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "useStateDbOnly": {
+            "type": "boolean"
+          },
+          "searchTerm": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "searchThreads",
+      "description": "Search local Codex threads by text and return matching thread metadata.",
+      "path": "/invoke/searchThreads",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "searchTerm"
+        ],
+        "properties": {
+          "searchTerm": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "sortKey": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at"
+            ]
+          },
+          "sortDirection": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "sourceKinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "cli",
+                "vscode",
+                "exec",
+                "appServer",
+                "subAgent",
+                "subAgentReview",
+                "subAgentCompact",
+                "subAgentThreadSpawn",
+                "subAgentOther",
+                "unknown"
+              ]
+            }
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "readThread",
+      "description": "Read one local Codex thread by id, optionally including turns and items.",
+      "path": "/invoke/readThread",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "includeTurns": {
+            "type": "boolean"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "listThreadTurns",
+      "description": "List one page of Codex thread turns with optional full item history.",
+      "path": "/invoke/listThreadTurns",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "sortDirection": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "itemsView": {
+            "type": "string",
+            "enum": [
+              "notLoaded",
+              "summary",
+              "full"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "listApps",
+      "description": "List Codex app-server apps/connectors visible to the local Codex account.",
+      "path": "/invoke/listApps",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "forceRefetch": {
+            "type": "boolean"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "startThread",
+      "description": "Start a new Codex thread through local Codex app-server.",
+      "path": "/invoke/startThread",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "resumeThread",
+      "description": "Resume an existing Codex thread.",
+      "path": "/invoke/resumeThread",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "threadId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "excludeTurns": {
+            "type": "boolean"
+          },
+          "initialTurnsPage": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "sortDirection": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              },
+              "itemsView": {
+                "type": "string",
+                "enum": [
+                  "notLoaded",
+                  "summary",
+                  "full"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "startTurn",
+      "description": "Start a Codex turn in a thread.",
+      "path": "/invoke/startTurn",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "threadId",
+          "input"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "input": {},
+          "model": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "steerTurn",
+      "description": "Append steering input to an active Codex turn.",
+      "path": "/invoke/steerTurn",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "input"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "input": {},
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "interruptTurn",
+      "description": "Interrupt an active Codex turn.",
+      "path": "/invoke/interruptTurn",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "recentEvents",
+      "description": "Read recent Codex app-server notifications cached by the connector.",
+      "path": "/invoke/recentEvents",
+      "httpMethod": "POST",
+      "timeoutSecs": 5,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "afterSequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "request",
+      "description": "Forward a raw JSON-RPC request to local Codex app-server.",
+      "path": "/invoke/request",
+      "httpMethod": "POST",
+      "timeoutSecs": 60,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "method"
+        ],
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600000
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "codexNotification",
+      "description": "Notification emitted by local Codex app-server.",
+      "payload_schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  ]
 }
