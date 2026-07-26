@@ -30,6 +30,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
     defaultView: true,
   });
   assert.deepEqual(Object.keys(manifest.management.operations).sort(), [
+    "checkoutPlatformProject",
     "credentialState",
     "interruptCodexTurn",
     "listCodexProjects",

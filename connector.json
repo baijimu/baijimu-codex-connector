@@ -46,6 +46,10 @@
         "method": "POST",
         "path": "/management/v1/switch-credential"
       },
+      "checkoutPlatformProject": {
+        "method": "POST",
+        "path": "/management/v1/projects/checkout"
+      },
       "listCodexProjects": {
         "method": "POST",
         "path": "/management/v1/codex/projects"
@@ -102,6 +106,14 @@
       "listen": {
         "type": "string",
         "default": "stdio://"
+      },
+      "baijimuBinary": {
+        "type": "string",
+        "default": "baijimu"
+      },
+      "projectsDirectory": {
+        "type": "string",
+        "description": "Absolute directory used for canonical platform project checkouts."
       }
     },
     "additionalProperties": false

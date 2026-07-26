@@ -1,4 +1,5 @@
 mod credential;
+mod project_checkout;
 
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Map, Value};
@@ -544,6 +545,21 @@ fn run(args: Vec<String>) -> Result<(), String> {
             );
             Ok(())
         }
+        "checkout-project" => {
+            let request = project_checkout::CheckoutRequest {
+                workspace_id: required_u64_arg(&parsed, "workspaceId")?,
+                project_id: required_u64_arg(&parsed, "projectId")?,
+                branch: string_arg(&parsed, "branch"),
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &project_checkout::prepare(request).map_err(|error| error.to_string())?
+                )
+                .map_err(|error| error.to_string())?
+            );
+            Ok(())
+        }
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -822,6 +838,19 @@ fn handle_management(
                 .lock()
                 .map_err(|_| HttpError::internal("client lock poisoned"))?
                 .shutdown();
+            serde_json::to_value(result).map_err(|error| HttpError::internal(error.to_string()))
+        }
+        ("POST", "/management/v1/projects/checkout") => {
+            let _project_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("project checkout lock poisoned"))?;
+            let request: project_checkout::CheckoutRequest = serde_json::from_value(body.clone())
+                .map_err(|error| {
+                HttpError::new(400, format!("invalid checkout request: {error}"))
+            })?;
+            let result = project_checkout::prepare(request)
+                .map_err(|error| HttpError::internal(error.to_string()))?;
             serde_json::to_value(result).map_err(|error| HttpError::internal(error.to_string()))
         }
         ("POST", "/management/v1/codex/projects") => {
@@ -1984,7 +2013,7 @@ fn terminate_process(pid: &str) {
 
 fn print_help() {
     println!(
-        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex credential-state\n  baijimu-connector-codex list-workspace-projects --workspace-id <id>\n  baijimu-connector-codex switch-credential --workspace-id <id> --workspace-name <name> --project-id <id> [--project-name <name>] [--model <model>]\n  baijimu-connector-codex --version"
+        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex credential-state\n  baijimu-connector-codex list-workspace-projects --workspace-id <id>\n  baijimu-connector-codex switch-credential --workspace-id <id> --workspace-name <name> --project-id <id> [--project-name <name>] [--model <model>]\n  baijimu-connector-codex checkout-project --workspace-id <id> --project-id <id> [--branch <name>]\n  baijimu-connector-codex --version"
     );
 }
 

@@ -47,6 +47,7 @@ baijimu-connector-codex stop
 baijimu-connector-codex credential-state
 baijimu-connector-codex list-workspace-projects --workspace-id 642
 baijimu-connector-codex switch-credential --workspace-id 642 --workspace-name "工作区" --project-id 7405 --project-name "项目"
+baijimu-connector-codex checkout-project --workspace-id 642 --project-id 7405
 ```
 
 Configuration can be provided with flags or environment variables:
@@ -54,6 +55,8 @@ Configuration can be provided with flags or environment variables:
 ```bash
 CODEX_CONNECTOR_PORT=18110
 CODEX_CONNECTOR_CODEX_BINARY=codex
+CODEX_CONNECTOR_BAIJIMU_BINARY=baijimu
+CODEX_CONNECTOR_PROJECTS_DIR=/absolute/path/to/Baijimu/Projects
 CODEX_CONNECTOR_CODEX_ARGS='["app-server","--listen","stdio://"]'
 ```
 
@@ -85,10 +88,18 @@ The application exposes three authenticated operations for the Bridge Agent appl
 - `GET /management/v1/credential-state`
 - `POST /management/v1/workspace-projects`
 - `POST /management/v1/switch-credential`
+- `POST /management/v1/projects/checkout`
 
 The local management token is not a Baijimu workspace token or an LLM credential. It only authenticates the loopback call between Bridge Agent and this application.
 
 Thread list responses include the Codex `cwd`, source, git metadata, title, preview, and pagination cursors so callers can choose the right workspace before starting or resuming work.
+
+The project checkout operation delegates to the managed `baijimu project checkout`
+command. It creates or validates a stable local checkout under
+`CODEX_CONNECTOR_PROJECTS_DIR`, uses the platform Git credential helper, and
+returns the canonical directory and current `codex/<userId>/...` branch for a
+new Codex session. Existing directories are reused only after their Baijimu
+workspace/project metadata, origin URL, and Codex branch namespace all match.
 
 ## Development
 
