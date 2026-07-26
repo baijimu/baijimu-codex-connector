@@ -16,7 +16,7 @@ const elementIds = [
   "refresh-button", "message", "error", "warning", "sessions-view", "account-view",
   "credential-badge", "active-workspace", "active-project", "active-model", "codex-configured",
   "switch-form", "workspace-select", "project-id", "project-name", "project-options",
-  "project-hint", "model", "switch-button", "profile-count", "profile-list",
+  "project-hint", "model", "checkout-button", "switch-button", "profile-count", "profile-list",
   "new-session-button", "session-project-filter", "session-list", "load-more-sessions",
   "session-path", "session-title", "session-status", "conversation", "prompt-form",
   "session-cwd", "session-project-options", "session-model", "prompt-input", "prompt-hint",
@@ -83,11 +83,13 @@ function setAccountBusy(value) {
   elements["project-id"].disabled = value || !credentialState;
   elements["project-name"].disabled = value || !credentialState;
   elements.model.disabled = value || !credentialState;
+  elements["checkout-button"].disabled = value || !credentialState;
   elements["switch-button"].disabled = value || !credentialState;
   document.querySelectorAll("[data-profile-index]").forEach((button) => {
     button.disabled = value || button.dataset.active === "true";
   });
   elements["switch-button"].textContent = value ? "正在切换…" : "签发并切换";
+  elements["checkout-button"].textContent = value ? "正在检出…" : "检出项目源码";
 }
 
 function renderCredentialState() {
@@ -231,6 +233,40 @@ async function switchCredential(profile = null) {
     setMessage("message", `已切换到 ${payload.workspaceName} / ${project}。${String(result?.restartMessage || "")}`);
   } catch (error) {
     setMessage("error", errorMessage(error));
+    setAccountBusy(false);
+  }
+}
+
+async function checkoutPlatformProject() {
+  clearNotices();
+  let payload;
+  try {
+    payload = selectedSwitchPayload();
+  } catch (error) {
+    setMessage("error", errorMessage(error));
+    return;
+  }
+  setAccountBusy(true);
+  try {
+    const result = await bridge().invoke("checkoutPlatformProject", {
+      workspaceId: payload.workspaceId,
+      projectId: payload.projectId,
+    });
+    const directory = String(result?.directory || "").trim();
+    if (!directory) throw new Error("检出成功响应缺少本地目录。");
+    const title = payload.projectName || `项目 ${payload.projectId}`;
+    codexProjects = [
+      { path: directory, title, exists: true, sources: ["platformGitRemote"] },
+      ...codexProjects.filter((project) => project.path !== directory),
+    ];
+    renderCodexProjects();
+    elements["session-project-filter"].value = directory;
+    switchView("sessions");
+    newSession();
+    setMessage("message", `${result?.reused ? "已复用" : "已检出"} ${title}：${result?.branch || ""}`);
+  } catch (error) {
+    setMessage("error", errorMessage(error));
+  } finally {
     setAccountBusy(false);
   }
 }
@@ -495,5 +531,6 @@ elements["switch-form"].addEventListener("submit", (event) => {
   event.preventDefault();
   void switchCredential();
 });
+elements["checkout-button"].addEventListener("click", () => void checkoutPlatformProject());
 
 void Promise.all([loadSessions(), loadState()]);
