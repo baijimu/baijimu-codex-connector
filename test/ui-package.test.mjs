@@ -4,12 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-  buildSwitchPayload,
   credentialStatusMeta,
   normalizeCredentialState,
   normalizeCodexSessions,
   codexTurnMessages,
-  preferredWorkspaceId,
 } from "../ui/state.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -17,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 test("connector manifest declares the packaged embedded UI", async () => {
   const manifest = JSON.parse(await readFile(join(root, "connector.json"), "utf8"));
   assert.equal(manifest.schemaVersion, "2.0");
-  assert.equal(manifest.version, "1.0.0");
+  assert.equal(manifest.version, "1.1.0");
   assert.equal(manifest.transport.type, "http");
   assert.ok(manifest.methods.some((method) => method.name === "status"));
   assert.ok(manifest.events.some((event) => event.name === "codexNotification"));
@@ -36,17 +34,23 @@ test("connector manifest declares the packaged embedded UI", async () => {
     "listCodexProjects",
     "listCodexSessions",
     "listCodexTurns",
-    "listWorkspaceProjects",
     "readCodexSession",
     "recentCodexEvents",
+    "setupRetry",
+    "setupState",
     "startCodexSession",
     "startCodexTurn",
-    "switchCredential",
   ]);
+  assert.deepEqual(manifest.setup, {
+    operation: "setupRetry",
+    statusOperation: "setupState",
+    timeoutSecs: 1800,
+  });
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
   assert.match(html, /src="\.\/app\.js"/);
   assert.match(html, /href="\.\/styles\.css"/);
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/i);
+  assert.doesNotMatch(html, /项目 ID|切换工作区|确认设备/);
   await readFile(join(root, "ui", "app.js"), "utf8");
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
@@ -73,12 +77,11 @@ test("UI keeps Codex sessions newest-first and extracts conversation messages", 
 test("UI state normalizes management responses and keeps the active workspace", () => {
   const state = normalizeCredentialState({
     codexConfigured: true,
+    currentWorkspaceId: 642,
     credentialStatus: "verified",
     activeProfile: {
       workspaceId: 642,
       workspaceName: "研发",
-      projectId: 7405,
-      projectName: "Codex",
       model: "gpt-5.6-sol",
       activatedAtEpochSeconds: 123,
     },
@@ -89,24 +92,7 @@ test("UI state normalizes management responses and keeps the active workspace", 
     ],
   });
   assert.equal(state.codexConfigured, true);
-  assert.equal(preferredWorkspaceId(state), 642);
+  assert.equal(state.currentWorkspaceId, 642);
+  assert.equal(state.activeProfile.workspaceId, 642);
   assert.deepEqual(credentialStatusMeta(state.credentialStatus), { label: "已验证", tone: "success" });
-});
-
-test("UI builds only complete, explicitly scoped credential switch requests", () => {
-  assert.deepEqual(buildSwitchPayload({
-    workspaceId: "642",
-    workspaceName: "研发",
-    projectId: "7405",
-    projectName: "Codex",
-    model: "gpt-5.6-sol",
-  }), {
-    workspaceId: 642,
-    workspaceName: "研发",
-    projectId: 7405,
-    projectName: "Codex",
-    model: "gpt-5.6-sol",
-  });
-  assert.throws(() => buildSwitchPayload({ workspaceId: 642, projectId: 0, model: "gpt-5.6-sol" }), /项目 ID/);
-  assert.throws(() => buildSwitchPayload({ workspaceId: 642, projectId: 7405, model: " " }), /模型不能为空/);
 });

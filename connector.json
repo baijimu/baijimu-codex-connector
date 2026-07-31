@@ -2,8 +2,8 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.0.0",
-  "description": "Manage local Codex sessions, workspaces and Baijimu LLM credentials in one application.",
+  "version": "1.1.0",
+  "description": "Install and configure Codex on this computer, then manage local Codex sessions through the currently authorized Baijimu workspace.",
   "publisher": {
     "name": "Baijimu",
     "homepage": "https://baijimu.com"
@@ -11,7 +11,7 @@
   "source": {
     "type": "gitee",
     "repo": "zxflimit_admin/baijimu-connector-codex",
-    "revision": "v0.6.0"
+    "revision": "v1.1.0"
   },
   "runtime": {
     "type": "process",
@@ -19,6 +19,9 @@
     "args": [
       "start",
       "--daemon"
+    ],
+    "stopArgs": [
+      "stop"
     ],
     "healthCheck": {
       "type": "http",
@@ -34,17 +37,17 @@
       "type": "connector_token"
     },
     "operations": {
+      "setupState": {
+        "method": "GET",
+        "path": "/management/v1/setup/state"
+      },
+      "setupRetry": {
+        "method": "POST",
+        "path": "/management/v1/setup/retry"
+      },
       "credentialState": {
         "method": "GET",
         "path": "/management/v1/credential-state"
-      },
-      "listWorkspaceProjects": {
-        "method": "POST",
-        "path": "/management/v1/workspace-projects"
-      },
-      "switchCredential": {
-        "method": "POST",
-        "path": "/management/v1/switch-credential"
       },
       "checkoutPlatformProject": {
         "method": "POST",
@@ -83,6 +86,11 @@
         "path": "/management/v1/codex/events"
       }
     }
+  },
+  "setup": {
+    "operation": "setupRetry",
+    "statusOperation": "setupState",
+    "timeoutSecs": 1800
   },
   "ui": {
     "type": "embedded",

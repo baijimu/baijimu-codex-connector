@@ -1,22 +1,17 @@
 import {
   DEFAULT_MODEL,
-  buildSwitchPayload,
   codexTurnMessages,
   credentialStatusMeta,
-  formatActivatedAt,
   formatCodexSessionTime,
   normalizeCodexProjects,
   normalizeCodexSessions,
   normalizeCredentialState,
-  preferredWorkspaceId,
-  projectLabel,
 } from "./state.mjs";
 
 const elementIds = [
   "refresh-button", "message", "error", "warning", "sessions-view", "account-view",
-  "credential-badge", "active-workspace", "active-project", "active-model", "codex-configured",
-  "switch-form", "workspace-select", "project-id", "project-name", "project-options",
-  "project-hint", "model", "checkout-button", "switch-button", "profile-count", "profile-list",
+  "credential-badge", "active-workspace", "active-model", "codex-configured",
+  "setup-status", "setup-message", "setup-retry-button",
   "new-session-button", "session-project-filter", "session-list", "load-more-sessions",
   "session-path", "session-title", "session-status", "conversation", "prompt-form",
   "session-cwd", "session-project-options", "session-model", "prompt-input", "prompt-hint",
@@ -26,8 +21,8 @@ const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElem
 
 let activeView = "sessions";
 let credentialState = null;
-let workspaceProjects = [];
-let accountBusy = false;
+let setupState = null;
+let setupMonitorGeneration = 0;
 let codexProjects = [];
 let sessions = [];
 let nextSessionCursor = null;
@@ -78,18 +73,8 @@ function switchView(view) {
 }
 
 function setAccountBusy(value) {
-  accountBusy = value;
-  elements["workspace-select"].disabled = value || !credentialState?.workspaces.length;
-  elements["project-id"].disabled = value || !credentialState;
-  elements["project-name"].disabled = value || !credentialState;
-  elements.model.disabled = value || !credentialState;
-  elements["checkout-button"].disabled = value || !credentialState;
-  elements["switch-button"].disabled = value || !credentialState;
-  document.querySelectorAll("[data-profile-index]").forEach((button) => {
-    button.disabled = value || button.dataset.active === "true";
-  });
-  elements["switch-button"].textContent = value ? "正在切换…" : "签发并切换";
-  elements["checkout-button"].textContent = value ? "正在检出…" : "检出项目源码";
+  elements["setup-retry-button"].disabled = value;
+  elements["setup-retry-button"].textContent = value ? "正在安装配置…" : "重试安装配置";
 }
 
 function renderCredentialState() {
@@ -98,88 +83,53 @@ function renderCredentialState() {
   const status = credentialStatusMeta(state?.credentialStatus);
   elements["credential-badge"].textContent = status.label;
   elements["credential-badge"].className = `status-badge ${status.tone}`;
-  elements["active-workspace"].textContent = active ? `${active.workspaceName}（${active.workspaceId}）` : "尚未识别";
-  elements["active-project"].textContent = active ? `${projectLabel(active)}（${active.projectId}）` : "尚未识别";
+  const currentWorkspaceId = state?.currentWorkspaceId || active?.workspaceId;
+  const currentWorkspace = state?.workspaces.find((item) => item.workspaceId === currentWorkspaceId);
+  elements["active-workspace"].textContent = currentWorkspaceId
+    ? `${currentWorkspace?.name || active?.workspaceName || `工作区 ${currentWorkspaceId}`}（${currentWorkspaceId}）`
+    : "尚未识别";
   elements["active-model"].textContent = active?.model || DEFAULT_MODEL;
   elements["codex-configured"].textContent = state?.codexConfigured ? "已由本地应用管理" : "尚未完成管理配置";
   setMessage("warning", state?.discoveryWarning || "");
-  const selectedWorkspaceId = preferredWorkspaceId(state, elements["workspace-select"].value);
-  elements["workspace-select"].replaceChildren(option("", "选择工作区"));
-  state.workspaces.forEach((workspace) => {
-    elements["workspace-select"].append(option(workspace.workspaceId, `${workspace.name}（${workspace.workspaceId}）`));
-  });
-  elements["workspace-select"].value = selectedWorkspaceId ? String(selectedWorkspaceId) : "";
-  if (active && active.workspaceId === selectedWorkspaceId) {
-    elements["project-id"].value = String(active.projectId);
-    elements["project-name"].value = active.projectName;
-    elements.model.value = active.model;
+  if (active) {
     elements["session-model"].value = active.model;
   }
-  renderProfiles();
-  setAccountBusy(false);
 }
 
-function renderProfiles() {
-  const profiles = credentialState?.profiles || [];
-  const active = credentialState?.activeProfile;
-  elements["profile-count"].textContent = `${profiles.length} 个配置`;
-  elements["profile-list"].replaceChildren();
-  if (!profiles.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "还没有由本地应用管理的工作区配置。";
-    elements["profile-list"].append(empty);
-    return;
-  }
-  profiles.forEach((profile, index) => {
-    const isActive = active?.workspaceId === profile.workspaceId && active?.projectId === profile.projectId;
-    const row = document.createElement("article");
-    row.className = `profile-row${isActive ? " active" : ""}`;
-    const copy = document.createElement("div");
-    copy.className = "profile-copy";
-    const title = document.createElement("strong");
-    title.textContent = profile.workspaceName;
-    const detail = document.createElement("span");
-    detail.textContent = `${projectLabel(profile)} · ${profile.model}`;
-    const time = document.createElement("small");
-    time.textContent = formatActivatedAt(profile.activatedAtEpochSeconds);
-    copy.append(title, detail, time);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `button ${isActive ? "secondary" : "primary compact"}`;
-    button.textContent = isActive ? "当前使用" : "切换";
-    button.dataset.profileIndex = String(index);
-    button.dataset.active = String(isActive);
-    button.disabled = accountBusy || isActive;
-    button.addEventListener("click", () => void switchCredential(profile));
-    row.append(copy, button);
-    elements["profile-list"].append(row);
-  });
+function renderSetupState() {
+  const status = String(setupState?.status || "pending");
+  const labels = {
+    pending: "等待安装",
+    running: "正在安装配置",
+    succeeded: "已完成",
+    failed: "安装失败",
+  };
+  elements["setup-status"].textContent = labels[status] || status;
+  elements["setup-message"].textContent = setupState?.error || setupState?.message || "等待安装";
+  setAccountBusy(status === "running");
 }
 
-function renderWorkspaceProjects() {
-  elements["project-options"].replaceChildren();
-  workspaceProjects.forEach((project) => elements["project-options"].append(option(project.projectId, project.name)));
-  elements["project-hint"].textContent = workspaceProjects.length
-    ? `已读取 ${workspaceProjects.length} 个项目；可选择或直接输入项目 ID。`
-    : "没有读取到项目；可以直接输入有效的项目 ID。";
-}
-
-async function loadWorkspaceProjects(workspaceId, preserveProject = false) {
-  workspaceProjects = [];
-  renderWorkspaceProjects();
-  if (!preserveProject) {
-    elements["project-id"].value = "";
-    elements["project-name"].value = "";
-  }
-  if (!workspaceId) return;
-  elements["project-hint"].textContent = "正在读取项目列表…";
-  try {
-    const result = await bridge().invoke("listWorkspaceProjects", { workspaceId });
-    workspaceProjects = Array.isArray(result) ? result : [];
-    renderWorkspaceProjects();
-  } catch (error) {
-    elements["project-hint"].textContent = `读取项目失败：${errorMessage(error)}`;
+async function monitorSetup() {
+  const generation = ++setupMonitorGeneration;
+  while (generation === setupMonitorGeneration && setupState?.status === "running") {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    if (generation !== setupMonitorGeneration) return;
+    try {
+      setupState = await bridge().invoke("setupState");
+      renderSetupState();
+      if (setupState?.status === "succeeded") {
+        await loadState("Codex 已在本机安装并配置完成。");
+        return;
+      }
+      if (setupState?.status === "failed") {
+        setMessage("error", setupState?.error || "Codex 安装配置失败。");
+        return;
+      }
+    } catch (error) {
+      setAccountBusy(false);
+      setMessage("error", errorMessage(error));
+      return;
+    }
   }
 }
 
@@ -187,9 +137,15 @@ async function loadState(successMessage = "") {
   clearNotices();
   setAccountBusy(true);
   try {
-    credentialState = normalizeCredentialState(await bridge().invoke("credentialState"));
+    const [credential, setup] = await Promise.all([
+      bridge().invoke("credentialState"),
+      bridge().invoke("setupState"),
+    ]);
+    credentialState = normalizeCredentialState(credential);
+    setupState = setup;
     renderCredentialState();
-    await loadWorkspaceProjects(preferredWorkspaceId(credentialState), true);
+    renderSetupState();
+    if (setupState?.status === "running") void monitorSetup();
     if (successMessage) setMessage("message", successMessage);
   } catch (error) {
     credentialState = null;
@@ -198,75 +154,18 @@ async function loadState(successMessage = "") {
   }
 }
 
-function selectedSwitchPayload() {
-  const workspaceId = Number(elements["workspace-select"].value);
-  const workspace = credentialState?.workspaces.find((item) => item.workspaceId === workspaceId);
-  const projectId = Number(elements["project-id"].value);
-  const project = workspaceProjects.find((item) => item.projectId === projectId);
-  return buildSwitchPayload({
-    workspaceId,
-    workspaceName: workspace?.name,
-    projectId,
-    projectName: elements["project-name"].value.trim() || project?.name,
-    model: elements.model.value,
-  });
-}
-
-async function switchCredential(profile = null) {
+async function retrySetup() {
   clearNotices();
-  let payload;
-  try {
-    payload = profile ? buildSwitchPayload(profile) : selectedSwitchPayload();
-  } catch (error) {
-    setMessage("error", errorMessage(error));
-    return;
-  }
-  const project = payload.projectName || `项目 ${payload.projectId}`;
-  if (!window.confirm(`将为“${payload.workspaceName}”的“${project}”重新签发 LLM credential，并重启 Codex。继续吗？`)) return;
+  const workspaceId = credentialState?.currentWorkspaceId;
+  if (!workspaceId) return setMessage("error", "客户端当前授权中缺少工作区信息。");
   setAccountBusy(true);
   try {
-    const result = await bridge().invoke("switchCredential", payload);
-    credentialState = normalizeCredentialState(result?.state);
-    renderCredentialState();
-    await loadWorkspaceProjects(payload.workspaceId, true);
-    elements["session-model"].value = payload.model;
-    setMessage("message", `已切换到 ${payload.workspaceName} / ${project}。${String(result?.restartMessage || "")}`);
+    setupState = await bridge().invoke("setupRetry", { workspaceId });
+    renderSetupState();
+    setMessage("message", "已开始在本机安装并配置 Codex。");
+    void monitorSetup();
   } catch (error) {
     setMessage("error", errorMessage(error));
-    setAccountBusy(false);
-  }
-}
-
-async function checkoutPlatformProject() {
-  clearNotices();
-  let payload;
-  try {
-    payload = selectedSwitchPayload();
-  } catch (error) {
-    setMessage("error", errorMessage(error));
-    return;
-  }
-  setAccountBusy(true);
-  try {
-    const result = await bridge().invoke("checkoutPlatformProject", {
-      workspaceId: payload.workspaceId,
-      projectId: payload.projectId,
-    });
-    const directory = String(result?.directory || "").trim();
-    if (!directory) throw new Error("检出成功响应缺少本地目录。");
-    const title = payload.projectName || `项目 ${payload.projectId}`;
-    codexProjects = [
-      { path: directory, title, exists: true, sources: ["platformGitRemote"] },
-      ...codexProjects.filter((project) => project.path !== directory),
-    ];
-    renderCodexProjects();
-    elements["session-project-filter"].value = directory;
-    switchView("sessions");
-    newSession();
-    setMessage("message", `${result?.reused ? "已复用" : "已检出"} ${title}：${result?.branch || ""}`);
-  } catch (error) {
-    setMessage("error", errorMessage(error));
-  } finally {
     setAccountBusy(false);
   }
 }
@@ -511,26 +410,6 @@ elements["session-project-filter"].addEventListener("change", renderSessionList)
 elements["load-more-sessions"].addEventListener("click", () => void loadSessions({ append: true }));
 elements["prompt-form"].addEventListener("submit", (event) => void sendPrompt(event));
 elements["interrupt-button"].addEventListener("click", () => void interruptTurn());
-elements["workspace-select"].addEventListener("change", () => {
-  const workspaceId = Number(elements["workspace-select"].value);
-  const active = credentialState?.activeProfile;
-  if (active?.workspaceId === workspaceId) {
-    elements["project-id"].value = String(active.projectId);
-    elements["project-name"].value = active.projectName;
-    elements.model.value = active.model;
-  } else {
-    elements.model.value = DEFAULT_MODEL;
-  }
-  void loadWorkspaceProjects(workspaceId, active?.workspaceId === workspaceId);
-});
-elements["project-id"].addEventListener("input", () => {
-  const selected = workspaceProjects.find((project) => project.projectId === Number(elements["project-id"].value));
-  if (selected) elements["project-name"].value = selected.name;
-});
-elements["switch-form"].addEventListener("submit", (event) => {
-  event.preventDefault();
-  void switchCredential();
-});
-elements["checkout-button"].addEventListener("click", () => void checkoutPlatformProject());
+elements["setup-retry-button"].addEventListener("click", () => void retrySetup());
 
 void Promise.all([loadSessions(), loadState()]);

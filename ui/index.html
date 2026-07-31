@@ -15,7 +15,7 @@
         <div class="hero-copy">
           <p class="eyebrow">Codex Local App</p>
           <h1>Codex 远程开发</h1>
-          <p>管理本机 Codex 会话、继续开发任务，并配置模型调用所属的百积木工作区。</p>
+          <p>Codex 会自动安装到这台电脑，并使用百积木客户端当前已授权的工作区。</p>
         </div>
         <button id="refresh-button" class="button secondary" type="button">刷新</button>
       </header>
@@ -100,53 +100,22 @@
           </div>
           <dl class="status-grid">
             <div><dt>工作区</dt><dd id="active-workspace">—</dd></div>
-            <div><dt>项目</dt><dd id="active-project">—</dd></div>
             <div><dt>模型</dt><dd id="active-model">—</dd></div>
             <div><dt>Codex 配置</dt><dd id="codex-configured">—</dd></div>
+            <div><dt>安装状态</dt><dd id="setup-status">—</dd></div>
           </dl>
         </section>
 
-        <section class="panel" aria-labelledby="switch-title">
+        <section class="panel" aria-labelledby="setup-title">
           <div class="section-heading">
-            <div><p class="eyebrow">个性化设置</p><h2 id="switch-title">切换工作区与项目</h2></div>
-            <p class="section-note">切换后会校验凭证归属、更新配置并重启 Codex。</p>
+            <div><p class="eyebrow">自动配置</p><h2 id="setup-title">本机 Codex</h2></div>
+            <p class="section-note">设备和工作区均来自当前客户端授权，无需再次选择。</p>
           </div>
-          <form id="switch-form" class="form-grid">
-            <label class="field wide">
-              <span>工作区</span>
-              <select id="workspace-select" required disabled><option value="">正在读取工作区…</option></select>
-              <small>来自这台设备已经授权的百积木工作区。</small>
-            </label>
-            <label class="field">
-              <span>项目 ID</span>
-              <input id="project-id" type="number" min="1" inputmode="numeric" list="project-options" placeholder="例如 7405" required disabled />
-              <datalist id="project-options"></datalist>
-              <small id="project-hint">先选择工作区，再读取项目。</small>
-            </label>
-            <label class="field">
-              <span>项目名称</span>
-              <input id="project-name" type="text" maxlength="120" placeholder="选择项目后自动填充" disabled />
-              <small>只用于本机展示，不影响项目归属。</small>
-            </label>
-            <label class="field wide">
-              <span>模型</span>
-              <input id="model" type="text" maxlength="120" value="gpt-5.6-sol" required disabled />
-              <small>该配置会写入 Codex 的百积木 Router 配置块。</small>
-            </label>
-            <div class="form-actions wide">
-              <p>每次切换都会重新签发短范围凭证，本地不会保存多份明文 LLM key。</p>
-              <button id="checkout-button" class="button secondary" type="button" disabled>检出项目源码</button>
-              <button id="switch-button" class="button primary" type="submit" disabled>签发并切换</button>
-            </div>
-          </form>
-        </section>
-
-        <section class="panel" aria-labelledby="recent-title">
-          <div class="section-heading">
-            <div><p class="eyebrow">快捷切换</p><h2 id="recent-title">最近使用</h2></div>
-            <span id="profile-count" class="count">0 个配置</span>
+          <p id="setup-message" class="section-note">正在读取安装状态…</p>
+          <div class="form-actions">
+            <p>连接器会下载安装官方 Codex 客户端和命令行、写入模型凭证，并完成实际调用验证。</p>
+            <button id="setup-retry-button" class="button primary" type="button">重试安装配置</button>
           </div>
-          <div id="profile-list" class="profile-list"><div class="empty-state">正在读取本机配置…</div></div>
         </section>
       </section>
 

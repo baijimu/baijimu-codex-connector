@@ -1,5 +1,6 @@
 mod credential;
 mod project_checkout;
+mod setup;
 
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Map, Value};
@@ -73,6 +74,7 @@ struct EventPublisher {
 struct AppState {
     client: Mutex<CodexClient>,
     credential_management: Mutex<()>,
+    setup: setup::SetupManager,
     management_token: String,
 }
 
@@ -516,35 +518,6 @@ fn run(args: Vec<String>) -> Result<(), String> {
             );
             Ok(())
         }
-        "list-workspace-projects" => {
-            let workspace_id = required_u64_arg(&parsed, "workspaceId")?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &credential::list_workspace_projects(workspace_id)
-                        .map_err(|error| error.to_string())?
-                )
-                .map_err(|error| error.to_string())?
-            );
-            Ok(())
-        }
-        "switch-credential" => {
-            let request = credential::CredentialSwitchRequest {
-                workspace_id: required_u64_arg(&parsed, "workspaceId")?,
-                workspace_name: string_arg(&parsed, "workspaceName").unwrap_or_default(),
-                project_id: required_u64_arg(&parsed, "projectId")?,
-                project_name: string_arg(&parsed, "projectName"),
-                model: string_arg(&parsed, "model"),
-            };
-            println!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &credential::switch(request).map_err(|error| error.to_string())?
-                )
-                .map_err(|error| error.to_string())?
-            );
-            Ok(())
-        }
         "checkout-project" => {
             let request = project_checkout::CheckoutRequest {
                 workspace_id: required_u64_arg(&parsed, "workspaceId")?,
@@ -686,9 +659,14 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         "{}",
         json!({"ok": true, "url": format!("http://{}:{}", options.host, options.port), "pid": std::process::id()})
     );
+    let setup = setup::SetupManager::load();
+    if let Ok(workspace_id) = credential::current_workspace_id() {
+        let _ = setup.start(workspace_id);
+    }
     let state = Arc::new(AppState {
         client: Mutex::new(CodexClient::new(options, EventPublisher::from_env())),
         credential_management: Mutex::new(()),
+        setup,
         management_token,
     });
     for stream in listener.incoming() {
@@ -798,6 +776,22 @@ fn handle_management(
     state: &AppState,
 ) -> Result<Value, HttpError> {
     match (method, path) {
+        ("GET", "/management/v1/setup/state") => serde_json::to_value(state.setup.state())
+            .map_err(|error| HttpError::internal(error.to_string())),
+        ("POST", "/management/v1/setup/retry") => {
+            let workspace_id = body
+                .get("workspaceId")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0)
+                .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?;
+            serde_json::to_value(
+                state
+                    .setup
+                    .start(workspace_id)
+                    .map_err(|error| HttpError::internal(error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
+        }
         ("GET", "/management/v1/credential-state") => {
             let _credential_guard = state
                 .credential_management
@@ -807,38 +801,6 @@ fn handle_management(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))
-        }
-        ("POST", "/management/v1/workspace-projects") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
-            let workspace_id = body
-                .get("workspaceId")
-                .and_then(Value::as_u64)
-                .filter(|value| *value > 0)
-                .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?;
-            serde_json::to_value(
-                credential::list_workspace_projects(workspace_id)
-                    .map_err(|error| HttpError::internal(error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
-        }
-        ("POST", "/management/v1/switch-credential") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
-            let request: credential::CredentialSwitchRequest = serde_json::from_value(body.clone())
-                .map_err(|error| HttpError::new(400, format!("invalid switch request: {error}")))?;
-            let result = credential::switch(request)
-                .map_err(|error| HttpError::internal(error.to_string()))?;
-            state
-                .client
-                .lock()
-                .map_err(|_| HttpError::internal("client lock poisoned"))?
-                .shutdown();
-            serde_json::to_value(result).map_err(|error| HttpError::internal(error.to_string()))
         }
         ("POST", "/management/v1/projects/checkout") => {
             let _project_guard = state
@@ -1988,6 +1950,16 @@ fn to_camel_case(value: &str) -> String {
     out
 }
 
+fn terminate_process(pid: &str) {
+    if cfg!(target_os = "windows") {
+        let _ = Command::new("taskkill")
+            .args(["/PID", pid, "/T", "/F"])
+            .status();
+    } else {
+        let _ = Command::new("kill").args(["-TERM", pid]).status();
+    }
+}
+
 fn to_kebab_case(value: &str) -> String {
     let mut out = String::new();
     for character in value.chars() {
@@ -2001,19 +1973,9 @@ fn to_kebab_case(value: &str) -> String {
     out
 }
 
-fn terminate_process(pid: &str) {
-    if cfg!(target_os = "windows") {
-        let _ = Command::new("taskkill")
-            .args(["/PID", pid, "/T", "/F"])
-            .status();
-    } else {
-        let _ = Command::new("kill").args(["-TERM", pid]).status();
-    }
-}
-
 fn print_help() {
     println!(
-        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex credential-state\n  baijimu-connector-codex list-workspace-projects --workspace-id <id>\n  baijimu-connector-codex switch-credential --workspace-id <id> --workspace-name <name> --project-id <id> [--project-name <name>] [--model <model>]\n  baijimu-connector-codex checkout-project --workspace-id <id> --project-id <id> [--branch <name>]\n  baijimu-connector-codex --version"
+        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex credential-state\n  baijimu-connector-codex checkout-project --workspace-id <id> --project-id <id> [--branch <name>]\n  baijimu-connector-codex --version"
     );
 }
 

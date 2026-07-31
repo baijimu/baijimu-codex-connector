@@ -19,6 +19,7 @@ export function normalizeCredentialState(value) {
     ? input.profiles.map(normalizeProfile).filter(Boolean)
     : [];
   return {
+    currentWorkspaceId: positiveInteger(input.currentWorkspaceId),
     codexConfigured: input.codexConfigured === true,
     credentialStatus: String(input.credentialStatus || "not_configured"),
     activeProfile: normalizeProfile(input.activeProfile),
@@ -31,13 +32,10 @@ export function normalizeCredentialState(value) {
 export function normalizeProfile(value) {
   if (!value || typeof value !== "object") return null;
   const workspaceId = positiveInteger(value.workspaceId);
-  const projectId = positiveInteger(value.projectId);
-  if (!workspaceId || !projectId) return null;
+  if (!workspaceId) return null;
   return {
     workspaceId,
     workspaceName: String(value.workspaceName || `工作区 ${workspaceId}`).trim(),
-    projectId,
-    projectName: typeof value.projectName === "string" ? value.projectName.trim() : "",
     model: String(value.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
     activatedAtEpochSeconds: Math.max(0, Number(value.activatedAtEpochSeconds) || 0),
   };
@@ -58,34 +56,6 @@ export function credentialStatusMeta(status) {
     default:
       return { label: "状态未知", tone: "neutral" };
   }
-}
-
-export function preferredWorkspaceId(state, currentValue = "") {
-  const current = positiveInteger(currentValue);
-  if (current && state.workspaces.some((workspace) => workspace.workspaceId === current)) return current;
-  const active = state.activeProfile?.workspaceId || 0;
-  if (active && state.workspaces.some((workspace) => workspace.workspaceId === active)) return active;
-  return state.workspaces[0]?.workspaceId || 0;
-}
-
-export function buildSwitchPayload(input) {
-  const workspaceId = positiveInteger(input.workspaceId);
-  const projectId = positiveInteger(input.projectId);
-  if (!workspaceId) throw new Error("请选择要切换的工作区。");
-  if (!projectId) throw new Error("请输入有效的项目 ID；Codex 调用必须有明确的项目归属。");
-  const model = String(input.model || "").trim();
-  if (!model) throw new Error("模型不能为空。");
-  return {
-    workspaceId,
-    workspaceName: String(input.workspaceName || `工作区 ${workspaceId}`).trim(),
-    projectId,
-    projectName: String(input.projectName || "").trim() || null,
-    model,
-  };
-}
-
-export function projectLabel(profile) {
-  return profile.projectName || `项目 ${profile.projectId}`;
 }
 
 export function formatActivatedAt(epochSeconds) {

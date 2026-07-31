@@ -4,23 +4,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const METADATA_VERSION: u32 = 1;
 const METADATA_FILE: &str = "codex-credentials.json";
-const ROUTER_BASE_URL: &str = "https://router.baijimu.com/api/claudecode/v1";
 const DEFAULT_MODEL: &str = "gpt-5.6-sol";
 const MANAGED_BLOCK_START: &str = "# >>> baijimu managed codex router";
-const MANAGED_BLOCK_END: &str = "# <<< baijimu managed codex router";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialProfile {
     pub workspace_id: u64,
     pub workspace_name: String,
-    pub project_id: u64,
-    pub project_name: Option<String>,
     pub model: String,
     pub activated_at_epoch_seconds: u64,
 }
@@ -34,14 +29,8 @@ pub struct WorkspaceOption {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectOption {
-    pub project_id: u64,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CredentialManagerState {
+    pub current_workspace_id: Option<u64>,
     pub codex_configured: bool,
     pub credential_status: String,
     pub active_profile: Option<CredentialProfile>,
@@ -53,27 +42,6 @@ pub struct CredentialManagerState {
     pub codex_config_path: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CredentialSwitchRequest {
-    pub workspace_id: u64,
-    #[serde(default)]
-    pub workspace_name: String,
-    pub project_id: u64,
-    #[serde(default)]
-    pub project_name: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CredentialSwitchResult {
-    pub state: CredentialManagerState,
-    pub codex_restarted: bool,
-    pub restart_message: String,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CredentialMetadata {
@@ -81,7 +49,6 @@ struct CredentialMetadata {
     #[serde(default)]
     profiles: Vec<CredentialProfile>,
     active_workspace_id: Option<u64>,
-    active_project_id: Option<u64>,
 }
 
 impl Default for CredentialMetadata {
@@ -90,20 +57,21 @@ impl Default for CredentialMetadata {
             version: METADATA_VERSION,
             profiles: Vec::new(),
             active_workspace_id: None,
-            active_project_id: None,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 struct LocalMachineCredential {
-    workspace_id: u64,
+    workspace_ids: Vec<u64>,
     token: String,
+    issued_at_epoch_seconds: u64,
 }
 
 #[derive(Clone, Debug)]
 struct SharedCredentialStore {
     base_url: String,
+    current_workspace_id: Option<u64>,
     credentials: Vec<LocalMachineCredential>,
 }
 
@@ -115,9 +83,10 @@ pub fn state() -> Result<CredentialManagerState> {
         workspaces = store
             .credentials
             .iter()
-            .map(|credential| WorkspaceOption {
-                workspace_id: credential.workspace_id,
-                name: format!("工作区 {}", credential.workspace_id),
+            .flat_map(|credential| credential.workspace_ids.iter().copied())
+            .map(|workspace_id| WorkspaceOption {
+                workspace_id,
+                name: format!("工作区 {workspace_id}"),
             })
             .collect();
     }
@@ -144,28 +113,23 @@ pub fn state() -> Result<CredentialManagerState> {
     } else {
         "not_configured".to_string()
     };
-    let mut active_profile = metadata
-        .active_workspace_id
-        .zip(metadata.active_project_id)
-        .and_then(|(workspace_id, project_id)| {
-            metadata
-                .profiles
-                .iter()
-                .find(|profile| {
-                    profile.workspace_id == workspace_id && profile.project_id == project_id
-                })
-                .cloned()
-        });
+    let mut active_profile = metadata.active_workspace_id.and_then(|workspace_id| {
+        metadata
+            .profiles
+            .iter()
+            .find(|profile| profile.workspace_id == workspace_id)
+            .cloned()
+    });
 
     if let Some(key) = current_key.as_deref() {
         match validate_credential(&store.base_url, key) {
             Ok(Some(validated)) => {
                 let workspace_id = validated.get("workspaceId").and_then(Value::as_u64);
-                let project_id = validated.get("projectId").and_then(Value::as_u64);
-                if let (Some(workspace_id), Some(project_id)) = (workspace_id, project_id) {
-                    if active_profile.as_ref().is_none_or(|profile| {
-                        profile.workspace_id != workspace_id || profile.project_id != project_id
-                    }) {
+                if let Some(workspace_id) = workspace_id {
+                    if active_profile
+                        .as_ref()
+                        .is_none_or(|profile| profile.workspace_id != workspace_id)
+                    {
                         active_profile = Some(CredentialProfile {
                             workspace_id,
                             workspace_name: workspaces
@@ -173,8 +137,6 @@ pub fn state() -> Result<CredentialManagerState> {
                                 .find(|workspace| workspace.workspace_id == workspace_id)
                                 .map(|workspace| workspace.name.clone())
                                 .unwrap_or_else(|| format!("工作区 {workspace_id}")),
-                            project_id,
-                            project_name: None,
                             model: DEFAULT_MODEL.to_string(),
                             activated_at_epoch_seconds: 0,
                         });
@@ -190,6 +152,7 @@ pub fn state() -> Result<CredentialManagerState> {
     }
 
     Ok(CredentialManagerState {
+        current_workspace_id: store.current_workspace_id,
         codex_configured: current_key.is_some() && managed_config,
         credential_status,
         active_profile,
@@ -199,139 +162,6 @@ pub fn state() -> Result<CredentialManagerState> {
         shared_auth_path: shared_auth_path().display().to_string(),
         codex_auth_path: auth_path.display().to_string(),
         codex_config_path: config_path.display().to_string(),
-    })
-}
-
-pub fn list_workspace_projects(workspace_id: u64) -> Result<Vec<ProjectOption>> {
-    if workspace_id == 0 {
-        anyhow::bail!("工作区 ID 必须大于 0");
-    }
-    let store = load_shared_credential_store()?;
-    let token = select_local_machine_token(&store, workspace_id)
-        .context("本机没有可用于查询项目的百积木工作区授权，请先重新授权设备")?;
-    let response = post_baijimu_json(
-        &store.base_url,
-        "/lowcode3/api/project/summary/list",
-        token,
-        json!({"workspaceId": workspace_id, "pageNum": 1, "pageSize": 200}),
-    )?;
-    let data = unwrap_baijimu_data(&response)?;
-    let items = data
-        .get("list")
-        .or_else(|| data.get("records"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut projects = items
-        .iter()
-        .filter_map(|item| {
-            Some(ProjectOption {
-                project_id: item.get("id").and_then(Value::as_u64)?,
-                name: item
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("未命名项目")
-                    .trim()
-                    .to_string(),
-            })
-        })
-        .collect::<Vec<_>>();
-    projects.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(projects)
-}
-
-pub fn switch(request: CredentialSwitchRequest) -> Result<CredentialSwitchResult> {
-    if request.workspace_id == 0 {
-        anyhow::bail!("工作区 ID 必须大于 0");
-    }
-    if request.project_id == 0 {
-        anyhow::bail!("项目 ID 必须大于 0；模型调用会按项目归属和计量");
-    }
-    let model = normalize_model(request.model.as_deref())?;
-    let store = load_shared_credential_store()?;
-    let token = select_local_machine_token(&store, request.workspace_id)
-        .context("本机没有百积木工作区授权，无法签发 Codex LLM credential，请先重新授权设备")?;
-    let response = post_baijimu_json(
-        &store.base_url,
-        &format!(
-            "/llm-credential/partner/v1/workspaces/{}/llm-credentials/create",
-            request.workspace_id
-        ),
-        token,
-        json!({"workspaceId": request.workspace_id, "projectId": request.project_id}),
-    )?;
-    let data = unwrap_baijimu_data(&response)?;
-    let credential = ["llmCredential", "credential", "apiKey"]
-        .iter()
-        .find_map(|field| data.get(*field).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .context("平台已响应，但没有返回 LLM credential")?
-        .to_string();
-    let validated = validate_credential(&store.base_url, &credential)?
-        .context("新签发的 LLM credential 未通过平台校验，未修改 Codex 配置")?;
-    let validated_workspace_id = validated
-        .get("workspaceId")
-        .and_then(Value::as_u64)
-        .context("凭证校验结果缺少 workspaceId，未修改 Codex 配置")?;
-    let validated_project_id = validated.get("projectId").and_then(Value::as_u64);
-    if validated_workspace_id != request.workspace_id
-        || validated_project_id != Some(request.project_id)
-    {
-        anyhow::bail!(
-            "凭证归属校验不一致：期望工作区 {} / 项目 {}，实际工作区 {} / 项目 {}，未修改 Codex 配置",
-            request.workspace_id,
-            request.project_id,
-            validated_workspace_id,
-            validated_project_id
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "未绑定".to_string())
-        );
-    }
-
-    let mut metadata = load_metadata()?;
-    let profile = CredentialProfile {
-        workspace_id: request.workspace_id,
-        workspace_name: if request.workspace_name.trim().is_empty() {
-            format!("工作区 {}", request.workspace_id)
-        } else {
-            request.workspace_name.trim().to_string()
-        },
-        project_id: request.project_id,
-        project_name: request
-            .project_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        model,
-        activated_at_epoch_seconds: now_epoch_seconds(),
-    };
-    metadata.profiles.retain(|candidate| {
-        candidate.workspace_id != request.workspace_id || candidate.project_id != request.project_id
-    });
-    metadata.profiles.push(profile);
-    metadata.profiles.sort_by(|left, right| {
-        left.workspace_name
-            .cmp(&right.workspace_name)
-            .then(left.project_id.cmp(&right.project_id))
-    });
-    metadata.active_workspace_id = Some(request.workspace_id);
-    metadata.active_project_id = Some(request.project_id);
-    apply_switch(&credential, &metadata)?;
-    drop(credential);
-
-    let (codex_restarted, restart_message) = restart_codex_desktop_app();
-    let state = state().context("Codex 已切换，但重新读取状态失败")?;
-    if state.active_profile.as_ref().is_none_or(|active| {
-        active.workspace_id != request.workspace_id || active.project_id != request.project_id
-    }) {
-        anyhow::bail!("Codex 配置已写入，但生效回查与目标工作区不一致，请停止使用并重新切换");
-    }
-    Ok(CredentialSwitchResult {
-        state,
-        codex_restarted,
-        restart_message,
     })
 }
 
@@ -352,16 +182,37 @@ fn load_shared_credential_store() -> Result<SharedCredentialStore> {
         .and_then(Value::as_str)
         .unwrap_or("https://www.baijimu.com");
     let credentials = document
-        .get("machineCredentials")
+        .get("credentials")
+        .or_else(|| document.get("machineCredentials"))
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|value| {
-            let workspace_id = value.get("workspaceId").and_then(Value::as_u64)?;
+            let mut workspace_ids = value
+                .get("workspaceIds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_u64)
+                .filter(|workspace_id| *workspace_id > 0)
+                .collect::<Vec<_>>();
+            if let Some(workspace_id) = value
+                .get("workspaceId")
+                .and_then(Value::as_u64)
+                .filter(|workspace_id| *workspace_id > 0)
+            {
+                workspace_ids.push(workspace_id);
+            }
+            workspace_ids.sort_unstable();
+            workspace_ids.dedup();
             let token = value.get("token").and_then(Value::as_str)?.trim();
-            (!token.is_empty()).then(|| LocalMachineCredential {
-                workspace_id,
+            (!token.is_empty() && !workspace_ids.is_empty()).then(|| LocalMachineCredential {
+                workspace_ids,
                 token: token.to_string(),
+                issued_at_epoch_seconds: value
+                    .get("issuedAtEpochSeconds")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
             })
         })
         .collect::<Vec<_>>();
@@ -370,6 +221,7 @@ fn load_shared_credential_store() -> Result<SharedCredentialStore> {
     }
     Ok(SharedCredentialStore {
         base_url: normalize_baijimu_root_url(configured_base_url),
+        current_workspace_id: document.get("currentWorkspaceId").and_then(Value::as_u64),
         credentials,
     })
 }
@@ -378,13 +230,122 @@ fn select_local_machine_token(store: &SharedCredentialStore, workspace_id: u64) 
     store
         .credentials
         .iter()
-        .find(|credential| credential.workspace_id == workspace_id)
-        .or_else(|| store.credentials.first())
+        .filter(|credential| credential.workspace_ids.contains(&workspace_id))
+        .max_by_key(|credential| credential.issued_at_epoch_seconds)
         .map(|credential| credential.token.as_str())
 }
 
+pub fn issue_workspace_credential(workspace_id: u64) -> Result<String> {
+    if workspace_id == 0 {
+        anyhow::bail!("工作区 ID 必须大于 0");
+    }
+    let store = load_shared_credential_store()?;
+    if store
+        .current_workspace_id
+        .is_some_and(|current| current != workspace_id)
+    {
+        anyhow::bail!(
+            "客户端当前工作区与本机授权不一致：客户端为 {workspace_id}，本机授权当前工作区为 {}",
+            store.current_workspace_id.unwrap_or_default()
+        );
+    }
+    let token = select_local_machine_token(&store, workspace_id)
+        .context("本机授权不包含客户端当前工作区，无法签发 Codex LLM credential")?;
+    let response = post_baijimu_json(
+        &store.base_url,
+        &format!("/llm-credential/partner/v1/workspaces/{workspace_id}/llm-credentials/create"),
+        token,
+        json!({"workspaceId": workspace_id, "projectId": null}),
+    )?;
+    let data = unwrap_baijimu_data(&response)?;
+    let credential = ["llmCredential", "credential", "apiKey"]
+        .iter()
+        .find_map(|field| data.get(*field).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("平台已响应，但没有返回 LLM credential")?
+        .to_string();
+    let validated = validate_credential(&store.base_url, &credential)?
+        .context("新签发的 LLM credential 未通过平台校验")?;
+    let validated_workspace_id = validated
+        .get("workspaceId")
+        .and_then(Value::as_u64)
+        .context("凭证校验结果缺少 workspaceId")?;
+    if validated_workspace_id != workspace_id {
+        anyhow::bail!(
+            "凭证归属校验不一致：期望工作区 {workspace_id}，实际工作区 {validated_workspace_id}"
+        );
+    }
+    if validated
+        .get("projectId")
+        .is_some_and(|value| !value.is_null())
+    {
+        anyhow::bail!("平台返回了项目级凭证，连接器要求工作区级凭证");
+    }
+    Ok(credential)
+}
+
+pub fn current_workspace_id() -> Result<u64> {
+    let store = load_shared_credential_store()?;
+    if let Some(workspace_id) = store.current_workspace_id.filter(|value| *value > 0) {
+        return Ok(workspace_id);
+    }
+    let mut workspace_ids = store
+        .credentials
+        .iter()
+        .flat_map(|credential| credential.workspace_ids.iter().copied())
+        .collect::<Vec<_>>();
+    workspace_ids.sort_unstable();
+    workspace_ids.dedup();
+    match workspace_ids.as_slice() {
+        [workspace_id] => Ok(*workspace_id),
+        [] => anyhow::bail!("本机授权不包含工作区"),
+        _ => anyhow::bail!("本机授权包含多个工作区，但没有设置当前工作区"),
+    }
+}
+
+pub fn record_workspace_setup(workspace_id: u64) -> Result<()> {
+    let store = load_shared_credential_store()?;
+    let (workspaces, _) = discover_workspaces(&store);
+    let workspace_name = workspaces
+        .into_iter()
+        .find(|workspace| workspace.workspace_id == workspace_id)
+        .map(|workspace| workspace.name)
+        .unwrap_or_else(|| format!("工作区 {workspace_id}"));
+    let mut metadata = load_metadata()?;
+    metadata
+        .profiles
+        .retain(|profile| profile.workspace_id != workspace_id);
+    metadata.profiles.push(CredentialProfile {
+        workspace_id,
+        workspace_name,
+        model: DEFAULT_MODEL.to_string(),
+        activated_at_epoch_seconds: now_epoch_seconds(),
+    });
+    metadata
+        .profiles
+        .sort_by(|left, right| left.workspace_name.cmp(&right.workspace_name));
+    metadata.active_workspace_id = Some(workspace_id);
+    atomic_write_private(&metadata_path(), &serde_json::to_vec_pretty(&metadata)?)?;
+    verify_private_file(&metadata_path())
+}
+
+pub fn codex_ready_for_workspace(workspace_id: u64) -> bool {
+    state().is_ok_and(|state| {
+        state.codex_configured
+            && state.credential_status == "verified"
+            && state
+                .active_profile
+                .is_some_and(|profile| profile.workspace_id == workspace_id)
+    })
+}
+
 fn discover_workspaces(store: &SharedCredentialStore) -> (Vec<WorkspaceOption>, Option<String>) {
-    let Some(token) = store.credentials.first().map(|item| item.token.as_str()) else {
+    let token = store
+        .current_workspace_id
+        .and_then(|workspace_id| select_local_machine_token(store, workspace_id))
+        .or_else(|| store.credentials.first().map(|item| item.token.as_str()));
+    let Some(token) = token else {
         return (Vec::new(), Some("本机没有工作区授权".to_string()));
     };
     let result = post_baijimu_json(
@@ -498,20 +459,6 @@ fn compact_body(value: &str) -> String {
     compact.chars().take(400).collect()
 }
 
-fn normalize_model(model: Option<&str>) -> Result<String> {
-    let model = model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_MODEL);
-    if model
-        .chars()
-        .any(|character| !(character.is_ascii_alphanumeric() || "._-".contains(character)))
-    {
-        anyhow::bail!("模型名称只能包含字母、数字、点、下划线和短横线");
-    }
-    Ok(model.to_string())
-}
-
 fn load_metadata() -> Result<CredentialMetadata> {
     let path = metadata_path();
     if !path.exists() {
@@ -555,221 +502,13 @@ fn read_codex_api_key(path: &Path) -> Result<Option<String>> {
         .map(ToOwned::to_owned))
 }
 
-fn apply_switch(credential: &str, metadata: &CredentialMetadata) -> Result<()> {
-    let auth_path = codex_auth_path();
-    let config_path = codex_config_path();
-    let metadata_path = metadata_path();
-    let old_auth = fs::read(&auth_path).ok();
-    let old_config = fs::read(&config_path).ok();
-    let old_metadata = fs::read(&metadata_path).ok();
-    let mut auth_document = old_auth
-        .as_deref()
-        .and_then(|content| serde_json::from_slice::<Value>(content).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}));
-    auth_document["OPENAI_API_KEY"] = Value::String(credential.to_string());
-    auth_document["auth_mode"] = Value::String("apikey".to_string());
-    let active_profile = metadata
-        .active_workspace_id
-        .zip(metadata.active_project_id)
-        .and_then(|(workspace_id, project_id)| {
-            metadata.profiles.iter().find(|profile| {
-                profile.workspace_id == workspace_id && profile.project_id == project_id
-            })
-        })
-        .context("Codex 凭证元数据缺少当前配置")?;
-    let existing_config = old_config
-        .as_deref()
-        .map(String::from_utf8_lossy)
-        .unwrap_or_default();
-    let config_content = render_managed_config(&existing_config, &active_profile.model);
-    toml::from_str::<toml::Value>(&config_content)
-        .context("生成的 Codex config.toml 无法通过 TOML 校验")?;
-    let result = (|| -> Result<()> {
-        atomic_write_private(&auth_path, &serde_json::to_vec_pretty(&auth_document)?)?;
-        atomic_write_private(&config_path, config_content.as_bytes())?;
-        atomic_write_private(&metadata_path, &serde_json::to_vec_pretty(metadata)?)?;
-        verify_private_file(&auth_path)?;
-        verify_private_file(&config_path)?;
-        verify_private_file(&metadata_path)?;
-        if read_codex_api_key(&auth_path)?.as_deref() != Some(credential) {
-            anyhow::bail!("Codex 认证文件写入后回读不一致");
-        }
-        Ok(())
-    })();
-    if let Err(error) = result {
-        restore_optional_file(&auth_path, old_auth.as_deref());
-        restore_optional_file(&config_path, old_config.as_deref());
-        restore_optional_file(&metadata_path, old_metadata.as_deref());
-        return Err(error.context("切换失败，已恢复切换前的 Codex 配置"));
-    }
-    Ok(())
-}
-
-fn render_managed_config(existing: &str, model: &str) -> String {
-    let mut preserved = Vec::new();
-    let mut in_managed_block = false;
-    let mut in_router_table = false;
-    let mut seen_table = false;
-    for line in existing.lines() {
-        let trimmed = line.trim();
-        if trimmed == MANAGED_BLOCK_START {
-            in_managed_block = true;
-            continue;
-        }
-        if in_managed_block {
-            if trimmed == MANAGED_BLOCK_END {
-                in_managed_block = false;
-            }
-            continue;
-        }
-        if trimmed == "[model_providers.baijimu-router]" {
-            in_router_table = true;
-            seen_table = true;
-            continue;
-        }
-        if in_router_table {
-            if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                in_router_table = false;
-                preserved.push(line.to_string());
-            }
-            continue;
-        }
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            seen_table = true;
-        }
-        let managed_root_key = !seen_table
-            && [
-                "model_provider",
-                "model",
-                "sandbox_mode",
-                "approval_policy",
-                "cli_auth_credentials_store",
-                "forced_login_method",
-            ]
-            .iter()
-            .any(|key| {
-                trimmed
-                    .strip_prefix(key)
-                    .is_some_and(|rest| rest.trim_start().starts_with('='))
-            });
-        if !managed_root_key {
-            preserved.push(line.to_string());
-        }
-    }
-    while preserved.first().is_some_and(|line| line.trim().is_empty()) {
-        preserved.remove(0);
-    }
-    while preserved.last().is_some_and(|line| line.trim().is_empty()) {
-        preserved.pop();
-    }
-    let first_table = preserved
-        .iter()
-        .position(|line| {
-            let trimmed = line.trim();
-            trimmed.starts_with('[') && trimmed.ends_with(']')
-        })
-        .unwrap_or(preserved.len());
-    let (root, tables) = preserved.split_at(first_table);
-    let escaped_model = model.replace('\\', "\\\\").replace('"', "\\\"");
-    let mut output = format!(
-        "{MANAGED_BLOCK_START}\n\
-model_provider = \"baijimu-router\"\n\
-model = \"{escaped_model}\"\n\
-sandbox_mode = \"danger-full-access\"\n\
-approval_policy = \"on-request\"\n\
-cli_auth_credentials_store = \"file\"\n\
-forced_login_method = \"api\"\n\
-{MANAGED_BLOCK_END}\n"
-    );
-    if !root.is_empty() {
-        output.push('\n');
-        output.push_str(&root.join("\n"));
-        output.push('\n');
-    }
-    output.push_str(&format!(
-        "\n[model_providers.baijimu-router]\n\
-name = \"baijimu-router\"\n\
-base_url = \"{ROUTER_BASE_URL}\"\n\
-wire_api = \"responses\"\n\
-requires_openai_auth = true\n"
-    ));
-    if !tables.is_empty() {
-        output.push('\n');
-        output.push_str(&tables.join("\n"));
-        output.push('\n');
-    }
-    output
-}
-
-fn restart_codex_desktop_app() -> (bool, String) {
-    #[cfg(target_os = "macos")]
-    {
-        let app_path = ["/Applications/Codex.app", "/Applications/ChatGPT.app"]
-            .iter()
-            .map(PathBuf::from)
-            .find(|path| path.exists());
-        let Some(app_path) = app_path else {
-            return (
-                false,
-                "未找到 Codex/ChatGPT 桌面应用；终端配置已经生效".to_string(),
-            );
-        };
-        let _ = Command::new("pkill")
-            .args(["-f", &format!("{}/Contents", app_path.display())])
-            .status();
-        std::thread::sleep(Duration::from_millis(900));
-        match Command::new("open").arg(&app_path).status() {
-            Ok(status) if status.success() => (true, "Codex 已按新工作区重新启动".to_string()),
-            Ok(status) => (
-                false,
-                format!("Codex 配置已切换，但重新启动返回状态 {status}"),
-            ),
-            Err(error) => (
-                false,
-                format!("Codex 配置已切换，但自动重新启动失败: {error}"),
-            ),
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"Get-Process Codex,ChatGPT -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 900; $app = Get-StartApps | Where-Object { $_.Name -match 'Codex|ChatGPT' } | Select-Object -First 1; if (-not $app) { exit 3 }; Start-Process (\"shell:AppsFolder\\\" + $app.AppID)"#;
-        return match Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ])
-            .status()
-        {
-            Ok(status) if status.success() => (true, "Codex 已按新工作区重新启动".to_string()),
-            Ok(status) => (
-                false,
-                format!("Codex 配置已切换，但没有找到可重新启动的 Codex 应用（{status}）"),
-            ),
-            Err(error) => (
-                false,
-                format!("Codex 配置已切换，但自动重新启动失败: {error}"),
-            ),
-        };
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        (
-            false,
-            "Codex 终端配置已切换；当前系统不支持自动重启桌面应用".to_string(),
-        )
-    }
-}
-
 fn normalize_baijimu_root_url(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
-    trimmed
-        .strip_suffix("/lowcode3")
-        .unwrap_or(trimmed)
-        .to_string()
+    let root = trimmed.strip_suffix("/lowcode3").unwrap_or(trimmed);
+    match root {
+        "https://www.baijimu.com" | "https://baijimu.com" => "https://api.baijimu.com".to_string(),
+        _ => root.to_string(),
+    }
 }
 
 fn shared_auth_path() -> PathBuf {
@@ -867,17 +606,6 @@ fn verify_private_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn restore_optional_file(path: &Path, content: Option<&[u8]>) {
-    match content {
-        Some(content) => {
-            let _ = atomic_write_private(path, content);
-        }
-        None => {
-            let _ = fs::remove_file(path);
-        }
-    }
-}
-
 fn set_private_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -900,6 +628,8 @@ fn set_private_file(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+
+    static ENVIRONMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     struct EnvironmentRestore {
         key: &'static str,
@@ -924,24 +654,8 @@ mod tests {
     }
 
     #[test]
-    fn managed_config_is_idempotent_and_preserves_other_tables() {
-        let existing = "model = \"old\"\n[projects.\"/tmp/demo\"]\ntrust_level = \"trusted\"\n";
-        let first = render_managed_config(existing, DEFAULT_MODEL);
-        let second = render_managed_config(&first, DEFAULT_MODEL);
-        assert_eq!(first, second);
-        assert_eq!(second.matches(MANAGED_BLOCK_START).count(), 1);
-        assert!(second.contains("[projects.\"/tmp/demo\"]"));
-        assert!(toml::from_str::<toml::Value>(&second).is_ok());
-    }
-
-    #[test]
-    fn model_name_rejects_toml_injection() {
-        assert!(normalize_model(Some("gpt-5.6-sol")).is_ok());
-        assert!(normalize_model(Some("bad\"\nmodel = \"other")).is_err());
-    }
-
-    #[test]
     fn legacy_metadata_is_migrated_into_connector_data_directory() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "baijimu-codex-metadata-test-{}-{}",
             std::process::id(),
@@ -960,13 +674,10 @@ mod tests {
                 profiles: vec![CredentialProfile {
                     workspace_id: 12,
                     workspace_name: "测试工作区".to_string(),
-                    project_id: 34,
-                    project_name: Some("测试项目".to_string()),
                     model: DEFAULT_MODEL.to_string(),
                     activated_at_epoch_seconds: 56,
                 }],
                 active_workspace_id: Some(12),
-                active_project_id: Some(34),
             })
             .unwrap(),
         )
@@ -974,11 +685,66 @@ mod tests {
 
         let metadata = load_metadata().unwrap();
         assert_eq!(metadata.active_workspace_id, Some(12));
-        assert_eq!(metadata.active_project_id, Some(34));
         assert!(metadata_path().exists());
         assert!(!legacy_path.exists());
         verify_private_file(&metadata_path()).unwrap();
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unified_auth_store_selects_only_the_requested_workspace() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-auth-test-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let config_home = root.join("config");
+        fs::create_dir_all(config_home.join("baijimu")).unwrap();
+        let _config = EnvironmentRestore::set("BAIJIMU_CONFIG_HOME", &config_home);
+        fs::write(
+            shared_auth_path(),
+            serde_json::to_vec_pretty(&json!({
+                "schemaVersion": 2,
+                "currentEnvironment": "prod",
+                "currentWorkspaceId": 1390,
+                "environments": {"prod": {"baseUrl": "https://api.baijimu.com"}},
+                "credentials": [
+                    {"workspaceIds": [1200], "token": "lc_pat_wrong", "issuedAtEpochSeconds": 20},
+                    {"workspaceIds": [1390, 1400], "token": "lc_pat_old", "issuedAtEpochSeconds": 10},
+                    {"workspaceIds": [1390], "token": "lc_pat_current", "issuedAtEpochSeconds": 30}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let store = load_shared_credential_store().unwrap();
+        assert_eq!(store.current_workspace_id, Some(1390));
+        assert_eq!(current_workspace_id().unwrap(), 1390);
+        assert_eq!(
+            select_local_machine_token(&store, 1390),
+            Some("lc_pat_current")
+        );
+        assert_eq!(
+            select_local_machine_token(&store, 1200),
+            Some("lc_pat_wrong")
+        );
+        assert_eq!(select_local_machine_token(&store, 9999), None);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn production_website_auth_endpoint_maps_to_api_origin() {
+        assert_eq!(
+            normalize_baijimu_root_url("https://www.baijimu.com/lowcode3/"),
+            "https://api.baijimu.com"
+        );
+        assert_eq!(
+            normalize_baijimu_root_url("https://api.baijimu.com/lowcode3"),
+            "https://api.baijimu.com"
+        );
     }
 }
