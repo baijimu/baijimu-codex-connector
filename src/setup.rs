@@ -78,11 +78,10 @@ impl SetupManager {
             .state
             .lock()
             .map(|value| value.clone())
-            .unwrap_or_else(|_| {
-                let mut status = SetupStatus::default();
-                status.status = "failed".to_string();
-                status.error = Some("初始化状态锁异常".to_string());
-                status
+            .unwrap_or_else(|_| SetupStatus {
+                status: "failed".to_string(),
+                error: Some("初始化状态锁异常".to_string()),
+                ..SetupStatus::default()
             });
         status.installer_status = read_json(installer_state_dir().join("status.json"));
         status
@@ -168,19 +167,13 @@ impl SetupManager {
 }
 
 fn run_install(workspace_id: u64) -> Result<()> {
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows");
-
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
     set_private_directory(&setup_dir)?;
     let unique = format!("{}-{}", std::process::id(), now_epoch_seconds());
     let secret_path = setup_dir.join(format!("credential-{unique}"));
-    #[cfg(target_os = "macos")]
-    let script_path = setup_dir.join(format!("install-{unique}.sh"));
-    #[cfg(target_os = "windows")]
-    let script_path = setup_dir.join(format!("install-{unique}.ps1"));
+    let script_path = install_script_path(&setup_dir, &unique)?;
 
     let result = (|| -> Result<()> {
         let credential = credential::issue_workspace_credential(workspace_id)?;
@@ -243,6 +236,22 @@ fn run_install(workspace_id: u64) -> Result<()> {
     result
 }
 
+fn install_script_path(setup_dir: &Path, unique: &str) -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(setup_dir.join(format!("install-{unique}.sh")))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Ok(setup_dir.join(format!("install-{unique}.ps1")))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (setup_dir, unique);
+        anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
+    }
+}
+
 fn download_script(url: &str, path: &Path) -> Result<()> {
     let response = Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -266,26 +275,35 @@ fn install_command(script_path: &Path) -> Result<Command> {
     {
         let mut command = Command::new("/bin/bash");
         command.arg(script_path);
-        return Ok(command);
+        Ok(command)
     }
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new("powershell.exe");
         command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
         command.arg(script_path);
-        return Ok(command);
+        Ok(command)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    anyhow::bail!("unsupported platform")
+    {
+        let _ = script_path;
+        anyhow::bail!("unsupported platform")
+    }
 }
 
 fn default_script_url() -> String {
     #[cfg(target_os = "macos")]
-    return MACOS_SCRIPT_URL.to_string();
+    {
+        MACOS_SCRIPT_URL.to_string()
+    }
     #[cfg(target_os = "windows")]
-    return WINDOWS_SCRIPT_URL.to_string();
+    {
+        WINDOWS_SCRIPT_URL.to_string()
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    String::new()
+    {
+        String::new()
+    }
 }
 
 fn connector_home() -> PathBuf {
