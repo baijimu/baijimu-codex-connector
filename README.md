@@ -6,7 +6,7 @@ It is installed and supervised by `bridge-agent`. Bridge Agent passes only the c
 
 ## Requirements
 
-- Baijimu Local / `bridge-agent` 1.1 setup-lifecycle support.
+- Baijimu Local / `bridge-agent` 0.2.21 or newer with the `connector.setup.v1` host capability.
 - A Baijimu workspace already authorized in the client.
 
 The official market package ships a Rust/native `baijimu-connector-codex`

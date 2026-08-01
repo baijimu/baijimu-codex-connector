@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Install and configure Codex on this computer, then manage local Codex sessions through the currently authorized Baijimu workspace.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "gitee",
     "repo": "zxflimit_admin/baijimu-connector-codex",
-    "revision": "v1.1.0"
+    "revision": "v1.1.1"
   },
   "runtime": {
     "type": "process",
@@ -91,6 +91,12 @@
     "operation": "setupRetry",
     "statusOperation": "setupState",
     "timeoutSecs": 1800
+  },
+  "hostRequirements": {
+    "minimumVersion": "0.2.21",
+    "capabilities": [
+      "connector.setup.v1"
+    ]
   },
   "ui": {
     "type": "embedded",
