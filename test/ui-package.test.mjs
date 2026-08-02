@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 test("connector manifest declares the packaged embedded UI", async () => {
   const manifest = JSON.parse(await readFile(join(root, "connector.json"), "utf8"));
   assert.equal(manifest.schemaVersion, "2.0");
-  assert.equal(manifest.version, "1.2.1");
+  assert.equal(manifest.version, "1.2.2");
   assert.equal(manifest.transport.type, "http");
   assert.ok(manifest.methods.some((method) => method.name === "status"));
   assert.ok(manifest.events.some((event) => event.name === "codexNotification"));
