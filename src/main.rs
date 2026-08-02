@@ -682,11 +682,6 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         json!({"ok": true, "url": format!("http://{}:{}", options.host, options.port), "pid": std::process::id()})
     );
     let setup = setup::SetupManager::load();
-    if !credential::has_any_workspace_profile() {
-        if let Ok(workspace_id) = credential::current_workspace_id() {
-            let _ = setup.start(workspace_id);
-        }
-    }
     let state = Arc::new(AppState {
         client: Mutex::new(CodexClient::new(options, EventPublisher::from_env())),
         credential_management: Mutex::new(()),
@@ -816,7 +811,7 @@ fn handle_management(
                 state
                     .setup
                     .start(workspace_id)
-                    .map_err(|error| HttpError::internal(error.to_string()))?,
+                    .map_err(|error| HttpError::new(409, error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
