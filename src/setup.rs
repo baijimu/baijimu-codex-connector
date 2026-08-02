@@ -174,11 +174,16 @@ fn run_install(workspace_id: u64) -> Result<()> {
     let unique = format!("{}-{}", std::process::id(), now_epoch_seconds());
     let secret_path = setup_dir.join(format!("credential-{unique}"));
     let script_path = install_script_path(&setup_dir, &unique)?;
+    let personal_home = credential::personal_codex_home();
+    let personal_snapshots = [
+        FileSnapshot::capture(personal_home.join("auth.json"))?,
+        FileSnapshot::capture(personal_home.join("config.toml"))?,
+    ];
 
-    let result = (|| -> Result<()> {
-        let credential = credential::issue_workspace_credential(workspace_id)?;
-        atomic_write_private(&secret_path, credential.as_bytes())?;
-        drop(credential);
+    let install_result = (|| -> Result<()> {
+        let prepared = credential::prepare_workspace_profile(workspace_id)?;
+        atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
+        drop(prepared);
 
         let script_url = env::var("CODEX_CONNECTOR_INSTALL_SCRIPT_URL")
             .ok()
@@ -225,15 +230,47 @@ fn run_install(workspace_id: u64) -> Result<()> {
                 .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).to_string());
             anyhow::bail!("官方安装脚本执行失败: {}", compact_error(&errors));
         }
-        credential::record_workspace_setup(workspace_id)?;
-        if !credential::codex_ready_for_workspace(workspace_id) {
-            anyhow::bail!("安装脚本执行成功，但 Codex 凭证归属回查失败");
-        }
         Ok(())
     })();
+    let restore_result = personal_snapshots
+        .iter()
+        .try_for_each(FileSnapshot::restore)
+        .context("恢复个人 ChatGPT 登录与配置失败");
     let _ = fs::remove_file(&secret_path);
     let _ = fs::remove_file(&script_path);
-    result
+    restore_result?;
+    install_result?;
+
+    credential::record_workspace_setup(workspace_id)?;
+    if !credential::codex_ready_for_workspace(workspace_id) {
+        anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
+    }
+    Ok(())
+}
+
+struct FileSnapshot {
+    path: PathBuf,
+    content: Option<Vec<u8>>,
+}
+
+impl FileSnapshot {
+    fn capture(path: PathBuf) -> Result<Self> {
+        let content = if path.exists() {
+            Some(fs::read(&path).with_context(|| format!("备份文件失败: {}", path.display()))?)
+        } else {
+            None
+        };
+        Ok(Self { path, content })
+    }
+
+    fn restore(&self) -> Result<()> {
+        match self.content.as_deref() {
+            Some(content) => atomic_write_private(&self.path, content),
+            None if self.path.exists() => fs::remove_file(&self.path)
+                .with_context(|| format!("清理安装脚本生成的文件失败: {}", self.path.display())),
+            None => Ok(()),
+        }
+    }
 }
 
 fn install_script_path(setup_dir: &Path, unique: &str) -> Result<PathBuf> {
@@ -398,5 +435,29 @@ mod tests {
         assert_eq!(value.get("ok").and_then(Value::as_bool), Some(true));
         assert!(value.get("projectId").is_some_and(Value::is_null));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_restores_existing_files_and_removes_new_files() {
+        let root = env::temp_dir().join(format!(
+            "codex-setup-snapshot-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let existing_path = root.join("auth.json");
+        let new_path = root.join("config.toml");
+        fs::write(&existing_path, b"personal-auth").unwrap();
+        let existing = FileSnapshot::capture(existing_path.clone()).unwrap();
+        let absent = FileSnapshot::capture(new_path.clone()).unwrap();
+
+        fs::write(&existing_path, b"installer-auth").unwrap();
+        fs::write(&new_path, b"installer-config").unwrap();
+        existing.restore().unwrap();
+        absent.restore().unwrap();
+
+        assert_eq!(fs::read(existing_path).unwrap(), b"personal-auth");
+        assert!(!new_path.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

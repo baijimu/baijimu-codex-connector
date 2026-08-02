@@ -52,6 +52,7 @@ struct ConnectorEvent {
 
 struct CodexClient {
     options: ServerOptions,
+    active_codex_home: PathBuf,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     stdout: Option<BufReader<std::process::ChildStdout>>,
@@ -90,6 +91,7 @@ impl CodexClient {
     fn new(options: ServerOptions, event_publisher: Option<EventPublisher>) -> Self {
         Self {
             options,
+            active_codex_home: credential::active_codex_home(),
             child: None,
             stdin: None,
             stdout: None,
@@ -138,6 +140,7 @@ impl CodexClient {
                 "listen": self.options.listen,
                 "startedAt": self.started_at,
                 "lastExit": self.last_exit,
+                "codexHome": self.active_codex_home,
             },
             "events": {
                 "latestSequence": self.event_sequence,
@@ -147,6 +150,7 @@ impl CodexClient {
     }
 
     fn ensure_started(&mut self) -> Result<(), HttpError> {
+        self.refresh_active_home();
         let running = self
             .child
             .as_mut()
@@ -158,6 +162,19 @@ impl CodexClient {
             self.initialize()?;
         }
         Ok(())
+    }
+
+    fn refresh_active_home(&mut self) {
+        let desired_home = credential::active_codex_home();
+        if desired_home != self.active_codex_home {
+            self.shutdown();
+            self.active_codex_home = desired_home;
+        }
+    }
+
+    fn switch_to_active_profile(&mut self) {
+        self.shutdown();
+        self.active_codex_home = credential::active_codex_home();
     }
 
     fn start_process(&mut self) -> Result<(), HttpError> {
@@ -172,6 +189,7 @@ impl CodexClient {
         };
         let mut child = Command::new(&self.options.codex_binary)
             .args(args)
+            .env("CODEX_HOME", &self.active_codex_home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -382,6 +400,10 @@ impl CodexClient {
             let _ = child.kill();
             let _ = child.wait();
         }
+        self.stdin = None;
+        self.stdout = None;
+        self.initialized = false;
+        self.started_at = None;
     }
 }
 
@@ -660,8 +682,10 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         json!({"ok": true, "url": format!("http://{}:{}", options.host, options.port), "pid": std::process::id()})
     );
     let setup = setup::SetupManager::load();
-    if let Ok(workspace_id) = credential::current_workspace_id() {
-        let _ = setup.start(workspace_id);
+    if !credential::has_any_workspace_profile() {
+        if let Ok(workspace_id) = credential::current_workspace_id() {
+            let _ = setup.start(workspace_id);
+        }
     }
     let state = Arc::new(AppState {
         client: Mutex::new(CodexClient::new(options, EventPublisher::from_env())),
@@ -779,6 +803,10 @@ fn handle_management(
         ("GET", "/management/v1/setup/state") => serde_json::to_value(state.setup.state())
             .map_err(|error| HttpError::internal(error.to_string())),
         ("POST", "/management/v1/setup/retry") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
             let workspace_id = body
                 .get("workspaceId")
                 .and_then(Value::as_u64)
@@ -797,6 +825,47 @@ fn handle_management(
                 .credential_management
                 .lock()
                 .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+            serde_json::to_value(
+                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
+        }
+        ("POST", "/management/v1/auth/switch") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+            if state.setup.state().status == "running" {
+                return Err(HttpError::new(
+                    409,
+                    "Codex 正在安装配置，完成后再切换授权档案",
+                ));
+            }
+            let mode = body
+                .get("mode")
+                .and_then(Value::as_str)
+                .ok_or_else(|| HttpError::new(400, "mode is required"))?;
+            match mode {
+                "chatgpt" => {
+                    credential::activate_chatgpt_profile()
+                        .map_err(|error| HttpError::new(409, error.to_string()))?;
+                }
+                "baijimu" => {
+                    let workspace_id = body
+                        .get("workspaceId")
+                        .and_then(Value::as_u64)
+                        .filter(|value| *value > 0)
+                        .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?;
+                    credential::activate_workspace_profile(workspace_id)
+                        .map_err(|error| HttpError::new(409, error.to_string()))?;
+                }
+                _ => return Err(HttpError::new(400, "mode must be chatgpt or baijimu")),
+            }
+            let mut client = state
+                .client
+                .lock()
+                .map_err(|_| HttpError::internal("client lock poisoned"))?;
+            client.switch_to_active_profile();
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )
@@ -1077,7 +1146,8 @@ fn list_thread_turns(body: &Value, client: &mut CodexClient) -> Result<Value, Ht
 }
 
 fn list_projects(body: &Value, client: &mut CodexClient) -> Result<Value, HttpError> {
-    let home = codex_home();
+    client.refresh_active_home();
+    let home = client.active_codex_home.clone();
     let global_state = read_json_file(&home.join(".codex-global-state.json"));
     let configured = parse_codex_project_config(&home.join("config.toml"));
     let mut projects = Map::new();
@@ -1892,12 +1962,6 @@ fn load_or_create_management_token() -> Result<String, String> {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
         .map_err(|error| error.to_string())?;
     Ok(token)
-}
-
-fn codex_home() -> PathBuf {
-    env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".codex"))
 }
 
 fn pid_path() -> PathBuf {

@@ -15,7 +15,7 @@
         <div class="hero-copy">
           <p class="eyebrow">Codex Local App</p>
           <h1>Codex 远程开发</h1>
-          <p>Codex 会自动安装到这台电脑，并使用百积木客户端当前已授权的工作区。</p>
+          <p>在个人 ChatGPT 登录与各个百积木工作区账号之间安全切换，开发会话按授权档案隔离。</p>
         </div>
         <button id="refresh-button" class="button secondary" type="button">刷新</button>
       </header>
@@ -99,21 +99,32 @@
             <span id="credential-badge" class="status-badge neutral">读取中</span>
           </div>
           <dl class="status-grid">
-            <div><dt>工作区</dt><dd id="active-workspace">—</dd></div>
+            <div><dt>授权模式</dt><dd id="auth-mode">—</dd></div>
+            <div><dt>当前身份</dt><dd id="active-workspace">—</dd></div>
             <div><dt>模型</dt><dd id="active-model">—</dd></div>
             <div><dt>Codex 配置</dt><dd id="codex-configured">—</dd></div>
             <div><dt>安装状态</dt><dd id="setup-status">—</dd></div>
           </dl>
         </section>
 
+        <section class="panel" aria-labelledby="profiles-title">
+          <div class="section-heading">
+            <div><p class="eyebrow">授权档案</p><h2 id="profiles-title">切换账号与工作区</h2></div>
+            <p class="section-note">个人登录使用默认 Codex 目录；百积木工作区分别保存凭证、配置与会话。</p>
+          </div>
+          <div id="auth-profile-list" class="profile-list">
+            <div class="empty-state">正在读取授权档案…</div>
+          </div>
+        </section>
+
         <section class="panel" aria-labelledby="setup-title">
           <div class="section-heading">
             <div><p class="eyebrow">自动配置</p><h2 id="setup-title">本机 Codex</h2></div>
-            <p class="section-note">设备和工作区均来自当前客户端授权，无需再次选择。</p>
+            <p class="section-note">用于首次安装或修复当前客户端默认工作区；安装过程不会覆盖个人 ChatGPT 登录。</p>
           </div>
           <p id="setup-message" class="section-note">正在读取安装状态…</p>
           <div class="form-actions">
-            <p>连接器会下载安装官方 Codex 客户端和命令行、写入模型凭证，并完成实际调用验证。</p>
+            <p>连接器会下载安装官方 Codex 客户端和命令行，把模型凭证写入独立工作区档案，并完成归属验证。</p>
             <button id="setup-retry-button" class="button primary" type="button">重试安装配置</button>
           </div>
         </section>

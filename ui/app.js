@@ -11,6 +11,7 @@ import {
 const elementIds = [
   "refresh-button", "message", "error", "warning", "sessions-view", "account-view",
   "credential-badge", "active-workspace", "active-model", "codex-configured",
+  "auth-mode", "auth-profile-list",
   "setup-status", "setup-message", "setup-retry-button",
   "new-session-button", "session-project-filter", "session-list", "load-more-sessions",
   "session-path", "session-title", "session-status", "conversation", "prompt-form",
@@ -75,6 +76,62 @@ function switchView(view) {
 function setAccountBusy(value) {
   elements["setup-retry-button"].disabled = value;
   elements["setup-retry-button"].textContent = value ? "正在安装配置…" : "重试安装配置";
+  document.querySelectorAll(".auth-switch").forEach((button) => {
+    button.disabled = value || button.dataset.profileDisabled === "true";
+  });
+}
+
+function profileRow({ title, detail, meta, active, disabled, onSwitch }) {
+  const row = document.createElement("div");
+  row.className = `profile-row${active ? " active" : ""}`;
+  const copy = document.createElement("div");
+  copy.className = "profile-copy";
+  const strong = document.createElement("strong");
+  strong.textContent = title;
+  const span = document.createElement("span");
+  span.textContent = detail;
+  const small = document.createElement("small");
+  small.textContent = meta;
+  copy.append(strong, span, small);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `button ${active ? "secondary" : "primary"} compact auth-switch`;
+  button.textContent = active ? "当前使用" : "切换";
+  button.dataset.profileDisabled = String(active || disabled);
+  button.disabled = active || disabled;
+  button.addEventListener("click", onSwitch);
+  row.append(copy, button);
+  return row;
+}
+
+function renderAuthProfiles() {
+  const state = credentialState;
+  const list = elements["auth-profile-list"];
+  list.replaceChildren();
+  const chatgptActive = state?.activeMode === "chatgpt";
+  list.append(profileRow({
+    title: "个人 ChatGPT 账号",
+    detail: state?.chatgpt?.accountId ? `账号 ${state.chatgpt.accountId}` : "默认 Codex 登录",
+    meta: state?.chatgpt?.configured ? "已登录；使用个人配置和会话" : "尚未登录，请先执行 codex login",
+    active: chatgptActive,
+    disabled: !state?.chatgpt?.configured,
+    onSwitch: () => void switchAuthProfile({ mode: "chatgpt" }),
+  }));
+  state?.workspaces.forEach((workspace) => {
+    const profile = state.profiles.find((item) => item.workspaceId === workspace.workspaceId);
+    const active = state.activeMode === "baijimu" && state.activeWorkspaceId === workspace.workspaceId;
+    const users = workspace.userIds.length ? `用户 ${workspace.userIds.join("、")} · ` : "";
+    list.append(profileRow({
+      title: `${workspace.name}（${workspace.workspaceId}）`,
+      detail: `${users}${profile?.environment || "prod"} 环境`,
+      meta: workspace.authorized
+        ? (profile ? "凭证已保存；切换后使用独立配置和会话" : "已授权；首次切换时创建工作区凭证档案")
+        : "当前百积木账号未授权这个工作区",
+      active,
+      disabled: !workspace.authorized,
+      onSwitch: () => void switchAuthProfile({ mode: "baijimu", workspaceId: workspace.workspaceId }),
+    }));
+  });
 }
 
 function renderCredentialState() {
@@ -83,9 +140,12 @@ function renderCredentialState() {
   const status = credentialStatusMeta(state?.credentialStatus);
   elements["credential-badge"].textContent = status.label;
   elements["credential-badge"].className = `status-badge ${status.tone}`;
-  const currentWorkspaceId = state?.currentWorkspaceId || active?.workspaceId;
+  const currentWorkspaceId = state?.activeWorkspaceId || active?.workspaceId;
   const currentWorkspace = state?.workspaces.find((item) => item.workspaceId === currentWorkspaceId);
-  elements["active-workspace"].textContent = currentWorkspaceId
+  elements["auth-mode"].textContent = state?.activeMode === "baijimu" ? "百积木 API Key" : "ChatGPT 账号登录";
+  elements["active-workspace"].textContent = state?.activeMode === "chatgpt"
+    ? "个人 ChatGPT 账号"
+    : currentWorkspaceId
     ? `${currentWorkspace?.name || active?.workspaceName || `工作区 ${currentWorkspaceId}`}（${currentWorkspaceId}）`
     : "尚未识别";
   elements["active-model"].textContent = active?.model || DEFAULT_MODEL;
@@ -93,6 +153,30 @@ function renderCredentialState() {
   setMessage("warning", state?.discoveryWarning || "");
   if (active) {
     elements["session-model"].value = active.model;
+  }
+  renderAuthProfiles();
+}
+
+async function switchAuthProfile(request) {
+  clearNotices();
+  setAccountBusy(true);
+  try {
+    const response = await bridge().invoke("switchAuthProfile", request);
+    credentialState = normalizeCredentialState(response);
+    sessions = [];
+    codexProjects = [];
+    selectedSessionId = "";
+    renderCredentialState();
+    setMessage(
+      "message",
+      request.mode === "chatgpt"
+        ? "已切换到个人 ChatGPT 账号。"
+        : "已切换到百积木工作区，后续会话将使用独立凭证。",
+    );
+  } catch (error) {
+    setMessage("error", errorMessage(error));
+  } finally {
+    setAccountBusy(false);
   }
 }
 

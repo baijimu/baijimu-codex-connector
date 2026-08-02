@@ -299,6 +299,108 @@ test("rust connector resolves current Codex project IDs to their real roots", as
   }
 });
 
+test("rust connector switches between personal ChatGPT and an isolated Baijimu workspace", async () => {
+  execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
+  const { createServer } = await import("node:http");
+  const platform = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/llm-credential/validateCredential") {
+      response.end(JSON.stringify({ data: { valid: true, allowed: true, workspaceId: 1390, projectId: null } }));
+      return;
+    }
+    if (request.url === "/lowcode3/partner/v1/workspaces/list") {
+      response.end(JSON.stringify({ data: { list: [{ id: 1390, name: "研发工作区" }] } }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ message: `unexpected test path: ${request.url}` }));
+  });
+  platform.listen(0, "127.0.0.1");
+  await once(platform, "listening");
+  const platformUrl = `http://127.0.0.1:${platform.address().port}`;
+  const port = await freePort();
+  const rootHome = await mkdtemp(join(tmpdir(), "codex-auth-switch-"));
+  const personalHome = join(rootHome, "personal-codex");
+  const connectorHome = join(rootHome, "connector-data");
+  const configHome = join(rootHome, "config");
+  const workspaceHome = join(connectorHome, "codex-profiles", "baijimu", "test", "user-25", "client-device-test", "workspace-1390");
+  await mkdir(personalHome, { recursive: true });
+  await mkdir(workspaceHome, { recursive: true });
+  await mkdir(join(configHome, "baijimu"), { recursive: true });
+  await writeFile(join(personalHome, "auth.json"), JSON.stringify({
+    auth_mode: "chatgpt",
+    tokens: { access_token: "chatgpt-test-access", account_id: "acct-test" },
+  }));
+  await writeFile(join(personalHome, "config.toml"), 'model = "gpt-test"\nmodel_provider = "openai"\n');
+  await writeFile(join(workspaceHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "workspace-key", auth_mode: "apikey" }));
+  await writeFile(join(workspaceHome, "config.toml"), `model_provider = "baijimu-router"\n[model_providers.baijimu-router]\nbase_url = "https://router.baijimu.com/api/claudecode/v1"\n`);
+  await writeFile(join(connectorHome, "codex-credentials.json"), JSON.stringify({
+    version: 2,
+    activeMode: "chatgpt",
+    activeProfileId: null,
+    activeWorkspaceId: null,
+    profiles: [{
+      profileId: "test:user-25:client-device-test:workspace-1390",
+      environment: "test",
+      userId: 25,
+      clientId: "device-test",
+      workspaceId: 1390,
+      workspaceName: "研发工作区",
+      model: "gpt-5.6-sol",
+      activatedAtEpochSeconds: 0,
+      codexHome: workspaceHome,
+    }],
+  }));
+  await writeFile(join(configHome, "baijimu", "auth.json"), JSON.stringify({
+    schemaVersion: 2,
+    currentEnvironment: "test",
+    currentWorkspaceId: 1390,
+    environments: { test: { baseUrl: platformUrl } },
+    credentials: [{ workspaceIds: [1390], token: "machine-token", userId: 25, clientId: "device-test", issuedAt: "2026-08-02T00:00:00Z" }],
+  }));
+
+  const proc = spawn(cli, [
+    "start", "--port", String(port), "--codex-binary", process.execPath,
+    "--codex-args", JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      CODEX_HOME: personalHome,
+      BAIJIMU_CONFIG_HOME: configHome,
+      BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+    const managementToken = (await readFile(join(connectorHome, "management-token"), "utf8")).trim();
+    const workspaceState = await postManagementJson(port, managementToken, "/management/v1/auth/switch", {
+      mode: "baijimu", workspaceId: 1390,
+    });
+    assert.equal(workspaceState.activeMode, "baijimu");
+    assert.equal(workspaceState.activeWorkspaceId, 1390);
+    assert.equal(workspaceState.activeCodexHome, workspaceHome);
+    const workspaceStatus = await postJson(port, "/invoke/status");
+    assert.equal(workspaceStatus.data.appServer.codexHome, workspaceHome);
+
+    const personalState = await postManagementJson(port, managementToken, "/management/v1/auth/switch", { mode: "chatgpt" });
+    assert.equal(personalState.activeMode, "chatgpt");
+    assert.equal(personalState.activeCodexHome, personalHome);
+    const personalStatus = await postJson(port, "/invoke/status");
+    assert.equal(personalStatus.data.appServer.codexHome, personalHome);
+    assert.equal(JSON.parse(await readFile(join(personalHome, "auth.json"), "utf8")).auth_mode, "chatgpt");
+  } finally {
+    await stopConnector(proc, port);
+    platform.close();
+    await rm(rootHome, { recursive: true, force: true });
+  }
+});
+
 test("rust connector daemon mode writes pid file", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const port = await freePort();

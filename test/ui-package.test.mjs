@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 test("connector manifest declares the packaged embedded UI", async () => {
   const manifest = JSON.parse(await readFile(join(root, "connector.json"), "utf8"));
   assert.equal(manifest.schemaVersion, "2.0");
-  assert.equal(manifest.version, "1.1.1");
+  assert.equal(manifest.version, "1.2.0");
   assert.equal(manifest.transport.type, "http");
   assert.ok(manifest.methods.some((method) => method.name === "status"));
   assert.ok(manifest.events.some((event) => event.name === "codexNotification"));
@@ -40,6 +40,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
     "setupState",
     "startCodexSession",
     "startCodexTurn",
+    "switchAuthProfile",
   ]);
   assert.deepEqual(manifest.setup, {
     operation: "setupRetry",
@@ -54,7 +55,8 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /src="\.\/app\.js"/);
   assert.match(html, /href="\.\/styles\.css"/);
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/i);
-  assert.doesNotMatch(html, /项目 ID|切换工作区|确认设备/);
+  assert.doesNotMatch(html, /项目 ID|确认设备/);
+  assert.match(html, /切换账号与工作区/);
   await readFile(join(root, "ui", "app.js"), "utf8");
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
@@ -80,8 +82,10 @@ test("UI keeps Codex sessions newest-first and extracts conversation messages", 
 
 test("UI state normalizes management responses and keeps the active workspace", () => {
   const state = normalizeCredentialState({
+    activeMode: "baijimu",
     codexConfigured: true,
     currentWorkspaceId: 642,
+    activeWorkspaceId: 642,
     credentialStatus: "verified",
     activeProfile: {
       workspaceId: 642,
@@ -91,12 +95,18 @@ test("UI state normalizes management responses and keeps the active workspace", 
     },
     profiles: [],
     workspaces: [
-      { workspaceId: 100, name: "其他" },
-      { workspaceId: 642, name: "研发" },
+      { workspaceId: 100, name: "其他", authorized: false },
+      { workspaceId: 642, name: "研发", authorized: true, configured: true, userIds: [25] },
     ],
+    chatgpt: { configured: true, authMode: "chatgpt", accountId: "acct-1" },
   });
   assert.equal(state.codexConfigured, true);
   assert.equal(state.currentWorkspaceId, 642);
+  assert.equal(state.activeMode, "baijimu");
+  assert.equal(state.activeWorkspaceId, 642);
+  assert.equal(state.workspaces[1].authorized, true);
+  assert.deepEqual(state.workspaces[1].userIds, [25]);
+  assert.equal(state.chatgpt.accountId, "acct-1");
   assert.equal(state.activeProfile.workspaceId, 642);
   assert.deepEqual(credentialStatusMeta(state.credentialStatus), { label: "已验证", tone: "success" });
 });

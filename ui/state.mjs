@@ -12,6 +12,9 @@ export function normalizeCredentialState(value) {
         .map((workspace) => ({
           workspaceId: positiveInteger(workspace?.workspaceId),
           name: String(workspace?.name || "").trim(),
+          authorized: workspace?.authorized === true,
+          configured: workspace?.configured === true,
+          userIds: Array.isArray(workspace?.userIds) ? workspace.userIds.map(positiveInteger).filter(Boolean) : [],
         }))
         .filter((workspace) => workspace.workspaceId > 0)
     : [];
@@ -19,12 +22,20 @@ export function normalizeCredentialState(value) {
     ? input.profiles.map(normalizeProfile).filter(Boolean)
     : [];
   return {
+    activeMode: input.activeMode === "baijimu" ? "baijimu" : "chatgpt",
     currentWorkspaceId: positiveInteger(input.currentWorkspaceId),
+    activeWorkspaceId: positiveInteger(input.activeWorkspaceId),
     codexConfigured: input.codexConfigured === true,
     credentialStatus: String(input.credentialStatus || "not_configured"),
     activeProfile: normalizeProfile(input.activeProfile),
     profiles,
     workspaces,
+    chatgpt: {
+      configured: input.chatgpt?.configured === true,
+      authMode: String(input.chatgpt?.authMode || ""),
+      accountId: String(input.chatgpt?.accountId || ""),
+      codexHome: String(input.chatgpt?.codexHome || ""),
+    },
     discoveryWarning: typeof input.discoveryWarning === "string" ? input.discoveryWarning.trim() : "",
   };
 }
@@ -34,10 +45,16 @@ export function normalizeProfile(value) {
   const workspaceId = positiveInteger(value.workspaceId);
   if (!workspaceId) return null;
   return {
+    profileId: String(value.profileId || ""),
+    environment: String(value.environment || "prod"),
+    userId: positiveInteger(value.userId),
+    clientId: String(value.clientId || ""),
     workspaceId,
     workspaceName: String(value.workspaceName || `工作区 ${workspaceId}`).trim(),
     model: String(value.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL,
     activatedAtEpochSeconds: Math.max(0, Number(value.activatedAtEpochSeconds) || 0),
+    codexHome: String(value.codexHome || ""),
+    credentialStatus: String(value.credentialStatus || ""),
   };
 }
 

@@ -33,9 +33,9 @@ git clone https://gitee.com/zxflimit_admin/baijimu-connector-codex.git
 bridge-agent connector install /path/to/baijimu-connector-codex --replace
 ```
 
-The connector listens on `127.0.0.1:18110` by default. During market installation Bridge Agent starts it and invokes the declared setup lifecycle. The connector downloads the official script from `docs.baijimu.com`, creates a workspace-scoped LLM credential, passes it through a private temporary file, and removes the file after setup. It starts `codex app-server --listen stdio://` lazily on the first Codex request.
+The connector listens on `127.0.0.1:18110` by default. During market installation Bridge Agent starts it and invokes the declared setup lifecycle. The connector downloads the official script from `docs.baijimu.com`, creates a workspace-scoped LLM credential, passes it through a private temporary file, and removes the file after setup. Before the official installer runs it snapshots the user's default Codex authentication and configuration, and restores both files before activating the isolated workspace profile. It starts `codex app-server --listen stdio://` lazily on the first Codex request.
 
-Bridge Agent assigns a private application data directory through `BAIJIMU_CONNECTOR_DATA_DIR`. The application stores its `management-token` and credential profile metadata there with private permissions, and migrates pre-0.4 profile metadata from the old shared location on first use. Every `/management/v1/*` request requires the management token. These management routes are local-only and are never registered as relay capabilities.
+Bridge Agent assigns a private application data directory through `BAIJIMU_CONNECTOR_DATA_DIR`. The application stores its `management-token`, credential metadata, and one private `CODEX_HOME` per Baijimu environment/user/workspace there. The user's personal ChatGPT login remains in the default `CODEX_HOME`. Switching authentication stops the previous app-server and lazily starts a new one with the selected profile, which also isolates local session history. Existing workspace credentials are validated and reused; a replacement is issued only when the stored credential is no longer valid. Pre-1.2 metadata is migrated on first use. Every `/management/v1/*` request requires the management token. These management routes are local-only and are never registered as relay capabilities.
 
 ## CLI
 
@@ -86,6 +86,7 @@ The application exposes authenticated setup and status operations for Bridge Age
 - `GET /management/v1/setup/state`
 - `POST /management/v1/setup/retry`
 - `GET /management/v1/credential-state`
+- `POST /management/v1/auth/switch` with `{ "mode": "chatgpt" }` or `{ "mode": "baijimu", "workspaceId": 123 }`
 - `POST /management/v1/projects/checkout`
 
 The local management token is not a Baijimu workspace token or an LLM credential. It only authenticates the loopback call between Bridge Agent and this application.
