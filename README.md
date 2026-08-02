@@ -35,6 +35,8 @@ bridge-agent connector install /path/to/baijimu-connector-codex --replace
 
 The connector listens on `127.0.0.1:18110` by default. Market installation only installs and starts the Connector. Initialization begins from the application's account view, then downloads the official script from `docs.baijimu.com`, creates a workspace-scoped LLM credential, passes it through a private temporary file, and removes the file after setup. The installer receives the isolated workspace directory through `CODEX_HOME`; it never writes the personal `~/.codex` directory or restarts an existing ChatGPT desktop session. If a usable personal ChatGPT login or an explicit profile selection already exists, setup preserves that selection. On a clean machine, setup automatically activates the new workspace profile so the first request works without another user step. It starts `codex app-server --listen stdio://` lazily on the first Codex request.
 
+Codex executable discovery belongs to this Connector and does not depend on Bridge Agent mutating its generic desktop-process `PATH`. A configured absolute path is authoritative and must exist and be executable. For the default bare `codex` name, the Connector searches its process `PATH`, the install locations used by its own setup flow (including `~/.local/bin/codex` and the Windows helper copy), common Codex/ChatGPT desktop resources, and finally the user's login environment. The `status` response exposes `requestedCodexBinary`, the resolved absolute path, resolution source, checked paths, and any actionable resolution error.
+
 Bridge Agent assigns a private application data directory through `BAIJIMU_CONNECTOR_DATA_DIR`. The application stores its `management-token`, credential metadata, and one private `CODEX_HOME` per Baijimu environment/user/workspace there. The user's personal ChatGPT login remains in the default `CODEX_HOME`. Switching authentication stops the previous app-server and lazily starts a new one with the selected profile, which also isolates local session history. Existing workspace credentials are validated and reused; a replacement is issued only when the stored credential is no longer valid. Pre-1.2 metadata is migrated on first use. Every `/management/v1/*` request requires the management token. These management routes are local-only and are never registered as relay capabilities.
 
 ## CLI
@@ -57,6 +59,8 @@ CODEX_CONNECTOR_BAIJIMU_BINARY=baijimu
 CODEX_CONNECTOR_PROJECTS_DIR=/absolute/path/to/Baijimu/Projects
 CODEX_CONNECTOR_CODEX_ARGS='["app-server","--listen","stdio://"]'
 ```
+
+`CODEX_CONNECTOR_CODEX_BINARY` is normally left as `codex`; the Connector resolves it independently from the Bridge Agent process environment. Set an absolute path only when intentionally pinning a specific executable. An invalid explicit path fails with `CODEX_BINARY_NOT_FOUND` instead of silently selecting a different installation.
 
 ## Local App Capabilities
 

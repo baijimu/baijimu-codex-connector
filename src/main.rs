@@ -1,3 +1,4 @@
+mod codex_binary;
 mod credential;
 mod project_checkout;
 mod setup;
@@ -62,6 +63,8 @@ struct CodexClient {
     event_sequence: u64,
     started_at: Option<String>,
     last_exit: Option<Value>,
+    codex_binary_resolution: Option<codex_binary::Resolution>,
+    codex_binary_error: Option<codex_binary::ResolutionError>,
     event_publisher: Option<EventPublisher>,
 }
 
@@ -89,7 +92,7 @@ struct StateProjectRoot {
 
 impl CodexClient {
     fn new(options: ServerOptions, event_publisher: Option<EventPublisher>) -> Self {
-        Self {
+        let mut client = Self {
             options,
             active_codex_home: credential::active_codex_home(),
             child: None,
@@ -101,7 +104,24 @@ impl CodexClient {
             event_sequence: 0,
             started_at: None,
             last_exit: None,
+            codex_binary_resolution: None,
+            codex_binary_error: None,
             event_publisher,
+        };
+        client.refresh_codex_binary_resolution();
+        client
+    }
+
+    fn refresh_codex_binary_resolution(&mut self) {
+        match codex_binary::resolve(&self.options.codex_binary) {
+            Ok(resolution) => {
+                self.codex_binary_resolution = Some(resolution);
+                self.codex_binary_error = None;
+            }
+            Err(error) => {
+                self.codex_binary_resolution = None;
+                self.codex_binary_error = Some(error);
+            }
         }
     }
 
@@ -126,6 +146,24 @@ impl CodexClient {
             },
             None => (false, None),
         };
+        let binary_status = if let Some(resolution) = &self.codex_binary_resolution {
+            resolution.status_value()
+        } else if let Some(error) = &self.codex_binary_error {
+            error.status_value()
+        } else {
+            json!({
+                "requested": self.options.codex_binary,
+                "resolved": null,
+                "source": null,
+                "checkedPaths": [],
+                "error": null,
+            })
+        };
+        let active_binary = self
+            .codex_binary_resolution
+            .as_ref()
+            .map(|resolution| resolution.path.display().to_string())
+            .unwrap_or_else(|| self.options.codex_binary.clone());
         json!({
             "connector": {
                 "name": "@baijimu/connector-codex",
@@ -136,7 +174,9 @@ impl CodexClient {
                 "running": running,
                 "initialized": self.initialized,
                 "pid": pid,
-                "codexBinary": self.options.codex_binary,
+                "codexBinary": active_binary,
+                "requestedCodexBinary": self.options.codex_binary,
+                "codexBinaryResolution": binary_status,
                 "listen": self.options.listen,
                 "startedAt": self.started_at,
                 "lastExit": self.last_exit,
@@ -178,6 +218,24 @@ impl CodexClient {
     }
 
     fn start_process(&mut self) -> Result<(), HttpError> {
+        let resolution = match codex_binary::resolve(&self.options.codex_binary) {
+            Ok(resolution) => resolution,
+            Err(error) => {
+                let message = error.to_string();
+                let data = error.data_value();
+                self.codex_binary_resolution = None;
+                self.codex_binary_error = Some(error);
+                return Err(HttpError::coded(
+                    500,
+                    message,
+                    "CODEX_BINARY_NOT_FOUND",
+                    data,
+                ));
+            }
+        };
+        let resolved_binary = resolution.path.clone();
+        self.codex_binary_resolution = Some(resolution);
+        self.codex_binary_error = None;
         let args = if self.options.extra_args.is_empty() {
             vec![
                 "app-server".to_string(),
@@ -187,14 +245,34 @@ impl CodexClient {
         } else {
             self.options.extra_args.clone()
         };
-        let mut child = Command::new(&self.options.codex_binary)
+        let spawn_result = Command::new(&resolved_binary)
             .args(args)
             .env("CODEX_HOME", &self.active_codex_home)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| HttpError::internal(error.to_string()))?;
+            .spawn();
+        let mut child = match spawn_result {
+            Ok(child) => child,
+            Err(error) => {
+                let message = format!(
+                    "failed to start Codex executable '{}': {error}",
+                    resolved_binary.display()
+                );
+                self.codex_binary_error = Some(codex_binary::ResolutionError {
+                    requested: self.options.codex_binary.clone(),
+                    checked_paths: vec![resolved_binary.clone()],
+                    reason: error.to_string(),
+                });
+                self.codex_binary_resolution = None;
+                return Err(HttpError::coded(
+                    500,
+                    message,
+                    "CODEX_PROCESS_START_FAILED",
+                    json!({"resolved": resolved_binary, "error": error.to_string()}),
+                ));
+            }
+        };
         self.stdin = child.stdin.take();
         self.stdout = child.stdout.take().map(BufReader::new);
         self.initialized = false;
@@ -471,6 +549,20 @@ impl HttpError {
 
     fn internal(message: impl Into<String>) -> Self {
         Self::new(500, message)
+    }
+
+    fn coded(
+        status: u16,
+        message: impl Into<String>,
+        code: impl Into<String>,
+        data: Value,
+    ) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            code: Some(Value::String(code.into())),
+            data: Some(data),
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -167,6 +167,106 @@ test("rust connector forwards Codex app-server calls", async () => {
   } finally {
     await stopConnector(proc, port);
     await rm(connectorHome, { recursive: true, force: true });
+  }
+});
+
+test("rust connector finds the installer-managed Codex binary without a GUI PATH entry", {
+  skip: process.platform === "win32",
+}, async () => {
+  execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
+  const port = await freePort();
+  const rootHome = await mkdtemp(join(tmpdir(), "codex-binary-resolution-"));
+  const connectorHome = join(rootHome, "connector-data");
+  const codexHome = join(rootHome, "codex-home");
+  const localBin = join(rootHome, ".local", "bin");
+  const installedCodex = join(localBin, "codex");
+  await mkdir(localBin, { recursive: true });
+  await mkdir(codexHome, { recursive: true });
+  await symlink(process.execPath, installedCodex);
+
+  const proc = spawn(cli, [
+    "start",
+    "--port",
+    String(port),
+    "--codex-binary",
+    "codex",
+    "--codex-args",
+    JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOME: rootHome,
+      PATH: "/usr/bin:/bin",
+      CODEX_HOME: codexHome,
+      BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+    const threads = await postJson(port, "/invoke/listThreads", { limit: 1 });
+    assert.equal(threads.data.result.data[0].id, "thr_listed");
+
+    const status = await postJson(port, "/invoke/status");
+    assert.equal(status.data.appServer.requestedCodexBinary, "codex");
+    assert.equal(status.data.appServer.codexBinary, installedCodex);
+    assert.equal(status.data.appServer.codexBinaryResolution.resolved, installedCodex);
+    assert.equal(
+      status.data.appServer.codexBinaryResolution.source,
+      "connector_known_location",
+    );
+    assert.equal(status.data.appServer.codexBinaryResolution.error, null);
+  } finally {
+    await stopConnector(proc, port);
+    await rm(rootHome, { recursive: true, force: true });
+  }
+});
+
+test("rust connector reports an actionable error for an invalid explicit Codex binary", async () => {
+  execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
+  const port = await freePort();
+  const rootHome = await mkdtemp(join(tmpdir(), "codex-binary-error-"));
+  const connectorHome = join(rootHome, "connector-data");
+  const missingCodex = join(rootHome, "missing", "codex");
+  const proc = spawn(cli, [
+    "start",
+    "--port",
+    String(port),
+    "--codex-binary",
+    missingCodex,
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOME: rootHome,
+      BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+    const response = await fetch(`http://127.0.0.1:${port}/invoke/listThreads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ limit: 1 }),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 500);
+    assert.equal(payload.error.code, "CODEX_BINARY_NOT_FOUND");
+    assert.match(payload.error.message, /CODEX_CONNECTOR_CODEX_BINARY/);
+    assert.deepEqual(payload.error.data.checkedPaths, [missingCodex]);
+
+    const status = await postJson(port, "/invoke/status");
+    assert.equal(status.data.appServer.codexBinaryResolution.resolved, null);
+    assert.match(status.data.appServer.codexBinaryResolution.error, /not found/);
+  } finally {
+    await stopConnector(proc, port);
+    await rm(rootHome, { recursive: true, force: true });
   }
 });
 

@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Initialize and configure Codex inside the application, switch between a personal ChatGPT login and isolated Baijimu workspace credentials, and manage local Codex sessions.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "gitee",
     "repo": "zxflimit_admin/baijimu-connector-codex",
-    "revision": "v1.2.2"
+    "revision": "v1.2.3"
   },
   "runtime": {
     "type": "process",
@@ -111,7 +111,8 @@
       },
       "codexBinary": {
         "type": "string",
-        "default": "codex"
+        "default": "codex",
+        "description": "Codex executable name or explicit path. Bare names are resolved by the Connector from its process PATH, Connector-managed install locations, common desktop app locations, and the user login environment."
       },
       "listen": {
         "type": "string",
