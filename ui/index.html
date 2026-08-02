@@ -103,7 +103,7 @@
             <div><dt>当前身份</dt><dd id="active-workspace">—</dd></div>
             <div><dt>模型</dt><dd id="active-model">—</dd></div>
             <div><dt>Codex 配置</dt><dd id="codex-configured">—</dd></div>
-            <div><dt>安装状态</dt><dd id="setup-status">—</dd></div>
+            <div><dt>初始化状态</dt><dd id="setup-status">—</dd></div>
           </dl>
         </section>
 
@@ -119,13 +119,31 @@
 
         <section class="panel" aria-labelledby="setup-title">
           <div class="section-heading">
-            <div><p class="eyebrow">自动配置</p><h2 id="setup-title">本机 Codex</h2></div>
-            <p class="section-note">用于首次安装或修复当前客户端默认工作区；安装过程不会覆盖个人 ChatGPT 登录。</p>
+            <div><p class="eyebrow">应用初始化</p><h2 id="setup-title">本机 Codex</h2></div>
+            <p class="section-note">Connector 安装完成后在这里初始化或修复 Codex；初始化不会覆盖个人 ChatGPT 登录。</p>
           </div>
-          <p id="setup-message" class="section-note">正在读取安装状态…</p>
+          <p id="setup-message" class="section-note">正在读取初始化状态…</p>
+          <div id="setup-progress" class="setup-progress" hidden>
+            <div class="setup-progress-heading">
+              <strong id="setup-progress-label">等待初始化</strong>
+              <span id="setup-progress-percent">0%</span>
+            </div>
+            <div
+              id="setup-progress-track"
+              class="setup-progress-track"
+              role="progressbar"
+              aria-label="Codex 初始化进度"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <span id="setup-progress-bar" class="setup-progress-bar" style="width: 0%"></span>
+            </div>
+            <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
+          </div>
           <div class="form-actions">
             <p>连接器会下载安装官方 Codex 客户端和命令行，把模型凭证写入独立工作区档案，并完成归属验证。</p>
-            <button id="setup-retry-button" class="button primary" type="button">重试安装配置</button>
+            <button id="setup-retry-button" class="button primary" type="button">开始初始化</button>
           </div>
         </section>
       </section>

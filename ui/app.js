@@ -6,13 +6,16 @@ import {
   normalizeCodexProjects,
   normalizeCodexSessions,
   normalizeCredentialState,
+  normalizeSetupProgress,
 } from "./state.mjs";
 
 const elementIds = [
   "refresh-button", "message", "error", "warning", "sessions-view", "account-view",
   "credential-badge", "active-workspace", "active-model", "codex-configured",
   "auth-mode", "auth-profile-list",
-  "setup-status", "setup-message", "setup-retry-button",
+  "setup-status", "setup-message", "setup-retry-button", "setup-progress",
+  "setup-progress-label", "setup-progress-percent", "setup-progress-track",
+  "setup-progress-bar", "setup-step-list",
   "new-session-button", "session-project-filter", "session-list", "load-more-sessions",
   "session-path", "session-title", "session-status", "conversation", "prompt-form",
   "session-cwd", "session-project-options", "session-model", "prompt-input", "prompt-hint",
@@ -75,7 +78,7 @@ function switchView(view) {
 
 function setAccountBusy(value) {
   elements["setup-retry-button"].disabled = value;
-  elements["setup-retry-button"].textContent = value ? "正在安装配置…" : "重试安装配置";
+  elements["setup-retry-button"].textContent = value ? "正在初始化…" : "重新初始化";
   document.querySelectorAll(".auth-switch").forEach((button) => {
     button.disabled = value || button.dataset.profileDisabled === "true";
   });
@@ -183,14 +186,75 @@ async function switchAuthProfile(request) {
 function renderSetupState() {
   const status = String(setupState?.status || "pending");
   const labels = {
-    pending: "等待安装",
-    running: "正在安装配置",
+    pending: "等待初始化",
+    running: "正在初始化",
     succeeded: "已完成",
-    failed: "安装失败",
+    failed: "初始化失败",
   };
   elements["setup-status"].textContent = labels[status] || status;
-  elements["setup-message"].textContent = setupState?.error || setupState?.message || "等待安装";
+  elements["setup-message"].textContent = setupState?.error || setupState?.message || "等待初始化";
+  renderSetupProgress();
   setAccountBusy(status === "running");
+  if (status !== "running") {
+    elements["setup-retry-button"].textContent = status === "pending" ? "开始初始化" : "重新初始化";
+  }
+}
+
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+function setupStepStateLabel(state) {
+  return ({
+    pending: "等待",
+    running: "进行中",
+    completed: "完成",
+    skipped: "跳过",
+    failed: "失败",
+  })[state] || state;
+}
+
+function renderSetupProgress() {
+  const progress = normalizeSetupProgress(setupState);
+  const visible = progress.steps.length > 0;
+  elements["setup-progress"].hidden = !visible;
+  if (!visible) return;
+
+  const current = progress.steps.find((step) => step.state === "running")
+    || [...progress.steps].reverse().find((step) => ["completed", "failed"].includes(step.state));
+  elements["setup-progress-label"].textContent = current
+    ? `${current.index}/${progress.steps.length} ${current.name}`
+    : "准备初始化";
+  elements["setup-progress-percent"].textContent = `${progress.percent}%`;
+  elements["setup-progress-track"].setAttribute("aria-valuenow", String(progress.percent));
+  elements["setup-progress-bar"].style.width = `${progress.percent}%`;
+
+  const list = elements["setup-step-list"];
+  list.replaceChildren();
+  progress.steps.forEach((step) => {
+    const item = document.createElement("li");
+    item.className = `setup-step ${step.state}`;
+    const marker = document.createElement("span");
+    marker.className = "setup-step-marker";
+    marker.textContent = ["completed", "skipped"].includes(step.state) ? "✓" : String(step.index);
+    const copy = document.createElement("span");
+    copy.className = "setup-step-copy";
+    const title = document.createElement("strong");
+    title.textContent = step.name;
+    const detail = document.createElement("small");
+    const download = step.totalBytes > 0 && step.downloadedBytes != null
+      ? ` · ${formatBytes(step.downloadedBytes)} / ${formatBytes(step.totalBytes)}`
+      : "";
+    detail.textContent = `${step.detail || setupStepStateLabel(step.state)}${download}`;
+    const state = document.createElement("em");
+    state.textContent = setupStepStateLabel(step.state);
+    copy.append(title, detail);
+    item.append(marker, copy, state);
+    list.append(item);
+  });
 }
 
 async function monitorSetup() {
@@ -202,11 +266,11 @@ async function monitorSetup() {
       setupState = await bridge().invoke("setupState");
       renderSetupState();
       if (setupState?.status === "succeeded") {
-        await loadState("Codex 已在本机安装并配置完成。");
+        await loadState("Codex 应用初始化已完成。");
         return;
       }
       if (setupState?.status === "failed") {
-        setMessage("error", setupState?.error || "Codex 安装配置失败。");
+        setMessage("error", setupState?.error || "Codex 初始化失败。");
         return;
       }
     } catch (error) {
@@ -246,7 +310,7 @@ async function retrySetup() {
   try {
     setupState = await bridge().invoke("setupRetry", { workspaceId });
     renderSetupState();
-    setMessage("message", "已开始在本机安装并配置 Codex。");
+    setMessage("message", "已开始在 Codex 应用内执行初始化。");
     void monitorSetup();
   } catch (error) {
     setMessage("error", errorMessage(error));

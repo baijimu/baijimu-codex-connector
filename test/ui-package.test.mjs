@@ -7,6 +7,7 @@ import {
   credentialStatusMeta,
   normalizeCredentialState,
   normalizeCodexSessions,
+  normalizeSetupProgress,
   codexTurnMessages,
 } from "../ui/state.mjs";
 
@@ -15,7 +16,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 test("connector manifest declares the packaged embedded UI", async () => {
   const manifest = JSON.parse(await readFile(join(root, "connector.json"), "utf8"));
   assert.equal(manifest.schemaVersion, "2.0");
-  assert.equal(manifest.version, "1.2.1");
+  assert.equal(manifest.version, "1.2.2");
   assert.equal(manifest.transport.type, "http");
   assert.ok(manifest.methods.some((method) => method.name === "status"));
   assert.ok(manifest.events.some((event) => event.name === "codexNotification"));
@@ -42,14 +43,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
     "startCodexTurn",
     "switchAuthProfile",
   ]);
-  assert.deepEqual(manifest.setup, {
-    operation: "setupRetry",
-    statusOperation: "setupState",
-    timeoutSecs: 1800,
-  });
+  assert.equal(manifest.setup, undefined);
   assert.deepEqual(manifest.hostRequirements, {
     minimumVersion: "0.2.21",
-    capabilities: ["connector.setup.v1"],
   });
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
   assert.match(html, /src="\.\/app\.js"/);
@@ -60,6 +56,34 @@ test("connector manifest declares the packaged embedded UI", async () => {
   await readFile(join(root, "ui", "app.js"), "utf8");
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
+});
+
+test("UI derives Codex initialization progress from installer steps and download bytes", () => {
+  const progress = normalizeSetupProgress({
+    status: "running",
+    installerStatus: {
+      currentStep: 3,
+      steps: [
+        { index: 1, name: "Check App", state: "completed", detail: "Ready" },
+        { index: 2, name: "Read manifest", state: "skipped", detail: "Not needed" },
+        {
+          index: 3,
+          name: "Download App",
+          state: "running",
+          detail: "Downloading",
+          downloadedBytes: 50,
+          totalBytes: 100,
+        },
+        { index: 4, name: "Install App", state: "pending" },
+      ],
+    },
+  });
+  assert.equal(progress.status, "running");
+  assert.equal(progress.currentStep, 3);
+  assert.equal(progress.percent, 63);
+  assert.equal(progress.steps[2].downloadedBytes, 50);
+  assert.equal(progress.steps[2].totalBytes, 100);
+  assert.equal(normalizeSetupProgress({ status: "succeeded", installerStatus: { steps: [] } }).percent, 100);
 });
 
 test("UI keeps Codex sessions newest-first and extracts conversation messages", () => {

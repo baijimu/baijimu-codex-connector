@@ -37,7 +37,7 @@ impl Default for SetupStatus {
         Self {
             status: "pending".to_string(),
             workspace_id: None,
-            message: "等待安装".to_string(),
+            message: "等待初始化".to_string(),
             error: None,
             started_at_epoch_seconds: None,
             completed_at_epoch_seconds: None,
@@ -113,7 +113,7 @@ impl SetupManager {
         let running = SetupStatus {
             status: "running".to_string(),
             workspace_id: Some(workspace_id),
-            message: "正在安装并配置 Codex".to_string(),
+            message: "正在初始化 Codex 应用".to_string(),
             error: None,
             started_at_epoch_seconds: Some(now_epoch_seconds()),
             completed_at_epoch_seconds: None,
@@ -127,7 +127,7 @@ impl SetupManager {
                 Ok(()) => SetupStatus {
                     status: "succeeded".to_string(),
                     workspace_id: Some(workspace_id),
-                    message: "Codex 已安装并配置完成".to_string(),
+                    message: "Codex 应用初始化已完成".to_string(),
                     error: None,
                     started_at_epoch_seconds: running.started_at_epoch_seconds,
                     completed_at_epoch_seconds: Some(now_epoch_seconds()),
@@ -136,7 +136,7 @@ impl SetupManager {
                 Err(error) => SetupStatus {
                     status: "failed".to_string(),
                     workspace_id: Some(workspace_id),
-                    message: "Codex 安装或配置失败".to_string(),
+                    message: "Codex 应用初始化失败".to_string(),
                     error: Some(compact_error(&error.to_string())),
                     started_at_epoch_seconds: running.started_at_epoch_seconds,
                     completed_at_epoch_seconds: Some(now_epoch_seconds()),

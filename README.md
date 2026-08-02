@@ -1,8 +1,8 @@
 # Baijimu Codex Local App
 
-Baijimu Codex is an independent Rust local application that installs and configures Codex on the current computer, then manages local Codex sessions through one loopback service. The installation flow always uses the workspace currently authorized in Baijimu Local; it does not ask for a device, workspace, or Baijimu project.
+Baijimu Codex is an independent Rust local application that initializes and configures Codex on the current computer, then manages local Codex sessions through one loopback service. Initialization uses the workspace currently authorized in Baijimu Local; it does not ask for a device or unrelated Baijimu project.
 
-It is installed and supervised by `bridge-agent`. Bridge Agent passes only the current workspace ID and waits for setup completion. Credential issuance, exact workspace validation, the official Codex installer, configuration, smoke tests, and process/window verification run inside this application. Bridge Agent never receives the LLM key.
+It is installed and supervised by `bridge-agent`. Bridge Agent finishes Connector installation without waiting for Codex initialization. The user starts initialization inside this application's account view, which shows the official installer's step and download progress. Credential issuance, exact workspace validation, the official Codex installer, configuration, smoke tests, and process/window verification run inside this application. Bridge Agent never receives the LLM key.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ binary under `bin/<platform>-<arch>/`. The legacy Node.js implementation is
 kept for reference and compatibility, but the platform-managed entrypoint is
 the native binary.
 
-The package includes `ui/`, a static interface loaded inside the local-app detail panel. It provides setup status and retry, Codex directory/session browsing, newest-first session ordering, new-session creation, and turn execution/interruption. Account state is read-only and reflects the client's current authorized workspace.
+The package includes `ui/`, a static interface loaded inside the local-app detail panel. It provides initialization start/retry, the full installer step list and progress, Codex directory/session browsing, newest-first session ordering, new-session creation, and turn execution/interruption. Account state is read-only and reflects the client's current authorized workspace.
 
 ## Install
 
@@ -33,7 +33,7 @@ git clone https://gitee.com/zxflimit_admin/baijimu-connector-codex.git
 bridge-agent connector install /path/to/baijimu-connector-codex --replace
 ```
 
-The connector listens on `127.0.0.1:18110` by default. During market installation Bridge Agent starts it and invokes the declared setup lifecycle. The connector downloads the official script from `docs.baijimu.com`, creates a workspace-scoped LLM credential, passes it through a private temporary file, and removes the file after setup. The installer receives the isolated workspace directory through `CODEX_HOME`; it never writes the personal `~/.codex` directory or restarts an existing ChatGPT desktop session. If a usable personal ChatGPT login or an explicit profile selection already exists, setup preserves that selection. On a clean machine, setup automatically activates the new workspace profile so the first request works without another user step. It starts `codex app-server --listen stdio://` lazily on the first Codex request.
+The connector listens on `127.0.0.1:18110` by default. Market installation only installs and starts the Connector. Initialization begins from the application's account view, then downloads the official script from `docs.baijimu.com`, creates a workspace-scoped LLM credential, passes it through a private temporary file, and removes the file after setup. The installer receives the isolated workspace directory through `CODEX_HOME`; it never writes the personal `~/.codex` directory or restarts an existing ChatGPT desktop session. If a usable personal ChatGPT login or an explicit profile selection already exists, setup preserves that selection. On a clean machine, setup automatically activates the new workspace profile so the first request works without another user step. It starts `codex app-server --listen stdio://` lazily on the first Codex request.
 
 Bridge Agent assigns a private application data directory through `BAIJIMU_CONNECTOR_DATA_DIR`. The application stores its `management-token`, credential metadata, and one private `CODEX_HOME` per Baijimu environment/user/workspace there. The user's personal ChatGPT login remains in the default `CODEX_HOME`. Switching authentication stops the previous app-server and lazily starts a new one with the selected profile, which also isolates local session history. Existing workspace credentials are validated and reused; a replacement is issued only when the stored credential is no longer valid. Pre-1.2 metadata is migrated on first use. Every `/management/v1/*` request requires the management token. These management routes are local-only and are never registered as relay capabilities.
 

@@ -75,6 +75,43 @@ export function credentialStatusMeta(status) {
   }
 }
 
+export function normalizeSetupProgress(value) {
+  const setupStatus = String(value?.status || "pending");
+  const installer = value?.installerStatus && typeof value.installerStatus === "object"
+    ? value.installerStatus
+    : {};
+  const steps = (Array.isArray(installer.steps) ? installer.steps : []).map((step, index) => ({
+    index: Math.max(1, Number(step?.index) || index + 1),
+    name: String(step?.name || `步骤 ${index + 1}`),
+    state: String(step?.state || "pending"),
+    detail: String(step?.detail || ""),
+    downloadedBytes: step?.downloadedBytes != null && Number.isFinite(Number(step.downloadedBytes))
+      ? Number(step.downloadedBytes)
+      : null,
+    totalBytes: step?.totalBytes != null && Number.isFinite(Number(step.totalBytes))
+      ? Number(step.totalBytes)
+      : null,
+  }));
+  const finishedStates = new Set(["completed", "skipped"]);
+  const finished = steps.filter((step) => finishedStates.has(step.state)).length;
+  const current = steps.find((step) => step.state === "running");
+  const downloadFraction = current?.totalBytes > 0 && current?.downloadedBytes >= 0
+    ? Math.min(1, current.downloadedBytes / current.totalBytes)
+    : 0;
+  const calculated = steps.length > 0
+    ? Math.round(((finished + downloadFraction) / steps.length) * 100)
+    : 0;
+  const percent = setupStatus === "succeeded" ? 100 : Math.max(0, Math.min(99, calculated));
+  return {
+    status: setupStatus,
+    percent,
+    currentStep: Math.max(0, Number(installer.currentStep) || current?.index || 0),
+    startedAt: String(installer.startedAt || ""),
+    updatedAt: String(installer.updatedAt || ""),
+    steps,
+  };
+}
+
 export function formatActivatedAt(epochSeconds) {
   if (!epochSeconds) return "尚未记录切换时间";
   return new Intl.DateTimeFormat("zh-CN", {

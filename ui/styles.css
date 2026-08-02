@@ -200,6 +200,63 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .profile-copy small { color: var(--muted); font-size: 11px; }
 .empty-state { padding: 24px; border: 1px dashed #cfd9d4; border-radius: 13px; color: var(--muted); text-align: center; font-size: 13px; }
 
+.setup-progress {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  background: #fbfcfc;
+}
+.setup-progress[hidden] { display: none; }
+.setup-progress-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.setup-progress-heading strong { font-size: 14px; }
+.setup-progress-heading span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.setup-progress-track { height: 9px; overflow: hidden; border-radius: 999px; background: #e1e9e5; }
+.setup-progress-bar {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--green), #28a06f);
+  transition: width 240ms ease;
+}
+.setup-step-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.setup-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--muted);
+  background: white;
+}
+.setup-step.running { color: var(--ink); background: var(--amber-soft); }
+.setup-step.completed { color: var(--ink); }
+.setup-step.failed { color: var(--red); background: var(--red-soft); }
+.setup-step-marker {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: #66736d;
+  background: #edf2ef;
+  font-size: 11px;
+  font-weight: 800;
+}
+.setup-step.completed .setup-step-marker { color: white; background: var(--green); }
+.setup-step.running .setup-step-marker { color: var(--amber); background: #ffe9ae; }
+.setup-step.failed .setup-step-marker { color: white; background: var(--red); }
+.setup-step-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.setup-step-copy strong, .setup-step-copy small { overflow-wrap: anywhere; }
+.setup-step-copy strong { color: inherit; font-size: 12px; }
+.setup-step-copy small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.setup-step em { font-size: 11px; font-style: normal; font-weight: 750; white-space: nowrap; }
+
 .privacy-note {
   display: flex;
   align-items: baseline;
