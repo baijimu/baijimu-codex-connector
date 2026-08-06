@@ -78,6 +78,60 @@ async function stopConnector(proc, port) {
   ]);
 }
 
+test("host-managed foreground runtime records and safely stops its verified PID", async () => {
+  execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
+  const port = await freePort();
+  const connectorHome = await mkdtemp(join(tmpdir(), "codex-host-managed-"));
+  const env = {
+    ...process.env,
+    BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+  };
+  const proc = spawn(cli, [
+    "start",
+    "--port",
+    String(port),
+    "--codex-binary",
+    process.execPath,
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env,
+  });
+
+  try {
+    await waitForHealth(port);
+    const recordedPid = Number(
+      (await readFile(join(connectorHome, "connector.pid"), "utf8")).trim(),
+    );
+    assert.equal(recordedPid, proc.pid);
+
+    const stopped = JSON.parse(execFileSync(cli, [
+      "stop",
+      "--port",
+      String(port),
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      env,
+    }));
+    assert.equal(stopped.ok, true);
+    assert.equal(stopped.stopped, true);
+    assert.equal(stopped.pid, proc.pid);
+
+    if (proc.exitCode === null && proc.signalCode === null) {
+      await Promise.race([
+        once(proc, "exit"),
+        delay(2000).then(() => {
+          throw new Error("verified connector process did not exit");
+        }),
+      ]);
+    }
+  } finally {
+    await stopConnector(proc, port);
+    await rm(connectorHome, { recursive: true, force: true });
+  }
+});
+
 test("rust connector forwards Codex app-server calls", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const port = await freePort();

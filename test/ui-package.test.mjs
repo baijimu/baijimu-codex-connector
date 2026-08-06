@@ -25,6 +25,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.ok(manifest.events.some((event) => event.name === "codexNotification"));
   assert.equal(manifest.services, undefined);
   assert.equal(manifest.serviceRegistrationFiles, undefined);
+  assert.deepEqual(manifest.runtime.args, ["start"]);
+  assert.deepEqual(manifest.runtime.stopArgs, ["stop"]);
+  assert.equal(manifest.runtime.processOwnership, "host");
   assert.deepEqual(manifest.ui, {
     type: "embedded",
     entry: "ui/index.html",
@@ -48,7 +51,8 @@ test("connector manifest declares the packaged embedded UI", async () => {
   ]);
   assert.equal(manifest.setup, undefined);
   assert.deepEqual(manifest.hostRequirements, {
-    minimumVersion: "0.2.21",
+    minimumVersion: "0.2.40",
+    capabilities: ["connector.process.host-managed.v1"],
   });
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
   assert.match(html, /src="\.\/app\.js"/);

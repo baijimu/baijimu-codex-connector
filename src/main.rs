@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -31,6 +31,8 @@ const DEFAULT_PROJECT_THREAD_MAX_PAGES: usize = 100;
 const DEFAULT_THREAD_SORT_KEY: &str = "updated_at";
 const DEFAULT_THREAD_SORT_DIRECTION: &str = "desc";
 const MANAGEMENT_TOKEN_FILE: &str = "management-token";
+const CONNECTOR_HEALTH_IO_TIMEOUT: Duration = Duration::from_secs(1);
+const CONNECTOR_HEALTH_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug)]
 struct ServerOptions {
@@ -607,19 +609,18 @@ fn run(args: Vec<String>) -> Result<(), String> {
             Ok(())
         }
         "stop" => {
-            let pid_file = pid_path();
-            let Ok(pid) = fs::read_to_string(&pid_file) else {
+            let options = server_options(&parsed)?;
+            let Ok(health) = connector_health(&options) else {
                 println!(
                     "{}",
-                    json!({"ok": true, "stopped": false, "reason": "pid file not found"})
+                    json!({"ok": true, "stopped": false, "reason": "healthy connector process not found"})
                 );
                 return Ok(());
             };
-            terminate_process(pid.trim());
-            println!(
-                "{}",
-                json!({"ok": true, "stopped": true, "pid": pid.trim().parse::<u64>().ok()})
-            );
+            let pid = verified_connector_pid(&health)?;
+            terminate_process(pid)?;
+            let _ = fs::remove_file(pid_path());
+            println!("{}", json!({"ok": true, "stopped": true, "pid": pid}));
             Ok(())
         }
         "credential-state" => {
@@ -769,6 +770,8 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
     let management_token = load_or_create_management_token()?;
     let listener = TcpListener::bind((options.host.as_str(), options.port))
         .map_err(|error| error.to_string())?;
+    fs::write(pid_path(), format!("{}\n", std::process::id()))
+        .map_err(|error| format!("failed to record connector process id: {error}"))?;
     println!(
         "{}",
         json!({"ok": true, "url": format!("http://{}:{}", options.host, options.port), "pid": std::process::id()})
@@ -1963,21 +1966,68 @@ fn configure_detached_process(command: &mut Command) {
 }
 
 fn connector_health(options: &ServerOptions) -> Result<Value, String> {
-    let mut stream = TcpStream::connect((options.host.as_str(), options.port))
+    let addresses = (options.host.as_str(), options.port)
+        .to_socket_addrs()
+        .map_err(|error| format!("failed to resolve connector health address: {error}"))?;
+    let mut stream = None;
+    let mut last_connect_error = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, CONNECTOR_HEALTH_IO_TIMEOUT) {
+            Ok(connected) => {
+                stream = Some(connected);
+                break;
+            }
+            Err(error) => last_connect_error = Some(error),
+        }
+    }
+    let mut stream = stream.ok_or_else(|| {
+        last_connect_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| {
+                "connector health address resolved to no socket addresses".to_string()
+            })
+    })?;
+    stream
+        .set_read_timeout(Some(CONNECTOR_HEALTH_IO_TIMEOUT))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(Some(CONNECTOR_HEALTH_IO_TIMEOUT))
         .map_err(|error| error.to_string())?;
     stream
         .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
         .map_err(|error| error.to_string())?;
     let mut response = Vec::new();
-    stream
+    (&mut stream)
+        .take(CONNECTOR_HEALTH_MAX_RESPONSE_BYTES + 1)
         .read_to_end(&mut response)
         .map_err(|error| error.to_string())?;
+    if response.len() as u64 > CONNECTOR_HEALTH_MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "connector health response exceeds {} bytes",
+            CONNECTOR_HEALTH_MAX_RESPONSE_BYTES
+        ));
+    }
     let text = String::from_utf8_lossy(&response);
     if !(text.starts_with("HTTP/1.1 200") || text.starts_with("HTTP/1.0 200")) {
         return Err(text.to_string());
     }
     let body = text.split("\r\n\r\n").nth(1).unwrap_or_default();
     serde_json::from_str(body).map_err(|error| error.to_string())
+}
+
+fn verified_connector_pid(health: &Value) -> Result<u32, String> {
+    if health
+        .pointer("/status/connector/name")
+        .and_then(Value::as_str)
+        != Some("@baijimu/connector-codex")
+    {
+        return Err("health endpoint does not belong to the Codex connector".to_string());
+    }
+    health
+        .pointer("/status/connector/pid")
+        .and_then(Value::as_u64)
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or_else(|| "connector health response does not contain a valid pid".to_string())
 }
 
 fn wait_for_connector_health(
@@ -2101,14 +2151,22 @@ fn to_camel_case(value: &str) -> String {
     out
 }
 
-fn terminate_process(pid: &str) {
-    if cfg!(target_os = "windows") {
-        let _ = Command::new("taskkill")
-            .args(["/PID", pid, "/T", "/F"])
-            .status();
+fn terminate_process(pid: u32) -> Result<(), String> {
+    let pid = pid.to_string();
+    let status = if cfg!(target_os = "windows") {
+        Command::new("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .status()
     } else {
-        let _ = Command::new("kill").args(["-TERM", pid]).status();
+        Command::new("kill").args(["-TERM", &pid]).status()
     }
+    .map_err(|error| format!("failed to stop connector process {pid}: {error}"))?;
+    if !status.success() {
+        return Err(format!(
+            "failed to stop connector process {pid}: command exited with {status}"
+        ));
+    }
+    Ok(())
 }
 
 fn to_kebab_case(value: &str) -> String {
@@ -2133,6 +2191,112 @@ fn print_help() {
 #[cfg(test)]
 mod project_state_tests {
     use super::*;
+
+    fn health_options(port: u16) -> ServerOptions {
+        ServerOptions {
+            host: DEFAULT_HOST.to_string(),
+            port,
+            codex_binary: DEFAULT_CODEX_BINARY.to_string(),
+            listen: DEFAULT_LISTEN.to_string(),
+            extra_args: Vec::new(),
+            request_timeout_ms: DEFAULT_REQUEST_TIMEOUT_MS,
+            daemon: false,
+        }
+    }
+
+    #[test]
+    fn connector_health_accepts_a_bounded_healthy_response() {
+        let listener = TcpListener::bind((DEFAULT_HOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            stream.read(&mut request).unwrap();
+            let body = r#"{"ok":true,"status":{"connector":{"pid":7}}}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+
+        let health = connector_health(&health_options(port)).unwrap();
+
+        server.join().unwrap();
+        assert_eq!(health["ok"], true);
+        assert_eq!(health.pointer("/status/connector/pid"), Some(&json!(7)));
+    }
+
+    #[test]
+    fn connector_health_read_has_a_hard_timeout() {
+        let listener = TcpListener::bind((DEFAULT_HOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_secs(3));
+        });
+        let started_at = Instant::now();
+
+        let error = connector_health(&health_options(port)).unwrap_err();
+
+        assert!(!error.is_empty());
+        assert!(
+            started_at.elapsed() < Duration::from_secs(2),
+            "health probe waited beyond its configured I/O timeout"
+        );
+    }
+
+    #[test]
+    fn connector_health_rejects_an_oversized_response() {
+        let listener = TcpListener::bind((DEFAULT_HOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            stream
+                .write_all(&vec![
+                    b'x';
+                    CONNECTOR_HEALTH_MAX_RESPONSE_BYTES as usize + 1
+                ])
+                .unwrap();
+        });
+
+        let error = connector_health(&health_options(port)).unwrap_err();
+
+        server.join().unwrap();
+        assert!(error.contains("response exceeds"), "{error}");
+    }
+
+    #[test]
+    fn connector_stop_pid_requires_the_codex_health_identity() {
+        let valid = json!({
+            "status": {
+                "connector": {
+                    "name": "@baijimu/connector-codex",
+                    "pid": 42
+                }
+            }
+        });
+        assert_eq!(verified_connector_pid(&valid).unwrap(), 42);
+
+        let unrelated = json!({
+            "status": {
+                "connector": {
+                    "name": "another-service",
+                    "pid": 42
+                }
+            }
+        });
+        assert!(verified_connector_pid(&unrelated)
+            .unwrap_err()
+            .contains("does not belong"));
+    }
 
     #[test]
     fn resolves_current_project_ids_and_keeps_legacy_paths() {
