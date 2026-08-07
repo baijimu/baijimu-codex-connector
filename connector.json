@@ -2,16 +2,16 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.13",
+  "version": "1.2.14",
   "description": "Initialize and configure Codex, point the user-level CODEX_HOME at an isolated Baijimu workspace or restore its original value, and manage local Codex sessions.",
   "publisher": {
     "name": "Baijimu",
     "homepage": "https://baijimu.com"
   },
   "source": {
-    "type": "gitee",
-    "repo": "zxflimit_admin/baijimu-connector-codex",
-    "revision": "v1.2.13"
+    "type": "github",
+    "repo": "momoplan/baijimu-connector-codex",
+    "revision": "v1.2.14"
   },
   "runtime": {
     "type": "process",

@@ -29,7 +29,7 @@ bridge-agent connector start com.baijimu.connector.codex
 Or install the tagged package from a Git remote first:
 
 ```bash
-git clone https://gitee.com/zxflimit_admin/baijimu-connector-codex.git
+git clone https://github.com/momoplan/baijimu-connector-codex.git
 bridge-agent connector install /path/to/baijimu-connector-codex --replace
 ```
 
@@ -115,3 +115,12 @@ npm run test:rust
 
 The integration tests use a fake app-server process and do not require Codex
 credentials.
+
+## Release
+
+This repository is the source of truth for Codex local-app releases. A single
+GitHub Actions workflow validates and builds the exact tagged commit, signs the
+macOS and Windows binaries, publishes the three platform archives to GitHub and
+content-addressed Baijimu OSS paths, creates the immutable local-app market
+version, submits it for review, and verifies the resulting publication. Formal
+releases use one tag only: `v<version>`.
