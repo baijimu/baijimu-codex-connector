@@ -52,14 +52,17 @@ async function postManagementJson(port, token, path, body = {}) {
 }
 
 async function waitForHealth(port) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/healthz`);
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
+        signal: AbortSignal.timeout(1_000),
+      });
       if (response.ok) return;
     } catch {
       // Keep polling until the server is ready.
     }
-    await delay(50);
+    await delay(100);
   }
   throw new Error("connector did not become healthy");
 }
@@ -242,8 +245,6 @@ test("rust connector finds the installer-managed Codex binary without a GUI PATH
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    "codex",
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -265,13 +266,14 @@ test("rust connector finds the installer-managed Codex binary without a GUI PATH
     assert.equal(threads.data.result.data[0].id, "thr_listed");
 
     const status = await postJson(port, "/invoke/status");
-    assert.equal(status.data.appServer.requestedCodexBinary, "codex");
+    assert.equal(status.data.appServer.requestedCodexBinary, null);
     assert.equal(status.data.appServer.codexBinary, installedCodex);
     assert.equal(status.data.appServer.codexBinaryResolution.resolved, installedCodex);
     assert.equal(
       status.data.appServer.codexBinaryResolution.source,
-      "connector_known_location",
+      "official_user_install",
     );
+    assert.equal(status.data.appServer.codexBinaryResolution.mode, "auto");
     assert.equal(status.data.appServer.codexBinaryResolution.error, null);
   } finally {
     await stopConnector(proc, port);

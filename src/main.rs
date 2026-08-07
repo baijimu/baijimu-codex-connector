@@ -21,7 +21,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 18110;
-const DEFAULT_CODEX_BINARY: &str = "codex";
 const DEFAULT_LISTEN: &str = "stdio://";
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const MAX_EVENTS: usize = 1000;
@@ -38,7 +37,7 @@ const CONNECTOR_HEALTH_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
 struct ServerOptions {
     host: String,
     port: u16,
-    codex_binary: String,
+    codex_binary: Option<String>,
     listen: String,
     extra_args: Vec<String>,
     request_timeout_ms: u64,
@@ -67,6 +66,7 @@ struct CodexClient {
     last_exit: Option<Value>,
     codex_binary_resolution: Option<codex_binary::Resolution>,
     codex_binary_error: Option<codex_binary::ResolutionError>,
+    codex_cli_inspection: Option<codex_binary::CliInspection>,
     event_publisher: Option<EventPublisher>,
 }
 
@@ -108,6 +108,7 @@ impl CodexClient {
             last_exit: None,
             codex_binary_resolution: None,
             codex_binary_error: None,
+            codex_cli_inspection: None,
             event_publisher,
         };
         client.refresh_codex_binary_resolution();
@@ -115,12 +116,13 @@ impl CodexClient {
     }
 
     fn refresh_codex_binary_resolution(&mut self) {
-        match codex_binary::resolve(&self.options.codex_binary) {
+        match codex_binary::resolve(self.options.codex_binary.as_deref()) {
             Ok(resolution) => {
                 self.codex_binary_resolution = Some(resolution);
                 self.codex_binary_error = None;
             }
             Err(error) => {
+                self.codex_cli_inspection = None;
                 self.codex_binary_resolution = None;
                 self.codex_binary_error = Some(error);
             }
@@ -149,15 +151,19 @@ impl CodexClient {
             None => (false, None),
         };
         let binary_status = if let Some(resolution) = &self.codex_binary_resolution {
-            resolution.status_value()
+            resolution.status_value(self.codex_cli_inspection.as_ref())
         } else if let Some(error) = &self.codex_binary_error {
             error.status_value()
         } else {
             json!({
                 "requested": self.options.codex_binary,
+                "mode": if self.options.codex_binary.is_some() { "advanced_override" } else { "auto" },
                 "resolved": null,
                 "source": null,
                 "checkedPaths": [],
+                "version": null,
+                "appServerSupported": null,
+                "inspectionError": null,
                 "error": null,
             })
         };
@@ -165,7 +171,7 @@ impl CodexClient {
             .codex_binary_resolution
             .as_ref()
             .map(|resolution| resolution.path.display().to_string())
-            .unwrap_or_else(|| self.options.codex_binary.clone());
+            .unwrap_or_default();
         json!({
             "connector": {
                 "name": "@baijimu/connector-codex",
@@ -220,13 +226,14 @@ impl CodexClient {
     }
 
     fn start_process(&mut self) -> Result<(), HttpError> {
-        let resolution = match codex_binary::resolve(&self.options.codex_binary) {
+        let resolution = match codex_binary::resolve(self.options.codex_binary.as_deref()) {
             Ok(resolution) => resolution,
             Err(error) => {
                 let message = error.to_string();
                 let data = error.data_value();
                 self.codex_binary_resolution = None;
                 self.codex_binary_error = Some(error);
+                self.codex_cli_inspection = None;
                 return Err(HttpError::coded(
                     500,
                     message,
@@ -236,6 +243,21 @@ impl CodexClient {
             }
         };
         let resolved_binary = resolution.path.clone();
+        let inspection = codex_binary::inspect(&resolution);
+        if self.options.extra_args.is_empty() && !inspection.app_server_supported {
+            let message = inspection.error.clone().unwrap_or_else(|| {
+                "the selected Codex CLI does not support app-server".to_string()
+            });
+            self.codex_cli_inspection = Some(inspection);
+            self.codex_binary_resolution = Some(resolution);
+            return Err(HttpError::coded(
+                500,
+                message.clone(),
+                "CODEX_APP_SERVER_UNSUPPORTED",
+                json!({"resolved": resolved_binary, "error": message}),
+            ));
+        }
+        self.codex_cli_inspection = Some(inspection);
         self.codex_binary_resolution = Some(resolution);
         self.codex_binary_error = None;
         let args = if self.options.extra_args.is_empty() {
@@ -267,6 +289,7 @@ impl CodexClient {
                     reason: error.to_string(),
                 });
                 self.codex_binary_resolution = None;
+                self.codex_cli_inspection = None;
                 return Err(HttpError::coded(
                     500,
                     message,
@@ -732,6 +755,17 @@ fn server_options(parsed: &ParsedArgs) -> Result<ServerOptions, String> {
     } else {
         Vec::new()
     };
+    let configured_codex_binary = value("codexBinary")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            env::var("CODEX_CONNECTOR_CODEX_BINARY")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
+    let codex_binary = normalize_codex_binary_override(configured_codex_binary)?;
     Ok(ServerOptions {
         host: value("host")
             .map(str::to_string)
@@ -745,10 +779,7 @@ fn server_options(parsed: &ParsedArgs) -> Result<ServerOptions, String> {
                     .and_then(|value| value.parse().ok())
             })
             .unwrap_or(DEFAULT_PORT),
-        codex_binary: value("codexBinary")
-            .map(str::to_string)
-            .or_else(|| env::var("CODEX_CONNECTOR_CODEX_BINARY").ok())
-            .unwrap_or_else(|| DEFAULT_CODEX_BINARY.to_string()),
+        codex_binary,
         listen: value("listen")
             .map(str::to_string)
             .or_else(|| env::var("CODEX_CONNECTOR_LISTEN").ok())
@@ -764,6 +795,30 @@ fn server_options(parsed: &ParsedArgs) -> Result<ServerOptions, String> {
         daemon: parsed.flags.get("daemon").and_then(Value::as_bool) == Some(true),
         extra_args,
     })
+}
+
+fn normalize_codex_binary_override(value: Option<String>) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.eq_ignore_ascii_case("codex") {
+        return Ok(None);
+    }
+    let normalized = value.replace('\\', "/").to_ascii_lowercase();
+    let legacy_desktop_internal = normalized.contains("/windowsapps/")
+        || normalized.ends_with("/app/resources/codex.exe")
+        || normalized.ends_with(".app/contents/resources/codex")
+        || normalized.contains("/baijimu-appserver-login/codex.exe");
+    if legacy_desktop_internal {
+        return Ok(None);
+    }
+    if !Path::new(&value).is_absolute() {
+        return Err(
+            "--codex-binary and CODEX_CONNECTOR_CODEX_BINARY are advanced overrides and must be absolute paths"
+                .to_string(),
+        );
+    }
+    Ok(Some(value))
 }
 
 fn start_server(options: ServerOptions) -> Result<(), String> {
@@ -902,10 +957,24 @@ fn handle_management(
                 .and_then(Value::as_u64)
                 .filter(|value| *value > 0)
                 .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?;
+            let codex_cli = {
+                let mut client = state
+                    .client
+                    .lock()
+                    .map_err(|_| HttpError::internal("client lock poisoned"))?;
+                client.shutdown();
+                match codex_binary::resolve(client.options.codex_binary.as_deref()) {
+                    Ok(resolution) => Some(resolution.path),
+                    Err(error) if client.options.codex_binary.is_some() => {
+                        return Err(HttpError::new(409, error.to_string()));
+                    }
+                    Err(_) => None,
+                }
+            };
             serde_json::to_value(
                 state
                     .setup
-                    .start(workspace_id)
+                    .start(workspace_id, codex_cli)
                     .map_err(|error| HttpError::new(409, error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))
@@ -1911,11 +1980,13 @@ fn daemonize(options: &ServerOptions) -> Result<(), String> {
         options.host.clone(),
         "--port".to_string(),
         options.port.to_string(),
-        "--codex-binary".to_string(),
-        options.codex_binary.clone(),
         "--listen".to_string(),
         options.listen.clone(),
     ];
+    if let Some(codex_binary) = &options.codex_binary {
+        args.push("--codex-binary".to_string());
+        args.push(codex_binary.clone());
+    }
     if !options.extra_args.is_empty() {
         args.push("--codex-args".to_string());
         args.push(serde_json::to_string(&options.extra_args).map_err(|error| error.to_string())?);
@@ -2184,7 +2255,7 @@ fn to_kebab_case(value: &str) -> String {
 
 fn print_help() {
     println!(
-        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex credential-state\n  baijimu-connector-codex checkout-project --workspace-id <id> --project-id <id> [--branch <name>]\n  baijimu-connector-codex --version"
+        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary /absolute/path/to/codex] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex credential-state\n  baijimu-connector-codex checkout-project --workspace-id <id> --project-id <id> [--branch <name>]\n  baijimu-connector-codex --version"
     );
 }
 
@@ -2192,11 +2263,38 @@ fn print_help() {
 mod project_state_tests {
     use super::*;
 
+    #[test]
+    fn legacy_codex_binary_values_migrate_to_auto_discovery() {
+        for value in [
+            "codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            r"C:\Program Files\WindowsApps\OpenAI.Codex_1\app\resources\codex.exe",
+            r"C:\Users\me\AppData\Local\OpenAI\Codex\bin\baijimu-appserver-login\codex.exe",
+        ] {
+            assert_eq!(
+                normalize_codex_binary_override(Some(value.to_string())).expect("normalize"),
+                None,
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_codex_binary_requires_a_non_internal_absolute_path() {
+        assert!(normalize_codex_binary_override(Some("custom-codex".to_string())).is_err());
+        let absolute = env::temp_dir().join("official-codex");
+        assert_eq!(
+            normalize_codex_binary_override(Some(absolute.display().to_string()))
+                .expect("absolute override"),
+            Some(absolute.display().to_string())
+        );
+    }
+
     fn health_options(port: u16) -> ServerOptions {
         ServerOptions {
             host: DEFAULT_HOST.to_string(),
             port,
-            codex_binary: DEFAULT_CODEX_BINARY.to_string(),
+            codex_binary: None,
             listen: DEFAULT_LISTEN.to_string(),
             extra_args: Vec::new(),
             request_timeout_ms: DEFAULT_REQUEST_TIMEOUT_MS,

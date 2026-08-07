@@ -87,7 +87,7 @@ impl SetupManager {
         status
     }
 
-    pub fn start(&self, workspace_id: u64) -> Result<SetupStatus> {
+    pub fn start(&self, workspace_id: u64, codex_cli: Option<PathBuf>) -> Result<SetupStatus> {
         if workspace_id == 0 {
             anyhow::bail!("workspaceId must be a positive integer");
         }
@@ -123,7 +123,7 @@ impl SetupManager {
 
         let manager = self.clone();
         thread::spawn(move || {
-            let completed = match run_install(workspace_id) {
+            let completed = match run_install(workspace_id, codex_cli.as_deref()) {
                 Ok(()) => SetupStatus {
                     status: "succeeded".to_string(),
                     workspace_id: Some(workspace_id),
@@ -166,7 +166,7 @@ impl SetupManager {
     }
 }
 
-fn run_install(workspace_id: u64) -> Result<()> {
+fn run_install(workspace_id: u64, codex_cli: Option<&Path>) -> Result<()> {
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
@@ -203,6 +203,11 @@ fn run_install(workspace_id: u64) -> Result<()> {
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
+        if let Some(codex_cli) = codex_cli {
+            command.env("CODEX_CLI_BIN", codex_cli);
+        } else {
+            command.env_remove("CODEX_CLI_BIN");
+        }
         let output = command.output().context("启动 Codex 官方安装脚本失败")?;
         let installer_result_path = state_dir.join("result.json");
         let installer_result = read_json(&installer_result_path).with_context(|| {
