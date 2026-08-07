@@ -2211,7 +2211,7 @@ mod project_state_tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0u8; 1024];
-            stream.read(&mut request).unwrap();
+            assert!(stream.read(&mut request).unwrap() > 0);
             let body = r#"{"ok":true,"status":{"connector":{"pid":7}}}"#;
             write!(
                 stream,
@@ -2255,7 +2255,7 @@ mod project_state_tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut request = [0u8; 1024];
-            stream.read(&mut request).unwrap();
+            assert!(stream.read(&mut request).unwrap() > 0);
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
                 .unwrap();

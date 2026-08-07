@@ -93,19 +93,7 @@ impl ResolverContext {
             home: home_dir(),
             local_app_data: env::var_os("LOCALAPPDATA").map(PathBuf::from),
             path: env::var_os("PATH"),
-            path_ext: env::var("PATHEXT")
-                .ok()
-                .map(|value| {
-                    value
-                        .split(';')
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_else(|| {
-                    vec![".EXE".to_string(), ".CMD".to_string(), ".BAT".to_string()]
-                }),
+            path_ext: windows_command_extensions_from(env::var("PATHEXT").ok().as_deref()),
             shell: env::var_os("SHELL").map(PathBuf::from),
         }
     }
@@ -133,26 +121,38 @@ fn resolve_with_context(
     if is_path_like(requested) {
         let path = expand_home(requested, context.home.as_deref());
         checked_paths.push(path.clone());
-        return if is_executable_file(&path) {
-            Ok(Resolution {
-                requested: requested.to_string(),
-                path,
-                source: "explicit_path",
-                checked_paths,
-            })
-        } else {
-            Err(ResolutionError {
-                requested: requested.to_string(),
-                checked_paths,
-                reason: "the explicitly configured path is unavailable".to_string(),
-            })
-        };
+        for candidate in explicit_path_candidates(&path, context) {
+            if !checked_paths.contains(&candidate) {
+                checked_paths.push(candidate.clone());
+            }
+            if is_launchable_file(&candidate, context.platform) {
+                return Ok(Resolution {
+                    requested: requested.to_string(),
+                    path: candidate,
+                    source: "explicit_path",
+                    checked_paths,
+                });
+            }
+        }
+        return Err(ResolutionError {
+            requested: requested.to_string(),
+            checked_paths,
+            reason: if context.platform == Platform::Windows {
+                "the explicitly configured path is unavailable or is not a supported Windows .exe/.com/.bat/.cmd launcher".to_string()
+            } else {
+                "the explicitly configured path is unavailable".to_string()
+            },
+        });
     }
 
     for path in path_candidates(requested, context) {
-        if let Some(resolution) =
-            check_candidate(requested, path, "process_path", &mut checked_paths)
-        {
+        if let Some(resolution) = check_candidate(
+            requested,
+            path,
+            "process_path",
+            context.platform,
+            &mut checked_paths,
+        ) {
             return Ok(resolution);
         }
     }
@@ -163,6 +163,7 @@ fn resolve_with_context(
                 requested,
                 path,
                 "connector_known_location",
+                context.platform,
                 &mut checked_paths,
             ) {
                 return Ok(resolution);
@@ -172,9 +173,13 @@ fn resolve_with_context(
 
     if search_login_environment {
         if let Some(path) = resolve_from_login_environment(requested, context) {
-            if let Some(resolution) =
-                check_candidate(requested, path, "login_environment", &mut checked_paths)
-            {
+            if let Some(resolution) = check_candidate(
+                requested,
+                path,
+                "login_environment",
+                context.platform,
+                &mut checked_paths,
+            ) {
                 return Ok(resolution);
             }
         }
@@ -191,17 +196,35 @@ fn check_candidate(
     requested: &str,
     path: PathBuf,
     source: &'static str,
+    platform: Platform,
     checked_paths: &mut Vec<PathBuf>,
 ) -> Option<Resolution> {
     if !checked_paths.contains(&path) {
         checked_paths.push(path.clone());
     }
-    is_executable_file(&path).then(|| Resolution {
+    is_launchable_file(&path, platform).then(|| Resolution {
         requested: requested.to_string(),
         path,
         source,
         checked_paths: checked_paths.clone(),
     })
+}
+
+fn explicit_path_candidates(path: &Path, context: &ResolverContext) -> Vec<PathBuf> {
+    if context.platform != Platform::Windows || path.extension().is_some() {
+        return vec![path.to_path_buf()];
+    }
+    context
+        .path_ext
+        .iter()
+        .map(|extension| append_extension(path, extension))
+        .collect()
+}
+
+fn append_extension(path: &Path, extension: &str) -> PathBuf {
+    let mut candidate = path.as_os_str().to_os_string();
+    candidate.push(extension);
+    PathBuf::from(candidate)
 }
 
 fn path_candidates(requested: &str, context: &ResolverContext) -> Vec<PathBuf> {
@@ -354,7 +377,9 @@ fn first_output_path(stdout: &[u8]) -> PathBuf {
 }
 
 fn is_codex_command(requested: &str) -> bool {
-    requested.eq_ignore_ascii_case("codex") || requested.eq_ignore_ascii_case("codex.exe")
+    ["codex", "codex.com", "codex.exe", "codex.bat", "codex.cmd"]
+        .iter()
+        .any(|candidate| requested.eq_ignore_ascii_case(candidate))
 }
 
 fn is_path_like(requested: &str) -> bool {
@@ -396,6 +421,49 @@ fn is_executable_file(path: &Path) -> bool {
     {
         true
     }
+}
+
+fn is_launchable_file(path: &Path, platform: Platform) -> bool {
+    if platform == Platform::Windows && !has_supported_windows_extension(path) {
+        return false;
+    }
+    is_executable_file(path)
+}
+
+fn has_supported_windows_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["com", "exe", "bat", "cmd"]
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(extension))
+        })
+}
+
+fn windows_command_extensions_from(value: Option<&str>) -> Vec<String> {
+    const SUPPORTED: [&str; 4] = [".COM", ".EXE", ".BAT", ".CMD"];
+    let mut extensions = Vec::new();
+    for extension in value
+        .into_iter()
+        .flat_map(|value| value.split(';'))
+        .map(str::trim)
+        .filter(|value| {
+            SUPPORTED
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(value))
+        })
+    {
+        if !extensions
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(extension))
+        {
+            extensions.push(extension.to_string());
+        }
+    }
+    if extensions.is_empty() {
+        extensions = SUPPORTED.iter().map(|value| (*value).to_string()).collect();
+    }
+    extensions
 }
 
 fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -467,6 +535,17 @@ mod tests {
         }
     }
 
+    fn windows_context(home: &Path, path: OsString) -> ResolverContext {
+        ResolverContext {
+            platform: Platform::Windows,
+            home: Some(home.to_path_buf()),
+            local_app_data: None,
+            path: Some(path),
+            path_ext: vec![".exe".to_string(), ".cmd".to_string()],
+            shell: None,
+        }
+    }
+
     #[test]
     fn finds_installer_managed_user_binary_without_process_path() {
         let root = test_root("user-bin");
@@ -519,6 +598,95 @@ mod tests {
 
         assert_eq!(resolution.path, binary);
         assert_eq!(resolution.source, "connector_known_location");
+        fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn windows_path_ignores_extensionless_npm_shim_and_selects_cmd() {
+        let root = test_root("windows-path-cmd");
+        let bin = root.join("bin");
+        executable(&bin.join("codex"));
+        let launcher = bin.join("codex.cmd");
+        executable(&launcher);
+
+        let resolution = resolve_with_context(
+            "codex",
+            &windows_context(&root, env::join_paths([&bin]).expect("join PATH")),
+            false,
+        )
+        .expect("resolve Windows cmd launcher");
+
+        assert_eq!(resolution.path, launcher);
+        assert_eq!(resolution.source, "process_path");
+        fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn windows_explicit_extensionless_bridge_path_selects_sibling_cmd() {
+        let root = test_root("windows-explicit-cmd");
+        let shim = root.join("workbuddy/codex");
+        executable(&shim);
+        let launcher = root.join("workbuddy/codex.cmd");
+        executable(&launcher);
+
+        let resolution = resolve_with_context(
+            shim.to_str().expect("utf-8 path"),
+            &windows_context(&root, OsString::new()),
+            false,
+        )
+        .expect("repair old Bridge Agent extensionless path");
+
+        assert_eq!(resolution.path, launcher);
+        assert_eq!(resolution.source, "explicit_path");
+        assert!(resolution.checked_paths.contains(&shim));
+        fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn windows_explicit_extensionless_file_without_launcher_is_rejected() {
+        let root = test_root("windows-explicit-reject");
+        let shim = root.join("workbuddy/codex");
+        executable(&shim);
+
+        let error = resolve_with_context(
+            shim.to_str().expect("utf-8 path"),
+            &windows_context(&root, OsString::new()),
+            false,
+        )
+        .expect_err("extensionless Unix shim must not be launched on Windows");
+
+        assert!(error.reason.contains("supported Windows"));
+        assert!(error.checked_paths.contains(&shim));
+        fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn windows_command_extensions_exclude_non_native_script_types() {
+        assert_eq!(
+            windows_command_extensions_from(Some(".JS;.CMD;.cmd;.EXE;.PS1")),
+            vec![".CMD".to_string(), ".EXE".to_string()]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolved_windows_cmd_launcher_can_be_spawned() {
+        let root = test_root("windows-cmd-spawn");
+        let launcher = root.join("codex.cmd");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(&launcher, b"@echo off\r\necho %1\r\n").expect("write cmd launcher");
+        let context = windows_context(&root, OsString::new());
+
+        let resolution =
+            resolve_with_context(launcher.to_str().expect("utf-8 path"), &context, false)
+                .expect("resolve cmd launcher");
+        let output = Command::new(&resolution.path)
+            .arg("app-server")
+            .output()
+            .expect("spawn cmd launcher");
+
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "app-server");
         fs::remove_dir_all(root).expect("remove test root");
     }
 
