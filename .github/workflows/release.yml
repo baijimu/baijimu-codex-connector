@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_ref:
-        description: "Tag to repair, or main for a non-publishing rehearsal"
+        description: "Tag to repair or verify, or main for a non-publishing rehearsal"
         required: true
         default: "main"
         type: string
@@ -37,6 +37,7 @@ jobs:
       ref: ${{ steps.release.outputs.ref }}
       sha: ${{ steps.release.outputs.sha }}
       tag: ${{ steps.release.outputs.tag }}
+      verify: ${{ steps.release.outputs.verify }}
       version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out the requested source
@@ -50,6 +51,7 @@ jobs:
         id: release
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_REF: ${{ github.event_name == 'push' && github.ref_name || inputs.release_ref }}
           PUBLISH_REQUESTED: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
@@ -66,18 +68,42 @@ jobs:
           sha="$(git rev-parse HEAD)"
           publish=false
           tag="v$version"
+          verify=false
           if [ "$PUBLISH_REQUESTED" = "true" ]; then
             publish=true
             test "$RELEASE_REF" = "$tag"
             test "$(git rev-list -n 1 "$tag")" = "$sha"
             git fetch --no-tags origin main
-            test "$(git rev-parse origin/main)" = "$sha"
+            if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              test "$(git rev-parse origin/main)" = "$sha"
+            else
+              git merge-base --is-ancestor "$sha" origin/main
+              release_json=""
+              release_error="$RUNNER_TEMP/release-view-error"
+              for attempt in 1 2 3 4 5; do
+                if release_json="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName 2>"$release_error")"; then
+                  break
+                fi
+                if grep -Eqi 'release not found|HTTP 404' "$release_error"; then
+                  break
+                fi
+                test "$attempt" != 5 || { cat "$release_error" >&2; exit 1; }
+                sleep "$attempt"
+              done
+              if [ -n "$release_json" ]; then
+                test "$(printf '%s' "$release_json" | jq -r .tagName)" = "$tag"
+                if [ "$(printf '%s' "$release_json" | jq -r .isDraft)" = "false" ]; then
+                  verify=true
+                fi
+              fi
+            fi
           fi
           {
             echo "publish=$publish"
             echo "ref=$RELEASE_REF"
             echo "sha=$sha"
             echo "tag=$tag"
+            echo "verify=$verify"
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
 
@@ -90,6 +116,7 @@ jobs:
           npm test
 
   build:
+    if: needs.validate.outputs.verify != 'true'
     needs: validate
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -260,7 +287,7 @@ jobs:
           retention-days: 7
 
   prepare-release:
-    if: needs.validate.outputs.publish == 'true'
+    if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.verify != 'true'
     needs: [validate, build]
     runs-on: ubuntu-22.04
     permissions:
@@ -311,7 +338,7 @@ jobs:
           done
 
   publish-oss:
-    if: needs.validate.outputs.publish == 'true'
+    if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.verify != 'true'
     needs: [validate, build, prepare-release]
     runs-on: ubuntu-22.04
     permissions:
@@ -413,7 +440,7 @@ jobs:
           retention-days: 7
 
   publish-release:
-    if: needs.validate.outputs.publish == 'true'
+    if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.verify != 'true'
     needs: [validate, publish-oss]
     runs-on: ubuntu-22.04
     permissions:
@@ -432,7 +459,7 @@ jobs:
           fi
 
   publish-market:
-    if: needs.validate.outputs.publish == 'true'
+    if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.verify != 'true'
     needs: [validate, publish-oss, publish-release]
     runs-on: ubuntu-22.04
     steps:
@@ -514,3 +541,122 @@ jobs:
               exit 1
               ;;
           esac
+
+  verify-published:
+    if: needs.validate.outputs.verify == 'true'
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+
+      - name: Download and verify published release and OSS artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/published-release"
+          mkdir -p "$release_dir"
+          release_json="$RUNNER_TEMP/published-release.json"
+          for attempt in 1 2 3 4 5; do
+            if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName,assets > "$release_json"; then
+              break
+            fi
+            test "$attempt" != 5
+            sleep "$attempt"
+          done
+          jq -e --arg version "$VERSION" '
+              (.isDraft == false) and
+              (.tagName == ("v" + $version)) and
+              ([.assets[].name] | sort) == ([
+                "baijimu-codex-local-app-" + $version + "-linux-x64.zip",
+                "baijimu-codex-local-app-" + $version + "-linux-x64.zip.sha256",
+                "baijimu-codex-local-app-" + $version + "-macos-universal.zip",
+                "baijimu-codex-local-app-" + $version + "-macos-universal.zip.sha256",
+                "baijimu-codex-local-app-" + $version + "-oss-manifest.json",
+                "baijimu-codex-local-app-" + $version + "-windows-x64.zip",
+                "baijimu-codex-local-app-" + $version + "-windows-x64.zip.sha256"
+              ] | sort)' "$release_json" >/dev/null
+          jq -r '.assets[] | [.name, .url] | @tsv' "$release_json" | while IFS=$'\t' read -r name url; do
+            curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 "$url" -o "$release_dir/$name"
+          done
+          for checksum_file in "$release_dir"/*.zip.sha256; do
+            (cd "$release_dir" && sha256sum -c "$(basename "$checksum_file")")
+          done
+          oss_manifest="$release_dir/baijimu-codex-local-app-${VERSION}-oss-manifest.json"
+          jq -e --arg version "$VERSION" '
+            .schemaVersion == "1.0" and
+            .applicationId == "codex" and
+            .connectorId == "com.baijimu.connector.codex" and
+            .releaseTag == ("v" + $version) and
+            .version == $version and
+            (.artifacts | length) == 3' "$oss_manifest" >/dev/null
+          jq -c '.artifacts[]' "$oss_manifest" | while IFS= read -r artifact; do
+            platform="$(printf '%s' "$artifact" | jq -r .platform)"
+            source="$(printf '%s' "$artifact" | jq -r .source)"
+            expected="$(printf '%s' "$artifact" | jq -r '.checksum | sub("^sha256:"; "")')"
+            curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 "$source" -o "$RUNNER_TEMP/oss-$platform.zip"
+            test "$(sha256sum "$RUNNER_TEMP/oss-$platform.zip" | awk '{print $1}')" = "$expected"
+          done
+
+      - name: Install pinned official Baijimu CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/baijimu-cli.zip"
+          curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
+            "https://github.com/momoplan/bridge-agent/releases/download/baijimu-cli-v${BAIJIMU_CLI_VERSION}/baijimu-cli-${BAIJIMU_CLI_VERSION}-linux-x64.zip" \
+            -o "$archive"
+          printf '%s  %s\n' "$BAIJIMU_CLI_LINUX_SHA256" "$archive" | sha256sum -c -
+          unzip -q "$archive" -d "$RUNNER_TEMP/baijimu-cli"
+          test "$("$RUNNER_TEMP/baijimu-cli/bin/baijimu" --version)" = "$BAIJIMU_CLI_VERSION"
+
+      - name: Verify immutable market version and public compatibility
+        shell: bash
+        env:
+          BAIJIMU_CLI: ${{ runner.temp }}/baijimu-cli/bin/baijimu
+          LOCAL_APP_MARKET_PUBLISH_TOKEN: ${{ secrets.LOCAL_APP_MARKET_PUBLISH_TOKEN }}
+          MARKET_PUBLICATION_STATUS_FILE: ${{ runner.temp }}/publication-status
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$LOCAL_APP_MARKET_PUBLISH_TOKEN"
+          oss_manifest="$RUNNER_TEMP/published-release/baijimu-codex-local-app-${VERSION}-oss-manifest.json"
+          tools/release/publish-market.sh "$VERSION" connector.json "$oss_manifest"
+          test "$(cat "$MARKET_PUBLICATION_STATUS_FILE")" = "PUBLISHED"
+          for platform_and_arch in 'macos aarch64' 'windows x86_64' 'linux x86_64'; do
+            read -r platform arch <<< "$platform_and_arch"
+            response="$RUNNER_TEMP/market-$platform.json"
+            curl -fsSLG --retry 5 --retry-all-errors --retry-delay 3 \
+              'https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex' \
+              --data-urlencode "platform=$platform" \
+              --data-urlencode "arch=$arch" \
+              --data-urlencode 'hostVersion=0.2.40' \
+              --data-urlencode 'hostCapabilities=connector.setup.v1,connector.process.host-managed.v1' \
+              -o "$response"
+            jq -e --arg version "$VERSION" --arg platform "$platform" --arg arch "$arch" \
+              --slurpfile oss "$oss_manifest" '
+                .latestVersion.version == $version and
+                .latestVersion.repo == "momoplan/baijimu-connector-codex" and
+                .latestVersion.revision == ("v" + $version) and
+                .latestVersion.compatibility.compatible == true and
+                .latestVersion.manifest.source == {
+                  type: "github",
+                  repo: "momoplan/baijimu-connector-codex",
+                  revision: ("v" + $version)
+                } and
+                .latestVersion.manifest.runtime.processOwnership == "host" and
+                .latestVersion.manifest.runtime.args == ["start"] and
+                .latestVersion.manifest.hostRequirements.minimumVersion == "0.2.40" and
+                any(.latestVersion.manifest.artifacts[];
+                  .platform == $platform and
+                  (.arch == $arch or ($platform == "macos" and .arch == "universal")) and
+                  .source == ($oss[0].artifacts[] | select(.platform == $platform) | .source) and
+                  .checksum == ($oss[0].artifacts[] | select(.platform == $platform) | .checksum))' \
+              "$response" >/dev/null
+          done

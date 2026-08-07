@@ -23,6 +23,7 @@ test("connector owns one self-contained GitHub release workflow", async () => {
     "publish-oss",
     "publish-release",
     "publish-market",
+    "verify-published",
   ]) {
     assert.match(workflow, new RegExp(`\\n  ${job}:`));
   }
@@ -45,6 +46,10 @@ test("connector owns one self-contained GitHub release workflow", async () => {
   assert.doesNotMatch(workflow, /gitee\.com|zxflimit_admin/);
   assert.match(workflow, /baijimu-cli-v\$\{BAIJIMU_CLI_VERSION\}/);
   assert.match(workflow, /ea97f240485a2d85bc866d486d2480c71bd22c12d359ad248d2b246ff371499e/);
+  assert.match(workflow, /git merge-base --is-ancestor "\$sha" origin\/main/);
+  assert.match(workflow, /needs\.validate\.outputs\.verify == 'true'/);
+  assert.match(workflow, /published-release\.json/);
+  assert.match(workflow, /\.assets\[\] \| \[\.name, \.url\]/);
 
   for (const action of ["actions/checkout", "actions/upload-artifact", "actions/download-artifact"]) {
     const pattern = new RegExp(`${action.replace("/", "\\/")}@[0-9a-f]{40}`);
