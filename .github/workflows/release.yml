@@ -40,7 +40,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
     steps:
       - name: Check out the requested source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -107,7 +107,7 @@ jobs:
             platform_dir: linux-x86_64
     steps:
       - name: Check out validated source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.sha }}
 
@@ -250,7 +250,7 @@ jobs:
           printf '%s  %s\n' "$checksum" "$(basename "$output")" > "$output.sha256"
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codex-release-${{ matrix.name }}
           path: |
@@ -267,7 +267,7 @@ jobs:
       contents: write
     steps:
       - name: Download signed platform artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: codex-release-*
           path: ${{ runner.temp }}/release-assets
@@ -321,7 +321,7 @@ jobs:
       OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
     steps:
       - name: Download signed platform artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: codex-release-*
           path: ${{ runner.temp }}/release-assets
@@ -405,7 +405,7 @@ jobs:
           fi
 
       - name: Upload OSS manifest for market publication
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: codex-release-oss-manifest
           path: ${{ runner.temp }}/baijimu-codex-local-app-${{ needs.validate.outputs.version }}-oss-manifest.json
@@ -437,12 +437,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out validated source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.sha }}
 
       - name: Download OSS manifest
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: codex-release-oss-manifest
           path: ${{ runner.temp }}/oss-manifest
