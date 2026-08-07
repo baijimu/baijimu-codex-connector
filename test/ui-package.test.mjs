@@ -21,7 +21,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   );
   assert.equal(manifest.schemaVersion, "2.0");
   assert.equal(manifest.version, packageManifest.version);
-  assert.equal(manifest.version, "1.2.12");
+  assert.equal(manifest.version, "1.2.13");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.transport.type, "http");
   assert.ok(manifest.methods.some((method) => method.name === "status"));
@@ -40,6 +40,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.deepEqual(Object.keys(manifest.management.operations).sort(), [
     "checkoutPlatformProject",
     "credentialState",
+    "ensureCodexReady",
     "interruptCodexTurn",
     "listCodexProjects",
     "listCodexSessions",
@@ -73,6 +74,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.doesNotMatch(app, /window\.confirm/);
   assert.match(app, /openAuthSwitchModal/);
   assert.doesNotMatch(app, /请关闭后重新打开/);
+  assert.match(app, /bridge\(\)\.invoke\("ensureCodexReady"/);
+  assert.match(app, /重新安装并修复/);
+  assert.doesNotMatch(app, /Promise\.all\(\[loadSessions\(\), loadState\(\)\]\)/);
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
 });

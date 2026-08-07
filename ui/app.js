@@ -39,6 +39,8 @@ let sessionBusy = false;
 let eventSequence = 0;
 let monitorGeneration = 0;
 let pendingAuthSwitch = null;
+let readinessPromise = null;
+let returnToSessionsAfterSetup = false;
 
 function bridge() {
   const api = window.baijimuLocalApp;
@@ -76,7 +78,7 @@ function switchView(view) {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === view);
   });
-  if (view === "sessions" && sessions.length === 0) void loadSessions();
+  if (view === "sessions" && sessions.length === 0) void prepareSessions();
   if (view === "account" && !credentialState) void loadState();
 }
 
@@ -245,9 +247,8 @@ function renderSetupState() {
   elements["setup-message"].textContent = setupState?.error || setupState?.message || "等待初始化";
   renderSetupProgress();
   setAccountBusy(status === "running");
-  if (status !== "running") {
-    elements["setup-retry-button"].textContent = status === "pending" ? "开始初始化" : "重新初始化";
-  }
+  elements["setup-retry-button"].hidden = status !== "failed";
+  elements["setup-retry-button"].textContent = "重新安装并修复";
 }
 
 function formatBytes(value) {
@@ -316,7 +317,13 @@ async function monitorSetup() {
       setupState = await bridge().invoke("setupState");
       renderSetupState();
       if (setupState?.status === "succeeded") {
-        await loadState("Codex 应用初始化已完成。");
+        await loadState("", { monitor: false });
+        if (returnToSessionsAfterSetup) {
+          returnToSessionsAfterSetup = false;
+          await prepareSessions({ successMessage: "Codex 应用初始化已完成，开发会话已就绪。" });
+        } else {
+          setMessage("message", "Codex 应用初始化已完成。");
+        }
         return;
       }
       if (setupState?.status === "failed") {
@@ -331,7 +338,7 @@ async function monitorSetup() {
   }
 }
 
-async function loadState(successMessage = "") {
+async function loadState(successMessage = "", { monitor = true } = {}) {
   clearNotices();
   setAccountBusy(true);
   try {
@@ -343,7 +350,7 @@ async function loadState(successMessage = "") {
     setupState = setup;
     renderCredentialState();
     renderSetupState();
-    if (setupState?.status === "running") void monitorSetup();
+    if (monitor && setupState?.status === "running") void monitorSetup();
     if (successMessage) setMessage("message", successMessage);
   } catch (error) {
     credentialState = null;
@@ -360,12 +367,75 @@ async function retrySetup() {
   try {
     setupState = await bridge().invoke("setupRetry", { workspaceId });
     renderSetupState();
-    setMessage("message", "已开始在 Codex 应用内执行初始化。");
+    returnToSessionsAfterSetup = true;
+    setMessage("message", "已开始重新安装并修复本机 Codex。");
     void monitorSetup();
   } catch (error) {
     setMessage("error", errorMessage(error));
     setAccountBusy(false);
   }
+}
+
+function setSessionPreparing(message = "正在准备本机 Codex…") {
+  elements["new-session-button"].disabled = true;
+  elements["send-button"].disabled = true;
+  elements["session-cwd"].disabled = true;
+  elements["session-model"].disabled = true;
+  elements["session-status"].textContent = "准备中";
+  elements["session-status"].className = "status-badge warning";
+  elements["session-list"].replaceChildren();
+  const empty = document.createElement("div");
+  empty.className = "empty-state";
+  empty.textContent = message;
+  elements["session-list"].append(empty);
+}
+
+async function runPrepareSessions({ successMessage = "" } = {}) {
+  clearNotices();
+  setSessionPreparing();
+  try {
+    if (!credentialState || !setupState) {
+      await loadState("", { monitor: false });
+    }
+    const readiness = await bridge().invoke("ensureCodexReady", {});
+    setupState = readiness?.setup || setupState;
+    renderSetupState();
+    switch (readiness?.readiness) {
+      case "ready":
+        switchView("sessions");
+        await loadSessions();
+        setSessionBusy(false);
+        if (successMessage) setMessage("message", successMessage);
+        return;
+      case "initializing":
+        returnToSessionsAfterSetup = true;
+        switchView("account");
+        setMessage("message", readiness?.message || "正在自动下载安装并配置本机 Codex。");
+        void monitorSetup();
+        return;
+      case "failed":
+        switchView("account");
+        setMessage("error", readiness?.message || "Codex 初始化失败，请检查失败步骤后重新安装修复。");
+        return;
+      case "needs_workspace":
+        switchView("account");
+        setMessage("error", readiness?.message || "请先完成当前百积木工作区授权。");
+        return;
+      default:
+        throw new Error(readiness?.message || "无法确认本机 Codex 初始化状态。");
+    }
+  } catch (error) {
+    setMessage("error", errorMessage(error));
+    switchView("account");
+  }
+}
+
+function prepareSessions(options = {}) {
+  if (readinessPromise) return readinessPromise;
+  readinessPromise = runPrepareSessions(options).finally(() => {
+    readinessPromise = null;
+  });
+  return readinessPromise;
 }
 
 function renderCodexProjects() {
@@ -602,7 +672,7 @@ async function interruptTurn() {
 }
 
 document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
-elements["refresh-button"].addEventListener("click", () => activeView === "sessions" ? void loadSessions() : void loadState("状态已刷新。"));
+elements["refresh-button"].addEventListener("click", () => activeView === "sessions" ? void prepareSessions() : void loadState("状态已刷新。"));
 elements["new-session-button"].addEventListener("click", newSession);
 elements["session-project-filter"].addEventListener("change", renderSessionList);
 elements["load-more-sessions"].addEventListener("click", () => void loadSessions({ append: true }));
@@ -618,4 +688,4 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && pendingAuthSwitch) closeAuthSwitchModal();
 });
 
-void Promise.all([loadSessions(), loadState()]);
+void prepareSessions();

@@ -136,7 +136,7 @@
         <section class="panel" aria-labelledby="setup-title">
           <div class="section-heading">
             <div><p class="eyebrow">应用初始化</p><h2 id="setup-title">本机 Codex</h2></div>
-            <p class="section-note">Connector 安装完成后在这里初始化或修复 Codex；初始化不会删除或覆盖原有 Codex 状态目录。</p>
+            <p class="section-note">首次使用会自动下载安装并配置 Codex；失败时可在这里查看步骤并修复，且不会删除或覆盖原有状态目录。</p>
           </div>
           <p id="setup-message" class="section-note">正在读取初始化状态…</p>
           <div id="setup-progress" class="setup-progress" hidden>
@@ -158,8 +158,8 @@
             <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
           </div>
           <div class="form-actions">
-            <p>连接器会下载安装官方 Codex 客户端和命令行，把模型凭证写入独立工作区档案，并完成归属验证。</p>
-            <button id="setup-retry-button" class="button primary" type="button">开始初始化</button>
+            <p>连接器会自动下载安装官方 Codex 客户端和命令行，把模型凭证写入独立工作区档案，并完成归属验证。</p>
+            <button id="setup-retry-button" class="button primary" type="button" hidden>重新安装并修复</button>
           </div>
         </section>
       </section>

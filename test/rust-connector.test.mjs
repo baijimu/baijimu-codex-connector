@@ -139,6 +139,8 @@ test("rust connector forwards Codex app-server calls", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const port = await freePort();
   const connectorHome = await mkdtemp(join(tmpdir(), "codex-app-data-"));
+  const configHome = join(connectorHome, "config");
+  await mkdir(configHome, { recursive: true });
   const proc = spawn(cli, [
     "start",
     "--port",
@@ -152,6 +154,7 @@ test("rust connector forwards Codex app-server calls", async () => {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
+      BAIJIMU_CONFIG_HOME: configHome,
       BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
       CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
     },
@@ -164,6 +167,12 @@ test("rust connector forwards Codex app-server calls", async () => {
     assert.equal(unauthorized.status, 401);
     const managementToken = (await readFile(join(connectorHome, "management-token"), "utf8")).trim();
     assert.ok(managementToken.length >= 32);
+    const readiness = await postManagementJson(
+      port,
+      managementToken,
+      "/management/v1/setup/ensure-ready",
+    );
+    assert.equal(readiness.readiness, "needs_workspace");
     const authorizedUnknown = await fetch(`http://127.0.0.1:${port}/management/v1/unknown`, {
       headers: { authorization: `Bearer ${managementToken}` },
     });
@@ -509,6 +518,15 @@ test("rust connector restores the original Codex environment after an isolated B
       codexHome: workspaceHome,
     }],
   }));
+  await writeFile(join(connectorHome, "setup-status.json"), JSON.stringify({
+    status: "succeeded",
+    workspaceId: 1390,
+    message: "Codex 应用初始化已完成",
+    error: null,
+    startedAtEpochSeconds: 1,
+    completedAtEpochSeconds: 2,
+    installerStatus: null,
+  }));
   await writeFile(join(configHome, "baijimu", "auth.json"), JSON.stringify({
     schemaVersion: 2,
     currentEnvironment: "test",
@@ -535,6 +553,13 @@ test("rust connector restores the original Codex environment after an isolated B
   try {
     await waitForHealth(port);
     const managementToken = (await readFile(join(connectorHome, "management-token"), "utf8")).trim();
+    const readiness = await postManagementJson(
+      port,
+      managementToken,
+      "/management/v1/setup/ensure-ready",
+    );
+    assert.equal(readiness.readiness, "ready");
+    assert.equal(readiness.setup.workspaceId, 1390);
     const workspaceState = await postManagementJson(port, managementToken, "/management/v1/auth/switch", {
       mode: "baijimu", workspaceId: 1390,
     });

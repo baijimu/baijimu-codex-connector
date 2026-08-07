@@ -1,4 +1,4 @@
-use crate::credential;
+use crate::{codex_binary, credential};
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -87,7 +87,13 @@ impl SetupManager {
         status
     }
 
-    pub fn start(&self, workspace_id: u64, codex_cli: Option<PathBuf>) -> Result<SetupStatus> {
+    pub fn start(
+        &self,
+        workspace_id: u64,
+        codex_cli: Option<PathBuf>,
+        force: bool,
+        verify_app_server_capability: bool,
+    ) -> Result<SetupStatus> {
         if workspace_id == 0 {
             anyhow::bail!("workspaceId must be a positive integer");
         }
@@ -102,7 +108,9 @@ impl SetupManager {
                 }
                 anyhow::bail!("另一个工作区的初始化正在进行");
             }
-            if current.status == "succeeded"
+            if !force
+                && codex_cli.is_some()
+                && current.status == "succeeded"
                 && current.workspace_id == Some(workspace_id)
                 && credential::codex_ready_for_workspace(workspace_id)
             {
@@ -123,7 +131,11 @@ impl SetupManager {
 
         let manager = self.clone();
         thread::spawn(move || {
-            let completed = match run_install(workspace_id, codex_cli.as_deref()) {
+            let completed = match run_install(
+                workspace_id,
+                codex_cli.as_deref(),
+                verify_app_server_capability,
+            ) {
                 Ok(()) => SetupStatus {
                     status: "succeeded".to_string(),
                     workspace_id: Some(workspace_id),
@@ -166,7 +178,11 @@ impl SetupManager {
     }
 }
 
-fn run_install(workspace_id: u64, codex_cli: Option<&Path>) -> Result<()> {
+fn run_install(
+    workspace_id: u64,
+    codex_cli: Option<&Path>,
+    verify_app_server_capability: bool,
+) -> Result<()> {
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
@@ -253,6 +269,20 @@ fn run_install(workspace_id: u64, codex_cli: Option<&Path>) -> Result<()> {
 
     if !credential::codex_ready_for_workspace(workspace_id) {
         anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
+    }
+    let requested = codex_cli.map(|path| path.to_string_lossy().into_owned());
+    let resolution = codex_binary::resolve(requested.as_deref())
+        .map_err(|error| anyhow::anyhow!("安装脚本执行成功，但 Codex CLI 回查失败：{error}"))?;
+    if verify_app_server_capability {
+        let inspection = codex_binary::inspect(&resolution);
+        if !inspection.app_server_supported {
+            anyhow::bail!(
+                "安装脚本执行成功，但 Codex CLI 不支持 app-server：{}",
+                inspection
+                    .error
+                    .unwrap_or_else(|| "能力检查失败".to_string())
+            );
+        }
     }
     Ok(())
 }

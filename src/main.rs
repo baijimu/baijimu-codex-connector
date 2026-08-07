@@ -86,6 +86,42 @@ struct AppState {
     management_token: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SetupReadinessDecision {
+    Ready,
+    Start(u64),
+    Initializing,
+    Failed,
+    NeedsWorkspace,
+}
+
+fn decide_setup_readiness(
+    setup: &setup::SetupStatus,
+    current_workspace_id: Option<u64>,
+    current_workspace_authorized: bool,
+    cli_ready: bool,
+    workspace_ready: bool,
+) -> SetupReadinessDecision {
+    if setup.status == "running" {
+        return SetupReadinessDecision::Initializing;
+    }
+    let Some(workspace_id) = current_workspace_id.filter(|_| current_workspace_authorized) else {
+        return SetupReadinessDecision::NeedsWorkspace;
+    };
+    if setup.status == "failed" && setup.workspace_id == Some(workspace_id) {
+        return SetupReadinessDecision::Failed;
+    }
+    if setup.status == "succeeded"
+        && setup.workspace_id == Some(workspace_id)
+        && cli_ready
+        && workspace_ready
+    {
+        SetupReadinessDecision::Ready
+    } else {
+        SetupReadinessDecision::Start(workspace_id)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StateProjectRoot {
     path: String,
@@ -951,6 +987,7 @@ fn handle_management(
     match (method, path) {
         ("GET", "/management/v1/setup/state") => serde_json::to_value(state.setup.state())
             .map_err(|error| HttpError::internal(error.to_string())),
+        ("POST", "/management/v1/setup/ensure-ready") => ensure_codex_ready(state),
         ("POST", "/management/v1/setup/retry") => {
             let _credential_guard = state
                 .credential_management
@@ -961,24 +998,19 @@ fn handle_management(
                 .and_then(Value::as_u64)
                 .filter(|value| *value > 0)
                 .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?;
-            let codex_cli = {
+            let (codex_cli, verify_app_server_capability) = {
                 let mut client = state
                     .client
                     .lock()
                     .map_err(|_| HttpError::internal("client lock poisoned"))?;
                 client.shutdown();
-                match codex_binary::resolve(client.options.codex_binary.as_deref()) {
-                    Ok(resolution) => Some(resolution.path),
-                    Err(error) if client.options.codex_binary.is_some() => {
-                        return Err(HttpError::new(409, error.to_string()));
-                    }
-                    Err(_) => None,
-                }
+                let codex_cli = usable_codex_cli_for_setup(&mut client)?;
+                (codex_cli, client.options.extra_args.is_empty())
             };
             serde_json::to_value(
                 state
                     .setup
-                    .start(workspace_id, codex_cli)
+                    .start(workspace_id, codex_cli, true, verify_app_server_capability)
                     .map_err(|error| HttpError::new(409, error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))
@@ -1131,6 +1163,140 @@ fn handle_management(
         _ => Err(HttpError::new(
             404,
             format!("unknown management path: {path}"),
+        )),
+    }
+}
+
+fn usable_codex_cli_for_setup(client: &mut CodexClient) -> Result<Option<PathBuf>, HttpError> {
+    match codex_binary::resolve(client.options.codex_binary.as_deref()) {
+        Ok(resolution) => {
+            let inspection = codex_binary::inspect(&resolution);
+            let supported =
+                !client.options.extra_args.is_empty() || inspection.app_server_supported;
+            let resolved = resolution.path.clone();
+            client.codex_binary_resolution = Some(resolution);
+            client.codex_binary_error = None;
+            client.codex_cli_inspection = Some(inspection.clone());
+            if supported {
+                return Ok(Some(resolved));
+            }
+            if client.options.codex_binary.is_some() {
+                let message = inspection.error.unwrap_or_else(|| {
+                    "the explicitly configured Codex CLI does not support app-server".to_string()
+                });
+                return Err(HttpError::coded(
+                    409,
+                    message.clone(),
+                    "CODEX_APP_SERVER_UNSUPPORTED",
+                    json!({"resolved": resolved, "error": message}),
+                ));
+            }
+            Ok(None)
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let data = error.data_value();
+            client.codex_binary_resolution = None;
+            client.codex_binary_error = Some(error);
+            client.codex_cli_inspection = None;
+            if client.options.codex_binary.is_some() {
+                return Err(HttpError::coded(
+                    409,
+                    message,
+                    "CODEX_BINARY_NOT_FOUND",
+                    data,
+                ));
+            }
+            Ok(None)
+        }
+    }
+}
+
+fn setup_readiness_value(
+    readiness: &str,
+    message: impl Into<String>,
+    setup: setup::SetupStatus,
+) -> Value {
+    json!({
+        "readiness": readiness,
+        "message": message.into(),
+        "setup": setup,
+    })
+}
+
+fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
+    let _credential_guard = state
+        .credential_management
+        .lock()
+        .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+    let credential_state = credential::state()
+        .map_err(|error| HttpError::new(409, format!("读取当前工作区授权失败：{error}")))?;
+    let current_workspace_id = credential_state.current_workspace_id;
+    let current_workspace_authorized = current_workspace_id.is_some_and(|workspace_id| {
+        credential_state
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.workspace_id == workspace_id && workspace.authorized)
+    });
+    let setup_status = state.setup.state();
+    let mut client = state
+        .client
+        .lock()
+        .map_err(|_| HttpError::internal("client lock poisoned"))?;
+    let codex_cli = usable_codex_cli_for_setup(&mut client)?;
+    let verify_app_server_capability = client.options.extra_args.is_empty();
+    let workspace_ready = current_workspace_id.is_some_and(credential::codex_ready_for_workspace);
+    match decide_setup_readiness(
+        &setup_status,
+        current_workspace_id,
+        current_workspace_authorized,
+        codex_cli.is_some(),
+        workspace_ready,
+    ) {
+        SetupReadinessDecision::Ready => {
+            client.ensure_started().map_err(|error| {
+                HttpError::coded(
+                    409,
+                    error.message,
+                    "CODEX_START_FAILED",
+                    error.data.unwrap_or_else(|| json!({})),
+                )
+            })?;
+            Ok(setup_readiness_value(
+                "ready",
+                "本机 Codex 已就绪",
+                setup_status,
+            ))
+        }
+        SetupReadinessDecision::Start(workspace_id) => {
+            client.shutdown();
+            let setup_status = state
+                .setup
+                .start(workspace_id, codex_cli, false, verify_app_server_capability)
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            Ok(setup_readiness_value(
+                "initializing",
+                "正在自动下载安装并配置本机 Codex",
+                setup_status,
+            ))
+        }
+        SetupReadinessDecision::Initializing => Ok(setup_readiness_value(
+            "initializing",
+            "正在自动下载安装并配置本机 Codex",
+            setup_status,
+        )),
+        SetupReadinessDecision::Failed => Ok(setup_readiness_value(
+            "failed",
+            setup_status
+                .error
+                .clone()
+                .unwrap_or_else(|| "Codex 初始化失败，请检查失败步骤后重试".to_string()),
+            setup_status,
+        )),
+        SetupReadinessDecision::NeedsWorkspace => Ok(setup_readiness_value(
+            "needs_workspace",
+            "当前百积木账号没有明确且已授权的工作区，请先完成工作区授权",
+            setup_status,
         )),
     }
 }
@@ -2323,6 +2489,92 @@ fn print_help() {
 #[cfg(test)]
 mod project_state_tests {
     use super::*;
+
+    fn setup_status(status: &str, workspace_id: Option<u64>) -> setup::SetupStatus {
+        setup::SetupStatus {
+            status: status.to_string(),
+            workspace_id,
+            message: status.to_string(),
+            error: (status == "failed").then(|| "installer failed".to_string()),
+            started_at_epoch_seconds: None,
+            completed_at_epoch_seconds: None,
+            installer_status: None,
+        }
+    }
+
+    #[test]
+    fn automatic_setup_readiness_covers_install_repair_and_manual_retry_states() {
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("pending", None),
+                Some(642),
+                true,
+                false,
+                false
+            ),
+            SetupReadinessDecision::Start(642)
+        );
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("succeeded", Some(642)),
+                Some(642),
+                true,
+                true,
+                true,
+            ),
+            SetupReadinessDecision::Ready
+        );
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("succeeded", Some(642)),
+                Some(642),
+                true,
+                false,
+                true,
+            ),
+            SetupReadinessDecision::Start(642)
+        );
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("running", Some(642)),
+                Some(642),
+                true,
+                false,
+                false,
+            ),
+            SetupReadinessDecision::Initializing
+        );
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("failed", Some(642)),
+                Some(642),
+                true,
+                false,
+                false,
+            ),
+            SetupReadinessDecision::Failed
+        );
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("failed", Some(100)),
+                Some(642),
+                true,
+                false,
+                false,
+            ),
+            SetupReadinessDecision::Start(642)
+        );
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("pending", None),
+                Some(642),
+                false,
+                false,
+                false
+            ),
+            SetupReadinessDecision::NeedsWorkspace
+        );
+    }
 
     #[test]
     fn legacy_codex_binary_values_migrate_to_auto_discovery() {
