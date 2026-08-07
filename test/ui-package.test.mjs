@@ -21,7 +21,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   );
   assert.equal(manifest.schemaVersion, "2.0");
   assert.equal(manifest.version, packageManifest.version);
-  assert.equal(manifest.version, "1.2.11");
+  assert.equal(manifest.version, "1.2.12");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.transport.type, "http");
   assert.ok(manifest.methods.some((method) => method.name === "status"));
