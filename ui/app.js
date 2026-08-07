@@ -84,7 +84,7 @@ function setAccountBusy(value) {
   });
 }
 
-function profileRow({ title, detail, meta, active, disabled, onSwitch }) {
+function profileRow({ title, detail, meta, active, disabled, actionLabel, onSwitch }) {
   const row = document.createElement("div");
   row.className = `profile-row${active ? " active" : ""}`;
   const copy = document.createElement("div");
@@ -99,7 +99,7 @@ function profileRow({ title, detail, meta, active, disabled, onSwitch }) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `button ${active ? "secondary" : "primary"} compact auth-switch`;
-  button.textContent = active ? "当前使用" : "切换";
+  button.textContent = active ? "当前使用" : (actionLabel || "切换");
   button.dataset.profileDisabled = String(active || disabled);
   button.disabled = active || disabled;
   button.addEventListener("click", onSwitch);
@@ -113,11 +113,12 @@ function renderAuthProfiles() {
   list.replaceChildren();
   const chatgptActive = state?.activeMode === "chatgpt";
   list.append(profileRow({
-    title: "个人 ChatGPT 账号",
+    title: "原有 Codex 环境",
     detail: state?.chatgpt?.accountId ? `账号 ${state.chatgpt.accountId}` : "默认 Codex 登录",
-    meta: state?.chatgpt?.configured ? "已登录；使用个人配置和会话" : "尚未登录，请先执行 codex login",
+    meta: state?.chatgpt?.configured ? "已登录；使用原有配置和会话" : "尚未登录；恢复后可从桌面应用完成登录",
     active: chatgptActive,
-    disabled: !state?.chatgpt?.configured,
+    disabled: false,
+    actionLabel: "恢复原有 Codex 环境",
     onSwitch: () => void switchAuthProfile({ mode: "chatgpt" }),
   }));
   state?.workspaces.forEach((workspace) => {
@@ -128,7 +129,7 @@ function renderAuthProfiles() {
       title: `${workspace.name}（${workspace.workspaceId}）`,
       detail: `${users}${profile?.environment || "prod"} 环境`,
       meta: workspace.authorized
-        ? (profile ? "凭证已保存；切换后使用独立配置和会话" : "已授权；首次切换时创建工作区凭证档案")
+        ? (profile ? "凭证已保存；切换后桌面应用与远程会话共用该工作区" : "已授权；首次切换时创建工作区凭证档案")
         : "当前百积木账号未授权这个工作区",
       active,
       disabled: !workspace.authorized,
@@ -147,7 +148,7 @@ function renderCredentialState() {
   const currentWorkspace = state?.workspaces.find((item) => item.workspaceId === currentWorkspaceId);
   elements["auth-mode"].textContent = state?.activeMode === "baijimu" ? "百积木 API Key" : "ChatGPT 账号登录";
   elements["active-workspace"].textContent = state?.activeMode === "chatgpt"
-    ? "个人 ChatGPT 账号"
+    ? "原有 Codex 环境"
     : currentWorkspaceId
     ? `${currentWorkspace?.name || active?.workspaceName || `工作区 ${currentWorkspaceId}`}（${currentWorkspaceId}）`
     : "尚未识别";
@@ -161,6 +162,10 @@ function renderCredentialState() {
 }
 
 async function switchAuthProfile(request) {
+  const confirmation = request.mode === "chatgpt"
+    ? "将关闭并重启 ChatGPT/Codex，恢复百积木接管前的 CODEX_HOME；不会删除任何工作区目录。是否继续？"
+    : "将关闭并重启 ChatGPT/Codex，并把用户级 CODEX_HOME 切换到所选百积木工作区；不会删除其他工作区目录。是否继续？";
+  if (!window.confirm(confirmation)) return;
   clearNotices();
   setAccountBusy(true);
   try {
@@ -170,11 +175,14 @@ async function switchAuthProfile(request) {
     codexProjects = [];
     selectedSessionId = "";
     renderCredentialState();
+    const desktopNotice = credentialState.desktopEnvironmentManaged
+      ? " 用户级 CODEX_HOME 已同步并生效。"
+      : "";
     setMessage(
       "message",
-      request.mode === "chatgpt"
-        ? "已切换到个人 ChatGPT 账号。"
-        : "已切换到百积木工作区，后续会话将使用独立凭证。",
+      (request.mode === "chatgpt"
+        ? "已恢复原有 Codex 环境。"
+        : "已切换到百积木工作区，远程会话将使用独立凭证。") + desktopNotice,
     );
   } catch (error) {
     setMessage("error", errorMessage(error));

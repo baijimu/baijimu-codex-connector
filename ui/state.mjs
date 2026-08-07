@@ -36,6 +36,17 @@ export function normalizeCredentialState(value) {
       accountId: String(input.chatgpt?.accountId || ""),
       codexHome: String(input.chatgpt?.codexHome || ""),
     },
+    originalCodexHome: String(input.originalCodexHome || input.chatgpt?.codexHome || ""),
+    originalCodexHomeState: {
+      captured: input.originalCodexHomeState?.captured === true,
+      wasSet: typeof input.originalCodexHomeState?.value === "string",
+      value: typeof input.originalCodexHomeState?.value === "string" ? input.originalCodexHomeState.value : "",
+      captureSource: String(input.originalCodexHomeState?.captureSource || ""),
+    },
+    activeCodexHome: String(input.activeCodexHome || ""),
+    userCodexHome: typeof input.userCodexHome === "string" ? input.userCodexHome : "",
+    userCodexHomeSynchronized: input.userCodexHomeSynchronized === true,
+    desktopEnvironmentManaged: input.desktopEnvironmentManaged === true,
     discoveryWarning: typeof input.discoveryWarning === "string" ? input.discoveryWarning.trim() : "",
   };
 }

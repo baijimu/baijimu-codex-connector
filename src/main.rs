@@ -1,7 +1,9 @@
 mod codex_binary;
 mod credential;
+mod desktop;
 mod project_checkout;
 mod setup;
+mod user_environment;
 
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Map, Value};
@@ -822,6 +824,8 @@ fn normalize_codex_binary_override(value: Option<String>) -> Result<Option<Strin
 }
 
 fn start_server(options: ServerOptions) -> Result<(), String> {
+    credential::reconcile_active_user_codex_home()
+        .map_err(|error| format!("failed to reconcile active CODEX_HOME: {error}"))?;
     let management_token = load_or_create_management_token()?;
     let listener = TcpListener::bind((options.host.as_str(), options.port))
         .map_err(|error| error.to_string())?;
@@ -1004,31 +1008,88 @@ fn handle_management(
                 .get("mode")
                 .and_then(Value::as_str)
                 .ok_or_else(|| HttpError::new(400, "mode is required"))?;
-            match mode {
-                "chatgpt" => {
-                    credential::activate_chatgpt_profile()
-                        .map_err(|error| HttpError::new(409, error.to_string()))?;
-                }
-                "baijimu" => {
-                    let workspace_id = body
-                        .get("workspaceId")
+            let workspace_id = match mode {
+                "chatgpt" => None,
+                "baijimu" => Some(
+                    body.get("workspaceId")
                         .and_then(Value::as_u64)
                         .filter(|value| *value > 0)
-                        .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?;
-                    credential::activate_workspace_profile(workspace_id)
-                        .map_err(|error| HttpError::new(409, error.to_string()))?;
-                }
+                        .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?,
+                ),
                 _ => return Err(HttpError::new(400, "mode must be chatgpt or baijimu")),
-            }
+            };
+            let prepared_workspace = workspace_id
+                .map(credential::prepare_workspace_profile)
+                .transpose()
+                .map_err(|error| HttpError::new(409, error.to_string()))?;
+            let snapshot = credential::active_home_snapshot()
+                .map_err(|error| HttpError::internal(error.to_string()))?;
             let mut client = state
                 .client
                 .lock()
                 .map_err(|_| HttpError::internal("client lock poisoned"))?;
+            client.shutdown();
+            let desktop_switch = desktop::stop_for_codex_home_switch().map_err(|error| {
+                client.switch_to_active_profile();
+                let _ = client.ensure_started();
+                HttpError::new(409, error.to_string())
+            })?;
+            let activation = match mode {
+                "chatgpt" => credential::activate_chatgpt_profile().map(|_| ()),
+                "baijimu" => credential::activate_prepared_workspace_profile(
+                    &prepared_workspace.expect("prepared above").profile,
+                )
+                .map(|_| ()),
+                _ => unreachable!("mode validated above"),
+            };
+            if let Err(error) = activation {
+                client.switch_to_active_profile();
+                let _ = client.ensure_started();
+                let _ = desktop_switch.restart_and_verify();
+                return Err(HttpError::new(409, error.to_string()));
+            }
             client.switch_to_active_profile();
-            serde_json::to_value(
-                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
+            let verification = client
+                .ensure_started()
+                .map_err(|error| error.message)
+                .and_then(|_| {
+                    desktop_switch
+                        .restart_and_verify()
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                })
+                .and_then(|_| {
+                    let state = credential::state().map_err(|error| error.to_string())?;
+                    if !state.user_codex_home_synchronized {
+                        return Err("用户级 CODEX_HOME 与活动状态目录不一致".to_string());
+                    }
+                    Ok(state)
+                });
+            match verification {
+                Ok(credential_state) => serde_json::to_value(credential_state)
+                    .map_err(|error| HttpError::internal(error.to_string())),
+                Err(error) => {
+                    client.shutdown();
+                    let _ = desktop::stop_for_codex_home_switch();
+                    let rollback = credential::restore_active_home(snapshot);
+                    client.switch_to_active_profile();
+                    let app_server_rollback =
+                        client.ensure_started().err().map(|item| item.message);
+                    let desktop_rollback = desktop_switch.restart_and_verify().err();
+                    let mut message =
+                        format!("切换后的进程验证失败，已恢复原有 Codex 环境：{error}");
+                    if let Err(rollback) = rollback {
+                        message.push_str(&format!("；状态指针回滚失败：{rollback}"));
+                    }
+                    if let Some(rollback) = app_server_rollback {
+                        message.push_str(&format!("；app-server 回滚验证失败：{rollback}"));
+                    }
+                    if let Some(rollback) = desktop_rollback {
+                        message.push_str(&format!("；桌面应用回滚验证失败：{rollback}"));
+                    }
+                    Err(HttpError::new(409, message))
+                }
+            }
         }
         ("POST", "/management/v1/projects/checkout") => {
             let _project_guard = state

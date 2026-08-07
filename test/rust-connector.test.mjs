@@ -455,7 +455,7 @@ test("rust connector resolves current Codex project IDs to their real roots", as
   }
 });
 
-test("rust connector switches between personal ChatGPT and an isolated Baijimu workspace", async () => {
+test("rust connector restores the original Codex environment after an isolated Baijimu workspace", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const { createServer } = await import("node:http");
   const platform = createServer(async (request, response) => {

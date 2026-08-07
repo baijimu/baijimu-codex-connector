@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use toml_edit::{value, DocumentMut, Item, Table};
 
-const METADATA_VERSION: u32 = 2;
+use crate::user_environment;
+
+const METADATA_VERSION: u32 = 3;
 const METADATA_FILE: &str = "codex-credentials.json";
 const DEFAULT_MODEL: &str = "gpt-5.6-sol";
 const ROUTER_PROVIDER: &str = "baijimu-router";
@@ -76,7 +78,12 @@ pub struct CredentialManagerState {
     pub chatgpt: ChatGptProfileState,
     pub discovery_warning: Option<String>,
     pub shared_auth_path: String,
+    pub original_codex_home_state: OriginalCodexHomeState,
+    pub original_codex_home: String,
     pub active_codex_home: String,
+    pub user_codex_home: Option<String>,
+    pub user_codex_home_synchronized: bool,
+    pub desktop_environment_managed: bool,
     pub codex_auth_path: String,
     pub codex_config_path: String,
 }
@@ -85,6 +92,12 @@ pub struct CredentialManagerState {
 pub struct PreparedWorkspaceProfile {
     pub profile: CredentialProfile,
     pub credential: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveHomeSnapshot {
+    metadata: CredentialMetadata,
+    user_codex_home: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,6 +113,19 @@ struct CredentialMetadata {
     // Kept only so v1 metadata can be read and migrated without losing its selection.
     #[serde(default)]
     active_workspace_id: Option<u64>,
+    #[serde(default)]
+    original_codex_home_state: OriginalCodexHomeState,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OriginalCodexHomeState {
+    #[serde(default)]
+    pub captured: bool,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub capture_source: String,
 }
 
 impl Default for CredentialMetadata {
@@ -110,6 +136,7 @@ impl Default for CredentialMetadata {
             active_mode: AuthMode::Chatgpt,
             active_profile_id: None,
             active_workspace_id: None,
+            original_codex_home_state: OriginalCodexHomeState::default(),
         }
     }
 }
@@ -134,8 +161,8 @@ struct SharedCredentialStore {
 
 pub fn state() -> Result<CredentialManagerState> {
     let mut metadata = load_metadata()?;
-    let personal_home = personal_codex_home();
-    let chatgpt = read_chatgpt_state(&personal_home)?;
+    let original_home = original_home_from_metadata(&metadata);
+    let chatgpt = read_chatgpt_state(&original_home)?;
     let shared_store = load_shared_credential_store();
     let mut warning = shared_store.as_ref().err().map(ToString::to_string);
     let (current_workspace_id, base_url, mut workspaces) = match shared_store.as_ref() {
@@ -179,14 +206,16 @@ pub fn state() -> Result<CredentialManagerState> {
                 .cloned()
         });
     let active_home = match metadata.active_mode {
-        AuthMode::Chatgpt => personal_home.clone(),
+        AuthMode::Chatgpt => original_home.clone(),
         AuthMode::Baijimu => active_profile
             .as_ref()
             .map(|profile| PathBuf::from(&profile.codex_home))
-            .unwrap_or_else(|| personal_home.clone()),
+            .unwrap_or_else(|| original_home.clone()),
     };
     let auth_path = active_home.join("auth.json");
     let config_path = active_home.join("config.toml");
+    let user_codex_home = user_environment::read_codex_home()?;
+    let desired_user_codex_home = desired_user_codex_home(&metadata);
     let mut credential_status = match metadata.active_mode {
         AuthMode::Chatgpt if chatgpt.configured => "verified".to_string(),
         AuthMode::Chatgpt => "not_configured".to_string(),
@@ -233,7 +262,14 @@ pub fn state() -> Result<CredentialManagerState> {
         chatgpt,
         discovery_warning: warning,
         shared_auth_path: shared_auth_path().display().to_string(),
+        original_codex_home_state: metadata.original_codex_home_state.clone(),
+        original_codex_home: original_home.display().to_string(),
         active_codex_home: active_home.display().to_string(),
+        user_codex_home: user_codex_home
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        user_codex_home_synchronized: user_codex_home == desired_user_codex_home,
+        desktop_environment_managed: user_environment::persisted_for_desktop(),
         codex_auth_path: auth_path.display().to_string(),
         codex_config_path: config_path.display().to_string(),
     })
@@ -313,13 +349,11 @@ pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceP
     })
 }
 
-pub fn activate_workspace_profile(workspace_id: u64) -> Result<CredentialProfile> {
-    let prepared = prepare_workspace_profile(workspace_id)?;
-    activate_prepared_workspace_profile(&prepared.profile)
-}
-
-fn activate_prepared_workspace_profile(prepared: &CredentialProfile) -> Result<CredentialProfile> {
-    let mut metadata = load_metadata()?;
+pub fn activate_prepared_workspace_profile(
+    prepared: &CredentialProfile,
+) -> Result<CredentialProfile> {
+    let previous = load_metadata()?;
+    let mut metadata = previous.clone();
     let activated_at = now_epoch_seconds();
     for profile in &mut metadata.profiles {
         if profile.profile_id == prepared.profile_id {
@@ -329,7 +363,7 @@ fn activate_prepared_workspace_profile(prepared: &CredentialProfile) -> Result<C
     metadata.active_mode = AuthMode::Baijimu;
     metadata.active_profile_id = Some(prepared.profile_id.clone());
     metadata.active_workspace_id = Some(prepared.workspace_id);
-    save_metadata(&metadata)?;
+    commit_active_home_change(&previous, &metadata)?;
     metadata
         .profiles
         .into_iter()
@@ -338,16 +372,13 @@ fn activate_prepared_workspace_profile(prepared: &CredentialProfile) -> Result<C
 }
 
 pub fn activate_chatgpt_profile() -> Result<PathBuf> {
-    let home = personal_codex_home();
-    let chatgpt = read_chatgpt_state(&home)?;
-    if !chatgpt.configured {
-        anyhow::bail!("默认 Codex 目录中没有有效的 ChatGPT 登录，请先执行 codex login");
-    }
-    let mut metadata = load_metadata()?;
+    let previous = load_metadata()?;
+    let home = original_home_from_metadata(&previous);
+    let mut metadata = previous.clone();
     metadata.active_mode = AuthMode::Chatgpt;
     metadata.active_profile_id = None;
     metadata.active_workspace_id = None;
-    save_metadata(&metadata)?;
+    commit_active_home_change(&previous, &metadata)?;
     Ok(home)
 }
 
@@ -356,7 +387,7 @@ pub fn active_codex_home() -> PathBuf {
         .ok()
         .and_then(|metadata| {
             if metadata.active_mode == AuthMode::Chatgpt {
-                return Some(personal_codex_home());
+                return Some(original_home_from_metadata(&metadata));
             }
             metadata.active_profile_id.as_deref().and_then(|id| {
                 metadata
@@ -366,13 +397,33 @@ pub fn active_codex_home() -> PathBuf {
                     .map(|profile| PathBuf::from(&profile.codex_home))
             })
         })
-        .unwrap_or_else(personal_codex_home)
+        .unwrap_or_else(default_original_codex_home)
 }
 
-pub fn personal_codex_home() -> PathBuf {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".codex"))
+pub fn original_codex_home() -> PathBuf {
+    load_metadata()
+        .map(|metadata| original_home_from_metadata(&metadata))
+        .unwrap_or_else(|_| default_original_codex_home())
+}
+
+pub fn reconcile_active_user_codex_home() -> Result<()> {
+    let metadata = load_metadata()?;
+    let desired = desired_user_codex_home(&metadata);
+    user_environment::activate_codex_home(desired.as_deref())?;
+    Ok(())
+}
+
+pub fn active_home_snapshot() -> Result<ActiveHomeSnapshot> {
+    Ok(ActiveHomeSnapshot {
+        metadata: load_metadata()?,
+        user_codex_home: user_environment::read_codex_home()?,
+    })
+}
+
+pub fn restore_active_home(snapshot: ActiveHomeSnapshot) -> Result<()> {
+    save_metadata(&snapshot.metadata)?;
+    user_environment::activate_codex_home(snapshot.user_codex_home.as_deref())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -397,7 +448,7 @@ fn current_workspace_id() -> Result<u64> {
 
 pub fn should_auto_activate_workspace_after_setup() -> Result<bool> {
     let metadata = load_metadata()?;
-    let chatgpt_configured = read_chatgpt_state(&personal_codex_home())?.configured;
+    let chatgpt_configured = read_chatgpt_state(&original_codex_home())?.configured;
     Ok(should_auto_activate_workspace(
         &metadata,
         chatgpt_configured,
@@ -583,12 +634,12 @@ fn write_workspace_auth(path: &Path, credential: &str) -> Result<()> {
 }
 
 fn write_workspace_config(path: &Path) -> Result<()> {
-    let personal_path = personal_codex_home().join("config.toml");
-    let mut document = if personal_path.exists() {
-        fs::read_to_string(&personal_path)
-            .with_context(|| format!("读取个人 Codex 配置失败: {}", personal_path.display()))?
+    let original_path = original_codex_home().join("config.toml");
+    let mut document = if original_path.exists() {
+        fs::read_to_string(&original_path)
+            .with_context(|| format!("读取原有 Codex 配置失败: {}", original_path.display()))?
             .parse::<DocumentMut>()
-            .context("解析个人 Codex config.toml 失败")?
+            .context("解析原有 Codex config.toml 失败")?
     } else {
         DocumentMut::new()
     };
@@ -887,18 +938,20 @@ fn load_metadata() -> Result<CredentialMetadata> {
     } else {
         None
     };
-    let Some(source) = source else {
-        return Ok(CredentialMetadata::default());
+    let mut metadata = if let Some(source) = source.as_ref() {
+        let content = fs::read_to_string(source)
+            .with_context(|| format!("读取 Codex 凭证元数据失败: {}", source.display()))?;
+        serde_json::from_str::<CredentialMetadata>(&content)
+            .with_context(|| format!("解析 Codex 凭证元数据失败: {}", source.display()))?
+    } else {
+        CredentialMetadata::default()
     };
-    let content = fs::read_to_string(&source)
-        .with_context(|| format!("读取 Codex 凭证元数据失败: {}", source.display()))?;
-    let mut metadata: CredentialMetadata = serde_json::from_str(&content)
-        .with_context(|| format!("解析 Codex 凭证元数据失败: {}", source.display()))?;
-    let was_v1 = metadata.version < METADATA_VERSION;
+    let previous_version = metadata.version;
+    let needs_version_migration = previous_version < METADATA_VERSION;
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }
-    if was_v1 && metadata.active_profile_id.is_none() {
+    if previous_version < 2 && metadata.active_profile_id.is_none() {
         metadata.active_profile_id = metadata.active_workspace_id.and_then(|id| {
             metadata
                 .profiles
@@ -910,15 +963,98 @@ fn load_metadata() -> Result<CredentialMetadata> {
             metadata.active_mode = AuthMode::Baijimu;
         }
     }
+    let baseline_captured = capture_original_codex_home(&mut metadata)?;
     metadata.version = METADATA_VERSION;
-    if source != path || was_v1 {
+    if source.as_ref() != Some(&path) || needs_version_migration || baseline_captured {
         save_metadata(&metadata)?;
     }
-    if source != path {
+    if let Some(source) = source.filter(|source| source != &path) {
         fs::remove_file(&source)
             .with_context(|| format!("清理旧版元数据失败: {}", source.display()))?;
     }
     Ok(metadata)
+}
+
+fn capture_original_codex_home(metadata: &mut CredentialMetadata) -> Result<bool> {
+    if metadata.original_codex_home_state.captured {
+        return Ok(false);
+    }
+    let current = user_environment::read_codex_home()?;
+    let managed_root = connector_data_dir().join("codex-profiles");
+    let managed_pointer = current.as_ref().is_some_and(|path| {
+        path.starts_with(&managed_root)
+            || metadata
+                .profiles
+                .iter()
+                .any(|profile| Path::new(&profile.codex_home) == path)
+    });
+    metadata.original_codex_home_state = if managed_pointer {
+        OriginalCodexHomeState {
+            captured: true,
+            value: None,
+            capture_source: "inferred-default-before-managed-pointer".to_string(),
+        }
+    } else {
+        OriginalCodexHomeState {
+            captured: true,
+            value: current.map(|path| path.display().to_string()),
+            capture_source: "user-environment".to_string(),
+        }
+    };
+    Ok(true)
+}
+
+fn original_home_from_metadata(metadata: &CredentialMetadata) -> PathBuf {
+    metadata
+        .original_codex_home_state
+        .value
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(default_original_codex_home)
+}
+
+fn default_original_codex_home() -> PathBuf {
+    home_dir().join(".codex")
+}
+
+fn desired_user_codex_home(metadata: &CredentialMetadata) -> Option<PathBuf> {
+    match metadata.active_mode {
+        AuthMode::Chatgpt => metadata
+            .original_codex_home_state
+            .value
+            .as_deref()
+            .map(PathBuf::from),
+        AuthMode::Baijimu => metadata.active_profile_id.as_deref().and_then(|id| {
+            metadata
+                .profiles
+                .iter()
+                .find(|profile| profile.profile_id == id)
+                .map(|profile| PathBuf::from(&profile.codex_home))
+        }),
+    }
+}
+
+fn commit_active_home_change(
+    previous: &CredentialMetadata,
+    next: &CredentialMetadata,
+) -> Result<()> {
+    let previous_environment = user_environment::read_codex_home()?;
+    save_metadata(next)?;
+    let desired = desired_user_codex_home(next);
+    if let Err(error) = user_environment::activate_codex_home(desired.as_deref()) {
+        let metadata_rollback = save_metadata(previous).err();
+        let environment_rollback =
+            user_environment::activate_codex_home(previous_environment.as_deref()).err();
+        let mut message = format!("切换用户级 CODEX_HOME 失败，已执行回滚：{error}");
+        if let Some(rollback) = metadata_rollback {
+            message.push_str(&format!("；元数据回滚失败：{rollback}"));
+        }
+        if let Some(rollback) = environment_rollback {
+            message.push_str(&format!("；环境变量回滚失败：{rollback}"));
+        }
+        anyhow::bail!(message);
+    }
+    Ok(())
 }
 
 fn save_metadata(metadata: &CredentialMetadata) -> Result<()> {
@@ -1130,8 +1266,8 @@ fn set_private_file(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::user_environment::TEST_ENVIRONMENT_LOCK as ENVIRONMENT_LOCK;
     use std::ffi::OsString;
-    static ENVIRONMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     struct EnvironmentRestore {
         key: &'static str,
         previous: Option<OsString>,
@@ -1140,6 +1276,12 @@ mod tests {
         fn set(key: &'static str, value: &Path) -> Self {
             let previous = std::env::var_os(key);
             std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
             Self { key, previous }
         }
     }
@@ -1229,10 +1371,162 @@ mod tests {
     }
 
     #[test]
-    fn setup_activation_preserves_personal_login_and_existing_selection() {
-        let personal = CredentialMetadata::default();
-        assert!(!should_auto_activate_workspace(&personal, true));
-        assert!(should_auto_activate_workspace(&personal, false));
+    fn v2_managed_pointer_migrates_to_an_unset_original_value() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-managed-pointer-migration-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        let managed_home = data_dir
+            .join("codex-profiles")
+            .join("baijimu")
+            .join("prod")
+            .join("user-25")
+            .join("client-device-a")
+            .join("workspace-1203");
+        fs::create_dir_all(&managed_home).unwrap();
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _codex = EnvironmentRestore::set("CODEX_HOME", &managed_home);
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let profile = CredentialProfile {
+            profile_id: "prod:user-25:client-device-a:workspace-1203".to_string(),
+            environment: "prod".to_string(),
+            user_id: Some(25),
+            client_id: Some("device-a".to_string()),
+            workspace_id: 1203,
+            workspace_name: "工作区 1203".to_string(),
+            model: DEFAULT_MODEL.to_string(),
+            activated_at_epoch_seconds: 1,
+            codex_home: managed_home.display().to_string(),
+            credential_status: "verified".to_string(),
+        };
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(
+            metadata_path(),
+            serde_json::to_vec_pretty(&json!({
+                "version": 2,
+                "profiles": [profile],
+                "activeMode": "baijimu",
+                "activeProfileId": "prod:user-25:client-device-a:workspace-1203",
+                "activeWorkspaceId": 1203
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let metadata = load_metadata().unwrap();
+        assert!(metadata.original_codex_home_state.captured);
+        assert_eq!(metadata.original_codex_home_state.value, None);
+        assert_eq!(
+            metadata.original_codex_home_state.capture_source,
+            "inferred-default-before-managed-pointer"
+        );
+        assert_eq!(original_codex_home(), user_home.join(".codex"));
+
+        activate_chatgpt_profile().unwrap();
+        assert_eq!(std::env::var_os("CODEX_HOME"), None);
+        assert_eq!(load_metadata().unwrap().active_mode, AuthMode::Chatgpt);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn original_value_does_not_drift_after_workspace_activation_and_restart_reconcile() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-personal-baseline-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let personal_home = root.join("personal");
+        let data_dir = root.join("connector-data");
+        fs::create_dir_all(&personal_home).unwrap();
+        let _codex = EnvironmentRestore::set("CODEX_HOME", &personal_home);
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let _config = EnvironmentRestore::unset("BAIJIMU_CONFIG_HOME");
+        let profile = test_workspace_profile(&data_dir, 1203);
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(
+            metadata_path(),
+            serde_json::to_vec_pretty(&json!({
+                "version": 2,
+                "profiles": [profile],
+                "activeMode": "chatgpt",
+                "activeProfileId": null,
+                "activeWorkspaceId": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let metadata = load_metadata().unwrap();
+        assert_eq!(
+            metadata.original_codex_home_state.value.as_deref(),
+            Some(personal_home.to_string_lossy().as_ref())
+        );
+        let profile = metadata.profiles[0].clone();
+        activate_prepared_workspace_profile(&profile).unwrap();
+        let workspace_home = PathBuf::from(&profile.codex_home);
+        assert_eq!(
+            std::env::var_os("CODEX_HOME"),
+            Some(workspace_home.into_os_string())
+        );
+        assert_eq!(original_codex_home(), personal_home);
+
+        reconcile_active_user_codex_home().unwrap();
+        assert_eq!(original_codex_home(), personal_home);
+        activate_chatgpt_profile().unwrap();
+        assert_eq!(
+            std::env::var_os("CODEX_HOME"),
+            Some(personal_home.into_os_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_pointer_activation_restores_metadata_and_previous_environment() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-pointer-rollback-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let original_home = root.join("original");
+        let data_dir = root.join("connector-data");
+        fs::create_dir_all(&original_home).unwrap();
+        let _codex = EnvironmentRestore::set("CODEX_HOME", &original_home);
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let profile = test_workspace_profile(&data_dir, 1203);
+        save_metadata(&CredentialMetadata {
+            profiles: vec![profile.clone()],
+            original_codex_home_state: OriginalCodexHomeState {
+                captured: true,
+                value: Some(original_home.display().to_string()),
+                capture_source: "user-environment".to_string(),
+            },
+            ..CredentialMetadata::default()
+        })
+        .unwrap();
+
+        crate::user_environment::fail_next_activation();
+        let error = activate_prepared_workspace_profile(&profile).unwrap_err();
+        assert!(error.to_string().contains("已执行回滚"));
+        assert_eq!(load_metadata().unwrap().active_mode, AuthMode::Chatgpt);
+        assert_eq!(
+            std::env::var_os("CODEX_HOME"),
+            Some(original_home.into_os_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn setup_activation_preserves_original_login_and_existing_selection() {
+        let original = CredentialMetadata::default();
+        assert!(!should_auto_activate_workspace(&original, true));
+        assert!(should_auto_activate_workspace(&original, false));
 
         let profile = CredentialProfile {
             profile_id: "prod:user-25:client-device-a:workspace-1390".to_string(),
@@ -1252,6 +1546,7 @@ mod tests {
             active_mode: AuthMode::Baijimu,
             active_profile_id: Some(profile.profile_id),
             active_workspace_id: Some(profile.workspace_id),
+            ..CredentialMetadata::default()
         };
         assert!(!should_auto_activate_workspace(&selected, false));
     }

@@ -15,7 +15,7 @@
         <div class="hero-copy">
           <p class="eyebrow">Codex Local App</p>
           <h1>Codex 远程开发</h1>
-          <p>在个人 ChatGPT 登录与各个百积木工作区账号之间安全切换，开发会话按授权档案隔离。</p>
+          <p>在原有 Codex 环境与各个百积木工作区之间安全切换；CODEX_HOME 始终指向当前活动状态目录。</p>
         </div>
         <button id="refresh-button" class="button secondary" type="button">刷新</button>
       </header>
@@ -110,7 +110,7 @@
         <section class="panel" aria-labelledby="profiles-title">
           <div class="section-heading">
             <div><p class="eyebrow">授权档案</p><h2 id="profiles-title">切换账号与工作区</h2></div>
-            <p class="section-note">个人登录使用默认 Codex 目录；百积木工作区分别保存凭证、配置与会话。</p>
+            <p class="section-note">原有 CODEX_HOME 只用于退出企业模式和失败回滚；每个百积木工作区分别保存凭证、配置与会话。</p>
           </div>
           <div id="auth-profile-list" class="profile-list">
             <div class="empty-state">正在读取授权档案…</div>
@@ -120,7 +120,7 @@
         <section class="panel" aria-labelledby="setup-title">
           <div class="section-heading">
             <div><p class="eyebrow">应用初始化</p><h2 id="setup-title">本机 Codex</h2></div>
-            <p class="section-note">Connector 安装完成后在这里初始化或修复 Codex；初始化不会覆盖个人 ChatGPT 登录。</p>
+            <p class="section-note">Connector 安装完成后在这里初始化或修复 Codex；初始化不会删除或覆盖原有 Codex 状态目录。</p>
           </div>
           <p id="setup-message" class="section-note">正在读取初始化状态…</p>
           <div id="setup-progress" class="setup-progress" hidden>
