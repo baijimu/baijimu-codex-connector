@@ -7,6 +7,7 @@ import {
   normalizeCodexSessions,
   normalizeCredentialState,
   normalizeSetupProgress,
+  shouldShowSetupProgress,
 } from "./state.mjs";
 
 const elementIds = [
@@ -20,6 +21,8 @@ const elementIds = [
   "session-path", "session-title", "session-status", "conversation", "prompt-form",
   "session-cwd", "session-project-options", "session-model", "prompt-input", "prompt-hint",
   "interrupt-button", "send-button",
+  "auth-switch-modal", "auth-switch-modal-title", "auth-switch-modal-message",
+  "auth-switch-cancel", "auth-switch-confirm",
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
 
@@ -35,6 +38,7 @@ let selectedTurnId = "";
 let sessionBusy = false;
 let eventSequence = 0;
 let monitorGeneration = 0;
+let pendingAuthSwitch = null;
 
 function bridge() {
   const api = window.baijimuLocalApp;
@@ -119,7 +123,7 @@ function renderAuthProfiles() {
     active: chatgptActive,
     disabled: false,
     actionLabel: "恢复原有 Codex 环境",
-    onSwitch: () => void switchAuthProfile({ mode: "chatgpt" }),
+    onSwitch: () => openAuthSwitchModal({ mode: "chatgpt" }),
   }));
   state?.workspaces.forEach((workspace) => {
     const profile = state.profiles.find((item) => item.workspaceId === workspace.workspaceId);
@@ -133,7 +137,7 @@ function renderAuthProfiles() {
         : "当前百积木账号未授权这个工作区",
       active,
       disabled: !workspace.authorized,
-      onSwitch: () => void switchAuthProfile({ mode: "baijimu", workspaceId: workspace.workspaceId }),
+      onSwitch: () => openAuthSwitchModal({ mode: "baijimu", workspaceId: workspace.workspaceId }),
     }));
   });
 }
@@ -161,13 +165,51 @@ function renderCredentialState() {
   renderAuthProfiles();
 }
 
+function authSwitchCopy(request) {
+  if (request.mode === "chatgpt") {
+    return {
+      title: "恢复原有 Codex 环境",
+      message: "将关闭并重启 Codex，恢复百积木接管前的 CODEX_HOME。不会删除任何工作区目录。",
+    };
+  }
+  const workspace = credentialState?.workspaces?.find(
+    (item) => item.workspaceId === Number(request.workspaceId),
+  );
+  const name = workspace?.name
+    ? `${workspace.name}（${workspace.workspaceId}）`
+    : `工作区 ${request.workspaceId}`;
+  return {
+    title: `切换到${name}`,
+    message: "将关闭并重启 Codex，并把用户级 CODEX_HOME 切换到所选百积木工作区。不会删除其他工作区目录。",
+  };
+}
+
+function closeAuthSwitchModal() {
+  pendingAuthSwitch = null;
+  elements["auth-switch-modal"].hidden = true;
+}
+
+function openAuthSwitchModal(request) {
+  if (pendingAuthSwitch) return;
+  const copy = authSwitchCopy(request);
+  pendingAuthSwitch = request;
+  elements["auth-switch-modal-title"].textContent = copy.title;
+  elements["auth-switch-modal-message"].textContent = copy.message;
+  elements["auth-switch-modal"].hidden = false;
+  elements["auth-switch-confirm"].focus();
+}
+
+async function confirmAuthSwitch() {
+  const request = pendingAuthSwitch;
+  if (!request) return;
+  closeAuthSwitchModal();
+  await switchAuthProfile(request);
+}
+
 async function switchAuthProfile(request) {
-  const confirmation = request.mode === "chatgpt"
-    ? "将关闭并重启 ChatGPT/Codex，恢复百积木接管前的 CODEX_HOME；不会删除任何工作区目录。是否继续？"
-    : "将关闭并重启 ChatGPT/Codex，并把用户级 CODEX_HOME 切换到所选百积木工作区；不会删除其他工作区目录。是否继续？";
-  if (!window.confirm(confirmation)) return;
   clearNotices();
   setAccountBusy(true);
+  setMessage("message", "正在切换账号与工作区…");
   try {
     const response = await bridge().invoke("switchAuthProfile", request);
     credentialState = normalizeCredentialState(response);
@@ -227,7 +269,7 @@ function setupStepStateLabel(state) {
 
 function renderSetupProgress() {
   const progress = normalizeSetupProgress(setupState);
-  const visible = progress.steps.length > 0;
+  const visible = shouldShowSetupProgress(setupState);
   elements["setup-progress"].hidden = !visible;
   if (!visible) return;
 
@@ -567,5 +609,13 @@ elements["load-more-sessions"].addEventListener("click", () => void loadSessions
 elements["prompt-form"].addEventListener("submit", (event) => void sendPrompt(event));
 elements["interrupt-button"].addEventListener("click", () => void interruptTurn());
 elements["setup-retry-button"].addEventListener("click", () => void retrySetup());
+elements["auth-switch-cancel"].addEventListener("click", closeAuthSwitchModal);
+elements["auth-switch-confirm"].addEventListener("click", () => void confirmAuthSwitch());
+elements["auth-switch-modal"].addEventListener("click", (event) => {
+  if (event.target === elements["auth-switch-modal"]) closeAuthSwitchModal();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && pendingAuthSwitch) closeAuthSwitchModal();
+});
 
 void Promise.all([loadSessions(), loadState()]);

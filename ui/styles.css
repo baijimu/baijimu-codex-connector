@@ -182,6 +182,28 @@ input:focus, select:focus, textarea:focus { border-color: var(--green); box-shad
 .message.error { border-color: #efc2c2; color: var(--red); background: var(--red-soft); }
 .message.warning { border-color: #efd99e; color: var(--amber); background: var(--amber-soft); }
 
+.modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(24, 35, 31, 0.32);
+}
+.modal-backdrop[hidden] { display: none; }
+.modal-dialog {
+  width: min(460px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 24px;
+  background: white;
+  box-shadow: 0 24px 70px rgba(24, 35, 31, 0.2);
+}
+.modal-heading h2 { margin: 0; font-size: 21px; letter-spacing: -0.025em; }
+.modal-message { margin: 18px 0 0; color: #42524b; font-size: 13px; line-height: 1.65; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+
 .profile-list { display: grid; gap: 10px; }
 .profile-row {
   display: flex;

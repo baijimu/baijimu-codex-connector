@@ -123,6 +123,11 @@ export function normalizeSetupProgress(value) {
   };
 }
 
+export function shouldShowSetupProgress(value) {
+  const progress = normalizeSetupProgress(value);
+  return progress.status !== "succeeded" && progress.steps.length > 0;
+}
+
 export function formatActivatedAt(epochSeconds) {
   if (!epochSeconds) return "尚未记录切换时间";
   return new Intl.DateTimeFormat("zh-CN", {

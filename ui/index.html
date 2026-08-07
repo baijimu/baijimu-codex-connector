@@ -29,6 +29,22 @@
       <div id="error" class="message error" role="alert" hidden></div>
       <div id="warning" class="message warning" role="status" hidden></div>
 
+      <div id="auth-switch-modal" class="modal-backdrop" hidden>
+        <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-switch-modal-title">
+          <div class="modal-heading">
+            <div>
+              <p class="eyebrow">确认切换</p>
+              <h2 id="auth-switch-modal-title">切换账号与工作区</h2>
+            </div>
+          </div>
+          <p id="auth-switch-modal-message" class="modal-message"></p>
+          <div class="modal-actions">
+            <button id="auth-switch-cancel" class="button secondary" type="button">取消</button>
+            <button id="auth-switch-confirm" class="button primary" type="button">确认切换</button>
+          </div>
+        </section>
+      </div>
+
       <section id="sessions-view" class="view-panel">
         <div class="session-toolbar panel">
           <div>

@@ -8,6 +8,7 @@ import {
   normalizeCredentialState,
   normalizeCodexSessions,
   normalizeSetupProgress,
+  shouldShowSetupProgress,
   codexTurnMessages,
 } from "../ui/state.mjs";
 
@@ -20,7 +21,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   );
   assert.equal(manifest.schemaVersion, "2.0");
   assert.equal(manifest.version, packageManifest.version);
-  assert.equal(manifest.version, "1.2.10");
+  assert.equal(manifest.version, "1.2.11");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.transport.type, "http");
   assert.ok(manifest.methods.some((method) => method.name === "status"));
@@ -64,10 +65,13 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/i);
   assert.doesNotMatch(html, /项目 ID|确认设备/);
   assert.match(html, /切换账号与工作区/);
+  assert.match(html, /auth-switch-modal/);
   assert.match(html, /原有 CODEX_HOME/);
   const app = await readFile(join(root, "ui", "app.js"), "utf8");
   assert.match(app, /恢复原有 Codex 环境/);
   assert.match(app, /不会删除任何工作区目录/);
+  assert.doesNotMatch(app, /window\.confirm/);
+  assert.match(app, /openAuthSwitchModal/);
   assert.doesNotMatch(app, /请关闭后重新打开/);
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
@@ -99,6 +103,8 @@ test("UI derives Codex initialization progress from installer steps and download
   assert.equal(progress.steps[2].downloadedBytes, 50);
   assert.equal(progress.steps[2].totalBytes, 100);
   assert.equal(normalizeSetupProgress({ status: "succeeded", installerStatus: { steps: [] } }).percent, 100);
+  assert.equal(shouldShowSetupProgress({ status: "running", installerStatus: { steps: [{ state: "running" }] } }), true);
+  assert.equal(shouldShowSetupProgress({ status: "succeeded", installerStatus: { steps: [{ state: "completed" }] } }), false);
 });
 
 test("UI keeps Codex sessions newest-first and extracts conversation messages", () => {
