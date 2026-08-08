@@ -178,6 +178,22 @@ test("market publisher uses explicit immutable version creation and review submi
   assert.doesNotMatch(script, /codex-local-app-v|gitee\.com|zxflimit_admin/);
 });
 
+test("Windows setup launches the official desktop only after activating CODEX_HOME", async () => {
+  const setup = await readFile(join(root, "src", "setup.rs"), "utf8");
+  const desktop = await readFile(join(root, "src", "desktop.rs"), "utf8");
+  const deferIndex = setup.indexOf('env("CODEX_INSTALL_SKIP_DESKTOP_RESTART", "1")');
+  const activationIndex = setup.indexOf("credential::finalize_workspace_setup");
+  const launchIndex = setup.indexOf("desktop::launch_and_verify");
+
+  assert.ok(deferIndex >= 0, "the installer must not launch before CODEX_HOME activation");
+  assert.ok(activationIndex > deferIndex, "CODEX_HOME activation must follow installation");
+  assert.ok(launchIndex > activationIndex, "official desktop launch must follow CODEX_HOME activation");
+  assert.match(setup, /credential::restore_active_home\(active_home_snapshot\)/);
+  assert.ok(desktop.includes('Start-Process explorer.exe "shell:AppsFolder\\$($app[0].AppID)"'));
+  assert.match(desktop, /MainWindowHandle -ne 0/);
+  assert.match(desktop, /no visible window was detected within 45 seconds/);
+});
+
 test("all package identities agree with the GitHub source tag", async () => {
   const cargo = await readFile(join(root, "Cargo.toml"), "utf8");
   const cargoLock = await readFile(join(root, "Cargo.lock"), "utf8");
