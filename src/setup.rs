@@ -18,7 +18,7 @@ const MACOS_SCRIPT_URL: &str =
     "https://baijimu-lowcode-public-20260420.oss-cn-beijing.aliyuncs.com/docs/scripts/codex-device-install/macos-configure-terminal-and-login.sh?versionId=CAEQogIYgYCAmezf6f4ZIiBmMDQ3MWU4ZDVhYTY0ZjQxYmEzOTA3MTU0NDlmNmE5Nw--";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_URL: &str =
-    "https://baijimu-lowcode-public-20260420.oss-cn-beijing.aliyuncs.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYDAvdmT_f4ZIiBlOGJiODg2NDUyMGU0ZjI0YTg5MjRjNjA0OGE2Yzg4Yg--";
+    "https://baijimu-lowcode-public-20260420.oss-cn-beijing.aliyuncs.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCAuuvr_f4ZIiAyZjRkYmYyYTdmOGI0YmQ2OGIxZDU3NThkYzcwOGExMQ--";
 const SETUP_STATUS_FILE: &str = "setup-status.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
