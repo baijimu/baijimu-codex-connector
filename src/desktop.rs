@@ -12,6 +12,11 @@ pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
     platform::stop_for_codex_home_switch()
 }
 
+#[cfg(target_os = "windows")]
+pub fn launch_and_verify() -> Result<()> {
+    platform::launch_and_verify()
+}
+
 impl DesktopSwitch {
     pub fn restart_and_verify(&self) -> Result<bool> {
         platform::restart_and_verify(self)
@@ -89,6 +94,53 @@ if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not restart within 
 [pscustomobject]@{ running = $true; processCount = $running.Count } | ConvertTo-Json -Compress
 "#;
 
+    const LAUNCH_AND_VERIFY_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$packages = @('OpenAI.Codex', 'OpenAI.ChatGPT') | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ }
+if (-not $packages) {
+  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
+}
+if (-not $packages) { throw 'ChatGPT/Codex desktop package is not installed for the current user' }
+$roots = @($packages | ForEach-Object { $_.InstallLocation } | Where-Object { $_ })
+$familyNames = @($packages | ForEach-Object { $_.PackageFamilyName } | Where-Object { $_ })
+$app = @(Get-StartApps | Where-Object {
+  $id = $_.AppID
+  ($familyNames | Where-Object { $id -like "$_*" }).Count -gt 0
+} | Select-Object -First 1)
+if (-not $app) { throw 'ChatGPT/Codex Start menu application id is unavailable' }
+$existing = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  try {
+    $path = $_.Path
+    if (-not $path) { return $false }
+    return ($roots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+  } catch { return $false }
+})
+if ($existing.Count -gt 0) {
+  $existing | Stop-Process -Force -ErrorAction Stop
+  $deadline = (Get-Date).AddSeconds(15)
+  do {
+    Start-Sleep -Milliseconds 250
+    $remaining = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $existing.Id -contains $_.Id })
+  } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
+  if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex desktop processes did not stop within 15 seconds' }
+}
+Start-Process explorer.exe "shell:AppsFolder\$($app[0].AppID)"
+$deadline = (Get-Date).AddSeconds(45)
+do {
+  Start-Sleep -Milliseconds 500
+  $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    try {
+      $path = $_.Path
+      if (-not $path) { return $false }
+      return ($roots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+    } catch { return $false }
+  })
+  $visible = @($running | Where-Object { $_.MainWindowHandle -ne 0 })
+} while ($visible.Count -eq 0 -and (Get-Date) -lt $deadline)
+if ($visible.Count -eq 0) { throw 'ChatGPT/Codex desktop started but no visible window was detected within 45 seconds' }
+[pscustomobject]@{ running = $true; processCount = $running.Count; visibleWindowCount = $visible.Count; appId = $app[0].AppID } | ConvertTo-Json -Compress
+"#;
+
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
         let output = run_powershell(STOP_SCRIPT, None)?;
         let result: StopResult =
@@ -97,6 +149,11 @@ if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not restart within 
             was_running: result.was_running,
             app_id: result.app_id,
         })
+    }
+
+    pub fn launch_and_verify() -> Result<()> {
+        run_powershell(LAUNCH_AND_VERIFY_SCRIPT, None)?;
+        Ok(())
     }
 
     pub fn restart_and_verify(state: &DesktopSwitch) -> Result<bool> {
