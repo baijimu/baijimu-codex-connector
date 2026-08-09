@@ -361,8 +361,8 @@ fn managed_windows_cli(local_app_data: &Path) -> Option<PathBuf> {
         .join("Codex")
         .join("cli")
         .join("current.json");
-    let state = fs::read_to_string(state_path).ok()?;
-    let value = serde_json::from_str::<Value>(state.trim_start_matches('\u{feff}')).ok()?;
+    let state = fs::read(state_path).ok()?;
+    let value = crate::json_compat::from_slice::<Value>(&state).ok()?;
     value
         .get("binaryPath")
         .and_then(Value::as_str)
@@ -608,11 +608,10 @@ mod tests {
         executable(&binary);
         let state = local_app_data.join("OpenAI/Codex/cli/current.json");
         fs::create_dir_all(state.parent().expect("state parent")).expect("create state parent");
-        fs::write(
-            &state,
-            serde_json::to_vec(&json!({ "binaryPath": binary })).expect("serialize state"),
-        )
-        .expect("write state");
+        let mut state_content = vec![0xef, 0xbb, 0xbf];
+        state_content
+            .extend(serde_json::to_vec(&json!({ "binaryPath": binary })).expect("serialize state"));
+        fs::write(&state, state_content).expect("write state");
         let mut resolver_context = context(&root, OsString::new());
         resolver_context.platform = Platform::Windows;
         resolver_context.local_app_data = Some(local_app_data);

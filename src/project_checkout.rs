@@ -71,7 +71,7 @@ pub fn prepare(request: CheckoutRequest) -> Result<CheckoutResult> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let checkout: Value = serde_json::from_slice(&output.stdout)
+    let checkout: Value = crate::json_compat::from_slice(&output.stdout)
         .context("baijimu project checkout 未返回合法JSON")?;
     let canonical_directory = fs::canonicalize(&directory)
         .with_context(|| format!("检出目录回查失败: {}", directory.display()))?;

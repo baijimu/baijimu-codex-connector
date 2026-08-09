@@ -498,9 +498,9 @@ pub fn codex_ready_for_workspace(workspace_id: u64) -> bool {
 
 fn load_shared_credential_store() -> Result<SharedCredentialStore> {
     let path = shared_auth_path();
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("读取百积木本机授权失败: {}", path.display()))?;
-    let document: Value = serde_json::from_str(&content)
+    let content =
+        fs::read(&path).with_context(|| format!("读取百积木本机授权失败: {}", path.display()))?;
+    let document: Value = crate::json_compat::from_slice(&content)
         .with_context(|| format!("解析百积木本机授权失败: {}", path.display()))?;
     let environment = document
         .get("currentEnvironment")
@@ -636,8 +636,9 @@ fn write_workspace_auth(path: &Path, credential: &str) -> Result<()> {
 fn write_workspace_config(path: &Path) -> Result<()> {
     let original_path = original_codex_home().join("config.toml");
     let mut document = if original_path.exists() {
-        fs::read_to_string(&original_path)
-            .with_context(|| format!("读取原有 Codex 配置失败: {}", original_path.display()))?
+        let content = fs::read_to_string(&original_path)
+            .with_context(|| format!("读取原有 Codex 配置失败: {}", original_path.display()))?;
+        crate::json_compat::strip_utf8_bom_str(&content)
             .parse::<DocumentMut>()
             .context("解析原有 Codex config.toml 失败")?
     } else {
@@ -676,7 +677,11 @@ fn write_workspace_config(path: &Path) -> Result<()> {
 fn managed_config_ready(path: &Path) -> bool {
     fs::read_to_string(path)
         .ok()
-        .and_then(|text| text.parse::<DocumentMut>().ok())
+        .and_then(|text| {
+            crate::json_compat::strip_utf8_bom_str(&text)
+                .parse::<DocumentMut>()
+                .ok()
+        })
         .is_some_and(|doc| {
             doc.get("model_provider").and_then(Item::as_str) == Some(ROUTER_PROVIDER)
                 && doc
@@ -700,9 +705,9 @@ fn read_chatgpt_state(home: &Path) -> Result<ChatGptProfileState> {
             codex_home: home.display().to_string(),
         });
     }
-    let content = fs::read_to_string(&path)
+    let content = fs::read(&path)
         .with_context(|| format!("读取 ChatGPT 登录状态失败: {}", path.display()))?;
-    let value: Value = serde_json::from_str(content.trim_start_matches('\u{feff}'))
+    let value: Value = crate::json_compat::from_slice(&content)
         .with_context(|| format!("解析 ChatGPT 登录状态失败: {}", path.display()))?;
     let auth_mode = value
         .get("auth_mode")
@@ -938,9 +943,9 @@ fn load_metadata() -> Result<CredentialMetadata> {
         None
     };
     let mut metadata = if let Some(source) = source.as_ref() {
-        let content = fs::read_to_string(source)
+        let content = fs::read(source)
             .with_context(|| format!("读取 Codex 凭证元数据失败: {}", source.display()))?;
-        serde_json::from_str::<CredentialMetadata>(&content)
+        crate::json_compat::from_slice::<CredentialMetadata>(&content)
             .with_context(|| format!("解析 Codex 凭证元数据失败: {}", source.display()))?
     } else {
         CredentialMetadata::default()
@@ -1095,11 +1100,10 @@ fn read_codex_api_key(path: &Path) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
-    let value: Value = serde_json::from_str(
-        &fs::read_to_string(path)
-            .with_context(|| format!("读取 Codex 认证文件失败: {}", path.display()))?,
-    )
-    .with_context(|| format!("解析 Codex 认证文件失败: {}", path.display()))?;
+    let content =
+        fs::read(path).with_context(|| format!("读取 Codex 认证文件失败: {}", path.display()))?;
+    let value: Value = crate::json_compat::from_slice(&content)
+        .with_context(|| format!("解析 Codex 认证文件失败: {}", path.display()))?;
     Ok(value
         .get("OPENAI_API_KEY")
         .and_then(Value::as_str)
@@ -1333,6 +1337,28 @@ mod tests {
     }
 
     #[test]
+    fn reads_workspace_api_key_with_utf8_bom() {
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-workspace-auth-bom-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let auth_path = root.join("auth.json");
+        fs::write(
+            &auth_path,
+            "\u{feff}{\"OPENAI_API_KEY\":\"workspace-key\",\"auth_mode\":\"apikey\"}",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_codex_api_key(&auth_path).unwrap().as_deref(),
+            Some("workspace-key")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn legacy_metadata_is_migrated_into_connector_data_directory() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
@@ -1345,7 +1371,9 @@ mod tests {
         fs::create_dir_all(config_home.join("baijimu")).unwrap();
         let _config = EnvironmentRestore::set("BAIJIMU_CONFIG_HOME", &config_home);
         let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
-        fs::write(legacy_metadata_path(), serde_json::to_vec_pretty(&json!({"version":1,"profiles":[{"workspaceId":12,"workspaceName":"测试工作区","model":DEFAULT_MODEL,"activatedAtEpochSeconds":56}],"activeWorkspaceId":12})).unwrap()).unwrap();
+        let mut legacy = vec![0xef, 0xbb, 0xbf];
+        legacy.extend(serde_json::to_vec_pretty(&json!({"version":1,"profiles":[{"workspaceId":12,"workspaceName":"测试工作区","model":DEFAULT_MODEL,"activatedAtEpochSeconds":56}],"activeWorkspaceId":12})).unwrap());
+        fs::write(legacy_metadata_path(), legacy).unwrap();
         let metadata = load_metadata().unwrap();
         assert_eq!(metadata.active_mode, AuthMode::Baijimu);
         assert!(metadata.active_profile_id.is_some());
@@ -1366,7 +1394,9 @@ mod tests {
         let config_home = root.join("config");
         fs::create_dir_all(config_home.join("baijimu")).unwrap();
         let _config = EnvironmentRestore::set("BAIJIMU_CONFIG_HOME", &config_home);
-        fs::write(shared_auth_path(), serde_json::to_vec_pretty(&json!({"schemaVersion":2,"currentEnvironment":"prod","currentWorkspaceId":1390,"environments":{"prod":{"baseUrl":"https://api.baijimu.com"}},"credentials":[{"workspaceIds":[1390],"token":"old","userId":24,"issuedAt":"2026-01-01"},{"workspaceIds":[1390],"token":"new","userId":25,"issuedAt":"2026-02-01"},{"workspaceIds":[1200],"token":"other","userId":25,"issuedAt":"2026-03-01"}]})).unwrap()).unwrap();
+        let mut shared_auth = vec![0xef, 0xbb, 0xbf];
+        shared_auth.extend(serde_json::to_vec_pretty(&json!({"schemaVersion":2,"currentEnvironment":"prod","currentWorkspaceId":1390,"environments":{"prod":{"baseUrl":"https://api.baijimu.com"}},"credentials":[{"workspaceIds":[1390],"token":"old","userId":24,"issuedAt":"2026-01-01"},{"workspaceIds":[1390],"token":"new","userId":25,"issuedAt":"2026-02-01"},{"workspaceIds":[1200],"token":"other","userId":25,"issuedAt":"2026-03-01"}]})).unwrap());
+        fs::write(shared_auth_path(), shared_auth).unwrap();
         let store = load_shared_credential_store().unwrap();
         let selected = select_local_machine_credential(&store, 1390).unwrap();
         assert_eq!(selected.token, "new");

@@ -24,10 +24,10 @@ const MACOS_SCRIPT_SHA256: &str =
     "0a60334e37593fa95df92b5cf0787b64a9e491ab552b2502d9a195d59a0fe7be";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_URL: &str =
-    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCAqpO.lf8ZIiA4NGUzNzZmNDYzZjg0YmQ2OWFjODNiNDI0YWZhYjhlZA--";
+    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCA7on3l_8ZIiBkZGQ0YjBkNWVkZTE0ZmE1YTgyMmQ3ZjAwYjgyZDc4Zg--";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_SHA256: &str =
-    "1a99c1706d1fb1fe1093f1bbfc1ebef4ba8ea55d4f4d0b79ebeef537c99daf37";
+    "cec3ec342954ba89a05b82e7d421deea731189b2f7603440e80a6a5266d4cb5c";
 const SETUP_STATUS_FILE: &str = "setup-status.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,9 +63,9 @@ pub struct SetupManager {
 
 impl SetupManager {
     pub fn load() -> Self {
-        let status = fs::read_to_string(status_path())
+        let status = fs::read(status_path())
             .ok()
-            .and_then(|content| serde_json::from_str::<SetupStatus>(&content).ok())
+            .and_then(|content| crate::json_compat::from_slice::<SetupStatus>(&content).ok())
             .map(|mut status| {
                 if status.status == "running" {
                     status.status = "failed".to_string();
@@ -435,9 +435,9 @@ fn home_dir() -> PathBuf {
 }
 
 fn read_json(path: impl AsRef<Path>) -> Option<Value> {
-    fs::read_to_string(path)
+    fs::read(path)
         .ok()
-        .and_then(|content| serde_json::from_str(content.trim_start_matches('\u{feff}')).ok())
+        .and_then(|content| crate::json_compat::from_slice(&content).ok())
 }
 
 fn atomic_write_private(path: &Path, content: &[u8]) -> Result<()> {
