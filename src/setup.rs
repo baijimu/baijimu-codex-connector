@@ -1,4 +1,4 @@
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::desktop;
 use crate::{codex_binary, credential};
 use anyhow::{Context, Result};
@@ -205,7 +205,7 @@ fn run_install(
     let install_result = (|| -> Result<()> {
         let prepared = credential::prepare_workspace_profile(workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         let active_home_snapshot = credential::active_home_snapshot()
             .context("保存 ChatGPT/Codex 桌面应用启动前的环境状态失败")?;
         atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
@@ -275,7 +275,7 @@ fn run_install(
             anyhow::bail!("官方安装脚本执行失败: {}", compact_error(&errors));
         }
         credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Err(error) = desktop::launch_and_verify() {
             let rollback = credential::restore_active_home(active_home_snapshot);
             let mut message =

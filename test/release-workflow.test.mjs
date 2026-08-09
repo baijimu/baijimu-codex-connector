@@ -193,7 +193,7 @@ test("market publisher uses explicit immutable version creation and review submi
   assert.doesNotMatch(script, /codex-local-app-v|gitee\.com|zxflimit_admin/);
 });
 
-test("Windows setup launches the official desktop only after activating CODEX_HOME", async () => {
+test("macOS and Windows setup launch the official desktop only after activating CODEX_HOME", async () => {
   const setup = await readFile(join(root, "src", "setup.rs"), "utf8");
   const desktop = await readFile(join(root, "src", "desktop.rs"), "utf8");
   const deferIndex = setup.indexOf('env("CODEX_INSTALL_SKIP_DESKTOP_RESTART", "1")');
@@ -207,6 +207,14 @@ test("Windows setup launches the official desktop only after activating CODEX_HO
   assert.ok(desktop.includes('Start-Process explorer.exe "shell:AppsFolder\\$($app[0].AppID)"'));
   assert.match(desktop, /MainWindowHandle -ne 0/);
   assert.match(desktop, /no visible window was detected within 45 seconds/);
+  assert.match(desktop, /\/Applications\/ChatGPT\.app/);
+  assert.match(desktop, /Command::new\("\/usr\/bin\/open"\)/);
+  assert.match(desktop, /command\.arg\("--env"\)\.arg\(assignment\)/);
+  assert.match(desktop, /OsString::from\("CODEX_HOME="\)/);
+  assert.match(desktop, /Command::new\("\/usr\/bin\/lsappinfo"\)/);
+  assert.match(desktop, /has_visible_window\(&last_info\)/);
+  assert.match(desktop, /reopen_with_project\(&app_path\)/);
+  assert.doesNotMatch(desktop, /pkill/);
 });
 
 test("all package identities agree with the GitHub source tag", async () => {
