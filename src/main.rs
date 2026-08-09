@@ -1,6 +1,7 @@
 mod codex_binary;
 mod credential;
 mod desktop;
+mod json_compat;
 mod project_checkout;
 mod setup;
 mod user_environment;
@@ -1952,9 +1953,9 @@ fn usize_param(body: &Value, key: &str, default: usize) -> usize {
 }
 
 fn read_json_file(path: &Path) -> Value {
-    fs::read_to_string(path)
+    fs::read(path)
         .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
+        .and_then(|content| json_compat::from_slice(&content).ok())
         .unwrap_or_else(|| json!({}))
 }
 
@@ -2489,6 +2490,18 @@ fn print_help() {
 #[cfg(test)]
 mod project_state_tests {
     use super::*;
+
+    #[test]
+    fn reads_global_state_json_with_utf8_bom() {
+        let path = env::temp_dir().join(format!(
+            "baijimu-codex-global-state-bom-{}",
+            std::process::id()
+        ));
+        fs::write(&path, "\u{feff}{\"projects\":[\"one\"]}").unwrap();
+
+        assert_eq!(read_json_file(&path), json!({"projects": ["one"]}));
+        fs::remove_file(path).unwrap();
+    }
 
     fn setup_status(status: &str, workspace_id: Option<u64>) -> setup::SetupStatus {
         setup::SetupStatus {

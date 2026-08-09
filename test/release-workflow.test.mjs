@@ -64,6 +64,11 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /read_rust_constant WINDOWS_SCRIPT_SHA256/);
   assert.match(workflow, /sha256sum -c -/);
   assert.match(workflow, /curl exit \$curl_status/);
+  assert.match(workflow, /New-Object System\.Text\.UTF8Encoding\(\$false\)/);
+  assert.match(workflow, /Write-Utf8NoBomFile \$authPath/);
+  assert.match(workflow, /Write-Utf8NoBomFile \$configPath/);
+  assert.match(workflow, /Write-Utf8NoBomFile \$statePath/);
+  assert.match(workflow, /Set-Content\[\^\[:cntrl:\]\]\*\-Encoding/);
   assert.match(workflow, /dumpbin\.exe/);
   assert.match(workflow, /VCRUNTIME\|MSVCP/);
 

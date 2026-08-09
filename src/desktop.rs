@@ -143,8 +143,8 @@ if ($visible.Count -eq 0) { throw 'ChatGPT/Codex desktop started but no visible 
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
         let output = run_powershell(STOP_SCRIPT, None)?;
-        let result: StopResult =
-            serde_json::from_slice(&output).context("解析 ChatGPT/Codex 桌面停止结果失败")?;
+        let result: StopResult = crate::json_compat::from_slice(&output)
+            .context("解析 ChatGPT/Codex 桌面停止结果失败")?;
         Ok(DesktopSwitch {
             was_running: result.was_running,
             app_id: result.app_id,
