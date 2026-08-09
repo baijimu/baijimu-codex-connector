@@ -700,11 +700,10 @@ fn read_chatgpt_state(home: &Path) -> Result<ChatGptProfileState> {
             codex_home: home.display().to_string(),
         });
     }
-    let value: Value = serde_json::from_str(
-        &fs::read_to_string(&path)
-            .with_context(|| format!("读取 ChatGPT 登录状态失败: {}", path.display()))?,
-    )
-    .with_context(|| format!("解析 ChatGPT 登录状态失败: {}", path.display()))?;
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("读取 ChatGPT 登录状态失败: {}", path.display()))?;
+    let value: Value = serde_json::from_str(content.trim_start_matches('\u{feff}'))
+        .with_context(|| format!("解析 ChatGPT 登录状态失败: {}", path.display()))?;
     let auth_mode = value
         .get("auth_mode")
         .and_then(Value::as_str)
@@ -1292,6 +1291,45 @@ mod tests {
                 None => std::env::remove_var(self.key),
             }
         }
+    }
+
+    #[test]
+    fn reads_windows_chatgpt_auth_with_utf8_bom() {
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-chatgpt-auth-bom-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("auth.json"),
+            "\u{feff}{\"auth_mode\":\"chatgpt\",\"tokens\":{\"access_token\":\"personal-token\",\"account_id\":\"account-1\"}}",
+        )
+        .unwrap();
+
+        let state = read_chatgpt_state(&root).unwrap();
+
+        assert!(state.configured);
+        assert_eq!(state.auth_mode.as_deref(), Some("chatgpt"));
+        assert_eq!(state.account_id.as_deref(), Some("account-1"));
+        assert_eq!(state.codex_home, root.display().to_string());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_malformed_chatgpt_auth_after_bom_normalization() {
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-chatgpt-auth-invalid-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("auth.json"), "\u{feff}{invalid-json").unwrap();
+
+        let error = read_chatgpt_state(&root).unwrap_err();
+
+        assert!(error.to_string().contains("解析 ChatGPT 登录状态失败"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
