@@ -311,18 +311,40 @@ fn known_codex_candidates(context: &ResolverContext) -> Vec<(PathBuf, &'static s
 }
 
 fn managed_windows_cli(local_app_data: &Path) -> Option<PathBuf> {
-    let state_path = local_app_data
-        .join("OpenAI")
-        .join("Codex")
-        .join("cli")
-        .join("current.json");
+    let cli_root = local_app_data.join("OpenAI").join("Codex").join("cli");
+    let state_path = cli_root.join("current.json");
     let state = fs::read(state_path).ok()?;
     let value = crate::json_compat::from_slice::<Value>(&state).ok()?;
-    value
-        .get("binaryPath")
-        .and_then(Value::as_str)
-        .filter(|value| Path::new(value).is_absolute())
-        .map(PathBuf::from)
+    if value.get("schemaVersion").and_then(Value::as_u64) != Some(2)
+        || value.get("packageLayout").and_then(Value::as_str) != Some("codex_package_v1")
+    {
+        return None;
+    }
+
+    let target = value.get("target").and_then(Value::as_str)?;
+    if !matches!(target, "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc") {
+        return None;
+    }
+    let artifact_sha256 = value.get("artifactSha256").and_then(Value::as_str)?;
+    if artifact_sha256.len() != 64 || !artifact_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    if value.get("artifact").and_then(Value::as_str)
+        != Some(format!("codex-package-{target}.tar.gz").as_str())
+    {
+        return None;
+    }
+
+    let package_root = PathBuf::from(value.get("packageRoot").and_then(Value::as_str)?);
+    let binary = PathBuf::from(value.get("binaryPath").and_then(Value::as_str)?);
+    let expected_package_root = cli_root.join("versions").join(artifact_sha256);
+    let expected_binary = expected_package_root.join("bin").join("codex.exe");
+    (package_root.is_absolute()
+        && binary.is_absolute()
+        && package_root == expected_package_root
+        && binary == expected_binary)
+        .then_some(binary)
 }
 
 fn resolve_from_login_environment(requested: &str, context: &ResolverContext) -> Option<PathBuf> {
@@ -558,13 +580,27 @@ mod tests {
     fn finds_connector_managed_official_windows_cli() {
         let root = test_root("windows-managed-cli");
         let local_app_data = root.join("local-app-data");
-        let binary = local_app_data.join("OpenAI/Codex/cli/versions/sha256/codex.exe");
+        let digest = "a".repeat(64);
+        let package_root = local_app_data
+            .join("OpenAI/Codex/cli/versions")
+            .join(&digest);
+        let binary = package_root.join("bin/codex.exe");
         executable(&binary);
         let state = local_app_data.join("OpenAI/Codex/cli/current.json");
         fs::create_dir_all(state.parent().expect("state parent")).expect("create state parent");
         let mut state_content = vec![0xef, 0xbb, 0xbf];
-        state_content
-            .extend(serde_json::to_vec(&json!({ "binaryPath": binary })).expect("serialize state"));
+        state_content.extend(
+            serde_json::to_vec(&json!({
+                "schemaVersion": 2,
+                "binaryPath": binary,
+                "packageRoot": package_root,
+                "packageLayout": "codex_package_v1",
+                "target": "x86_64-pc-windows-msvc",
+                "artifact": "codex-package-x86_64-pc-windows-msvc.tar.gz",
+                "artifactSha256": digest,
+            }))
+            .expect("serialize state"),
+        );
         fs::write(&state, state_content).expect("write state");
         let mut resolver_context = context(&root, OsString::new());
         resolver_context.platform = Platform::Windows;
@@ -575,6 +611,77 @@ mod tests {
 
         assert_eq!(resolution.path, binary);
         assert_eq!(resolution.source, "connector_managed_official_cli");
+        fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn rejects_legacy_managed_windows_state_and_uses_process_path() {
+        let root = test_root("windows-legacy-managed-cli");
+        let local_app_data = root.join("local-app-data");
+        let legacy_binary =
+            local_app_data.join("OpenAI/Codex/cli/versions/legacy/codex-command-runner.exe");
+        executable(&legacy_binary);
+        let state = local_app_data.join("OpenAI/Codex/cli/current.json");
+        fs::create_dir_all(state.parent().expect("state parent")).expect("create state parent");
+        fs::write(
+            &state,
+            serde_json::to_vec(&json!({ "binaryPath": legacy_binary })).expect("serialize state"),
+        )
+        .expect("write state");
+        let path_dir = root.join("path-bin");
+        let path_binary = path_dir.join("codex.exe");
+        executable(&path_binary);
+        let mut resolver_context = windows_context(
+            &root,
+            env::join_paths([&path_dir]).expect("join Windows PATH"),
+        );
+        resolver_context.local_app_data = Some(local_app_data);
+
+        let resolution = resolve_with_context(&resolver_context, false)
+            .expect("fall back from legacy managed state to process PATH");
+
+        assert_eq!(resolution.path, path_binary);
+        assert_eq!(resolution.source, "process_path");
+        assert!(!resolution.checked_paths.contains(&legacy_binary));
+        fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn rejects_managed_windows_state_with_noncanonical_entrypoint() {
+        let root = test_root("windows-noncanonical-managed-cli");
+        let local_app_data = root.join("local-app-data");
+        let digest = "b".repeat(64);
+        let package_root = local_app_data
+            .join("OpenAI/Codex/cli/versions")
+            .join(&digest);
+        let helper = package_root.join("codex-resources/codex-command-runner.exe");
+        executable(&helper);
+        let state = local_app_data.join("OpenAI/Codex/cli/current.json");
+        fs::create_dir_all(state.parent().expect("state parent")).expect("create state parent");
+        fs::write(
+            &state,
+            serde_json::to_vec(&json!({
+                "schemaVersion": 2,
+                "binaryPath": helper,
+                "packageRoot": package_root,
+                "packageLayout": "codex_package_v1",
+                "target": "x86_64-pc-windows-msvc",
+                "artifact": "codex-package-x86_64-pc-windows-msvc.tar.gz",
+                "artifactSha256": digest,
+            }))
+            .expect("serialize state"),
+        )
+        .expect("write state");
+        let mut resolver_context = windows_context(&root, OsString::new());
+        resolver_context.local_app_data = Some(local_app_data);
+
+        let result = resolve_with_context(&resolver_context, false);
+
+        assert!(result.is_err());
+        assert!(!result
+            .expect_err("helper entrypoint must not resolve")
+            .checked_paths
+            .contains(&helper));
         fs::remove_dir_all(root).expect("remove test root");
     }
 

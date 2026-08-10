@@ -342,6 +342,14 @@ jobs:
           .github/scripts/test-windows-installer-package-layout.ps1
           -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
 
+      - name: Verify Codex CLI candidate resolution with Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        timeout-minutes: 5
+        run: >
+          .github/scripts/test-windows-installer-cli-resolution.ps1
+          -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
+
       - name: Download and run Windows signing tool
         if: runner.os == 'Windows' && needs.validate.outputs.publish == 'true'
         shell: pwsh
