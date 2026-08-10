@@ -68,6 +68,11 @@ test("connector owns its application release and upstream artifact sync workflow
     /Verify installer atomic writes with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
   );
   assert.match(workflow, /test-windows-installer-atomic-write\.ps1/);
+  assert.match(
+    workflow,
+    /Verify installer app-server login protocol with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
+  );
+  assert.match(workflow, /test-windows-installer-app-server-login\.ps1/);
   assert.match(workflow, /Upload validated installer scripts/);
   assert.match(workflow, /Download validated installer scripts/);
   assert.match(workflow, /name: validated-installer-scripts/);
@@ -80,6 +85,15 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.doesNotMatch(windowsInstallerTest, /curl\.exe|https?:\/\//);
   assert.match(windowsInstallerTest, /Parameter\(Mandatory = \$true\)/);
   assert.match(windowsInstallerTest, /Test-Path -LiteralPath \$ScriptPath -PathType Leaf/);
+  const windowsLoginTest = await readFile(
+    join(root, ".github", "scripts", "test-windows-installer-app-server-login.ps1"),
+    "utf8",
+  );
+  assert.doesNotMatch(windowsLoginTest, /Invoke-WebRequest|curl\.exe|https?:\/\//);
+  assert.match(windowsLoginTest, /delayed-success/);
+  assert.match(windowsLoginTest, /Start-Sleep -Seconds 3/);
+  assert.match(windowsLoginTest, /denied by fake server/);
+  assert.match(windowsLoginTest, /exposed the API key/);
   assert.match(windowsInstallerTest, /Get-FileHash -LiteralPath \$ScriptPath/);
   assert.match(workflow, /Verify immutable installer scripts/);
   assert.match(workflow, /read_rust_constant MACOS_SCRIPT_SHA256/);
@@ -90,6 +104,9 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /Write-Utf8NoBomFile \$authPath/);
   assert.match(workflow, /Write-Utf8NoBomFile \$configPath/);
   assert.match(workflow, /Write-Utf8NoBomFile \$statePath/);
+  assert.match(workflow, /ReadLineAsync\(\)/);
+  assert.match(workflow, /account\/read API-key state/);
+  assert.match(workflow, /ConvertFrom-Json -ErrorAction Stop/);
   assert.match(workflow, /Set-Content\[\^\[:cntrl:\]\]\*\-Encoding/);
   assert.match(workflow, /dumpbin\.exe/);
   assert.match(workflow, /VCRUNTIME\|MSVCP/);
