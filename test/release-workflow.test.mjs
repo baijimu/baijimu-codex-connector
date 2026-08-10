@@ -265,22 +265,29 @@ test("market publisher uses explicit immutable version creation and review submi
   assert.doesNotMatch(script, /codex-local-app-v|gitee\.com|zxflimit_admin/);
 });
 
-test("macOS and Windows setup launch the official desktop only after activating CODEX_HOME", async () => {
+test("desktop launch is explicit, process-scoped, and independent from user CODEX_HOME", async () => {
   const setup = await readFile(join(root, "src", "setup.rs"), "utf8");
   const desktop = await readFile(join(root, "src", "desktop.rs"), "utf8");
+  const main = await readFile(join(root, "src", "main.rs"), "utf8");
+  const userEnvironment = await readFile(join(root, "src", "user_environment.rs"), "utf8");
   const deferIndex = setup.indexOf('env("CODEX_INSTALL_SKIP_DESKTOP_RESTART", "1")');
-  const activationIndex = setup.indexOf("credential::finalize_workspace_setup");
-  const launchIndex = setup.indexOf("desktop::launch_and_verify");
 
-  assert.ok(deferIndex >= 0, "the installer must not launch before CODEX_HOME activation");
-  assert.ok(activationIndex > deferIndex, "CODEX_HOME activation must follow installation");
-  assert.ok(launchIndex > activationIndex, "official desktop launch must follow CODEX_HOME activation");
-  assert.match(setup, /credential::restore_active_home\(active_home_snapshot\)/);
+  assert.ok(deferIndex >= 0, "setup must suppress installer-owned desktop launch");
+  assert.doesNotMatch(setup, /desktop::launch_and_verify/);
+  assert.doesNotMatch(main, /reconcile_active_user_codex_home/);
+  assert.match(main, /desktop::launch_and_verify\(&selected_home\)/);
+  assert.match(main, /restart_and_verify\(&previous_home\)/);
+  assert.doesNotMatch(main, /user_codex_home_synchronized/);
   assert.match(setup, /"-EncodedCommand"/);
   assert.match(setup, /"-OutputFormat"/);
   assert.match(setup, /"Text"/);
   assert.match(setup, /\[Console\]::OutputEncoding/);
-  assert.ok(desktop.includes('Start-Process explorer.exe "shell:AppsFolder\\$($app[0].AppID)"'));
+  assert.match(desktop, /Start-Process -FilePath \$entry\[0\]\.executable/);
+  assert.doesNotMatch(desktop, /shell:AppsFolder/);
+  assert.match(desktop, /Explicit CODEX_HOME is required for isolated desktop launch/);
+  assert.match(desktop, /isolate_from_connector_environment/);
+  assert.match(userEnvironment, /pub fn restore_codex_home/);
+  assert.doesNotMatch(userEnvironment, /pub fn activate_codex_home/);
   assert.match(desktop, /if \(\$running\.Count -eq 0\) \{ throw 'ChatGPT\/Codex desktop did not start within 45 seconds' \}/);
   assert.doesNotMatch(desktop, /MainWindowHandle/);
   assert.doesNotMatch(desktop, /visibleWindowCount|visible window/);

@@ -1,3 +1,4 @@
+mod child_process;
 mod codex_binary;
 mod credential;
 mod desktop;
@@ -207,6 +208,14 @@ fn decide_setup_readiness(
     if setup.status == "failed" && setup.workspace_id == Some(workspace_id) {
         return SetupReadinessDecision::Failed;
     }
+    if setup.status == "needs_retry"
+        || (setup.status == "interrupted" && setup.automatic_retry_count <= 1)
+    {
+        return SetupReadinessDecision::Start(workspace_id);
+    }
+    if setup.status == "interrupted" {
+        return SetupReadinessDecision::Failed;
+    }
     if setup.status == "succeeded"
         && setup.workspace_id == Some(workspace_id)
         && cli_ready
@@ -402,7 +411,9 @@ impl CodexClient {
         } else {
             self.options.extra_args.clone()
         };
-        let spawn_result = Command::new(&resolved_binary)
+        let mut command = Command::new(&resolved_binary);
+        child_process::isolate_from_connector_environment(&mut command);
+        let spawn_result = command
             .args(args)
             .env("CODEX_HOME", &self.active_codex_home)
             .stdin(Stdio::piped())
@@ -1022,14 +1033,18 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         management_token,
         startup: StartupReadiness::initializing(),
     });
-    let initializing_state = Arc::clone(&state);
-    thread::spawn(move || match initialize_server() {
-        Ok(()) => initializing_state.startup.ready(),
-        Err(error) => {
-            eprintln!("Codex Connector initialization failed: {error}");
-            initializing_state.startup.fail(error);
-        }
-    });
+    if test_control_enabled() {
+        let initializing_state = Arc::clone(&state);
+        thread::spawn(move || match initialize_server() {
+            Ok(()) => initializing_state.startup.ready(),
+            Err(error) => {
+                eprintln!("Codex Connector initialization failed: {error}");
+                initializing_state.startup.fail(error);
+            }
+        });
+    } else {
+        state.startup.ready();
+    }
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -1057,15 +1072,6 @@ fn initialize_server() -> Result<(), String> {
                 return Err(error);
             }
         }
-    }
-    if !(test_control_enabled()
-        && env::var("CODEX_CONNECTOR_TEST_SKIP_RECONCILE")
-            .ok()
-            .as_deref()
-            == Some("1"))
-    {
-        credential::reconcile_active_user_codex_home()
-            .map_err(|error| format!("同步用户级 CODEX_HOME 失败: {error}"))?;
     }
     Ok(())
 }
@@ -1251,6 +1257,17 @@ fn handle_management(
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
+        ("POST", "/management/v1/codex/restore-external-home") => {
+            let _credential_guard = state
+                .credential_management
+                .lock()
+                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+            serde_json::to_value(
+                credential::restore_legacy_global_codex_home()
+                    .map_err(|error| HttpError::new(409, error.to_string()))?,
+            )
+            .map_err(|error| HttpError::internal(error.to_string()))
+        }
         ("POST", "/management/v1/codex/launch") => {
             let _credential_guard = state
                 .credential_management
@@ -1282,6 +1299,7 @@ fn handle_management(
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
             let snapshot = credential::active_home_snapshot()
                 .map_err(|error| HttpError::internal(error.to_string()))?;
+            let previous_home = snapshot.codex_home.clone();
             let mut client = state
                 .client
                 .lock()
@@ -1307,10 +1325,11 @@ fn handle_management(
             if let Err(error) = activation {
                 client.switch_to_active_profile();
                 let _ = client.ensure_started();
-                let _ = desktop_switch.restart_and_verify();
+                let _ = desktop_switch.restart_and_verify(&previous_home);
                 return Err(HttpError::new(409, error.to_string()));
             }
             client.switch_to_active_profile();
+            let selected_home = credential::active_codex_home();
             let verification = client
                 .ensure_started()
                 .map_err(|error| error.message)
@@ -1320,20 +1339,15 @@ fn handle_management(
                     }
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
                     {
-                        desktop::launch_and_verify().map_err(|error| error.to_string())
+                        desktop::launch_and_verify(&selected_home)
+                            .map_err(|error| error.to_string())
                     }
                     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                     {
                         Ok(())
                     }
                 })
-                .and_then(|_| {
-                    let state = credential::state().map_err(|error| error.to_string())?;
-                    if !state.user_codex_home_synchronized {
-                        return Err("用户级 CODEX_HOME 与活动状态目录不一致".to_string());
-                    }
-                    Ok(state)
-                });
+                .and_then(|_| credential::state().map_err(|error| error.to_string()));
             match verification {
                 Ok(credential_state) => serde_json::to_value(credential_state)
                     .map_err(|error| HttpError::internal(error.to_string())),
@@ -1344,8 +1358,8 @@ fn handle_management(
                     client.switch_to_active_profile();
                     let app_server_rollback =
                         client.ensure_started().err().map(|item| item.message);
-                    let desktop_rollback = desktop_switch.restart_and_verify().err();
-                    let mut message = format!("Codex 启动验证失败，已恢复原有环境：{error}");
+                    let desktop_rollback = desktop_switch.restart_and_verify(&previous_home).err();
+                    let mut message = format!("Codex 启动验证失败，已恢复原有档案：{error}");
                     if let Err(rollback) = rollback {
                         message.push_str(&format!("；状态指针回滚失败：{rollback}"));
                     }
@@ -2776,13 +2790,13 @@ mod project_state_tests {
     #[test]
     fn startup_readiness_preserves_the_initialization_root_cause() {
         let startup = StartupReadiness::initializing();
-        startup.fail("Windows 环境广播超时".to_string());
+        startup.fail("Connector 元数据初始化超时".to_string());
 
         let failed = startup.snapshot();
         let response = startup_response(&failed);
         assert_eq!(failed.phase, StartupPhase::Failed);
         assert_eq!(response["error"]["code"], "connector_initialization_failed");
-        assert_eq!(response["error"]["message"], "Windows 环境广播超时");
+        assert_eq!(response["error"]["message"], "Connector 元数据初始化超时");
     }
 
     #[test]
@@ -2803,9 +2817,8 @@ mod project_state_tests {
             workspace_id,
             message: status.to_string(),
             error: (status == "failed").then(|| "installer failed".to_string()),
-            started_at_epoch_seconds: None,
-            completed_at_epoch_seconds: None,
-            installer_status: None,
+            retryable: matches!(status, "failed" | "interrupted" | "needs_retry"),
+            ..setup::SetupStatus::default()
         }
     }
 
@@ -2870,6 +2883,32 @@ mod project_state_tests {
                 false,
             ),
             SetupReadinessDecision::Start(642)
+        );
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("interrupted", Some(642)),
+                Some(642),
+                true,
+                false,
+                false,
+            ),
+            SetupReadinessDecision::Start(642)
+        );
+        assert_eq!(
+            decide_setup_readiness(
+                &setup_status("needs_retry", Some(642)),
+                Some(642),
+                true,
+                false,
+                false,
+            ),
+            SetupReadinessDecision::Start(642)
+        );
+        let mut repeated_interruption = setup_status("interrupted", Some(642));
+        repeated_interruption.automatic_retry_count = 2;
+        assert_eq!(
+            decide_setup_readiness(&repeated_interruption, Some(642), true, false, false,),
+            SetupReadinessDecision::Failed
         );
         assert_eq!(
             decide_setup_readiness(

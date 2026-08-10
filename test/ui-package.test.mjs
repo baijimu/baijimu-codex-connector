@@ -4,9 +4,11 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  connectorStartupRetryable,
   credentialStatusMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
+  setupStatusMeta,
   shouldShowSetupProgress,
 } from "../ui/state.mjs";
 
@@ -70,6 +72,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
     "listCodexTurns",
     "readCodexSession",
     "recentCodexEvents",
+    "restoreExternalCodexHome",
     "setCodexThreadReadState",
     "setupRetry",
     "setupState",
@@ -89,20 +92,38 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.doesNotMatch(html, /项目 ID|确认设备/);
   assert.match(html, /选择工作区并启动 Codex/);
   assert.match(html, /auth-switch-modal/);
+  assert.match(html, /error-retry-button/);
+  assert.match(html, /restore-external-home-button/);
   assert.match(html, /全新用户会直接初始化默认 \.codex/);
   const app = await readFile(join(root, "ui", "app.js"), "utf8");
   assert.match(app, /启动个人 Codex/);
   assert.match(app, /不会删除任何工作区目录/);
   assert.doesNotMatch(app, /window\.confirm/);
   assert.match(app, /openAuthSwitchModal/);
-  assert.match(app, /bridge\(\)\.invoke\("launchCodex"/);
+  assert.match(app, /invokeManagement\("launchCodex"/);
   assert.doesNotMatch(app, /switchAuthProfile|openCodexDesktop/);
   assert.doesNotMatch(app, /请关闭后重新打开/);
-  assert.match(app, /bridge\(\)\.invoke\("ensureCodexReady"/);
+  assert.match(app, /invokeManagement\("ensureCodexReady"/);
   assert.match(app, /重新安装并修复/);
+  assert.match(app, /showError/);
+  assert.match(app, /重试启动/);
+  assert.match(app, /重新检查/);
+  assert.match(app, /connectorStartupRetryable/);
+  assert.match(app, /restoreExternalCodexHome/);
   assert.doesNotMatch(app, /Promise\.all\(\[loadSessions\(\), loadState\(\)\]\)/);
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
+});
+
+test("UI retries only the bounded Connector startup response", () => {
+  assert.equal(connectorStartupRetryable({ code: "connector_initializing" }), true);
+  assert.equal(
+    connectorStartupRetryable(new Error("正在初始化 Codex Connector（HTTP 503 Service Unavailable）")),
+    true,
+  );
+  assert.equal(connectorStartupRetryable(new Error("HTTP 503 Service Unavailable")), false);
+  assert.equal(connectorStartupRetryable(new Error("credential service unavailable")), false);
+  assert.equal(connectorStartupRetryable({ code: "connector_initialization_failed" }), false);
 });
 
 test("UI derives Codex initialization progress from installer steps and download bytes", () => {
@@ -133,6 +154,29 @@ test("UI derives Codex initialization progress from installer steps and download
   assert.equal(normalizeSetupProgress({ status: "succeeded", installerStatus: { steps: [] } }).percent, 100);
   assert.equal(shouldShowSetupProgress({ status: "running", installerStatus: { steps: [{ state: "running" }] } }), true);
   assert.equal(shouldShowSetupProgress({ status: "succeeded", installerStatus: { steps: [{ state: "completed" }] } }), false);
+  assert.equal(shouldShowSetupProgress({ status: "needs_retry", installerStatus: { steps: [{ state: "failed" }] } }), false);
+});
+
+test("UI distinguishes retryable setup states from current failures", () => {
+  assert.deepEqual(setupStatusMeta({ status: "failed", error: "current" }), {
+    status: "failed",
+    label: "初始化失败",
+    retryable: true,
+    showCurrentError: true,
+  });
+  assert.deepEqual(setupStatusMeta({ status: "interrupted" }), {
+    status: "interrupted",
+    label: "初始化已中断",
+    retryable: true,
+    showCurrentError: false,
+  });
+  assert.deepEqual(setupStatusMeta({ status: "needs_retry", error: "stale" }), {
+    status: "needs_retry",
+    label: "需要重新验证",
+    retryable: true,
+    showCurrentError: false,
+  });
+  assert.equal(setupStatusMeta({ status: "succeeded" }).retryable, false);
 });
 
 test("UI state normalizes management responses and keeps the active workspace", () => {
@@ -157,9 +201,14 @@ test("UI state normalizes management responses and keeps the active workspace", 
     originalCodexHome: "/users/test/.codex",
     originalCodexHomeState: { captured: true, value: null, captureSource: "user-environment" },
     activeCodexHome: "/isolated/workspace-642",
-    userCodexHome: "/isolated/workspace-642",
-    userCodexHomeSynchronized: true,
-    desktopEnvironmentManaged: true,
+    externalCodexHome: "/isolated/workspace-642",
+    legacyGlobalCodexHome: {
+      restoreRequired: true,
+      canRestore: true,
+      currentValue: "/isolated/workspace-642",
+      restoreValue: null,
+      restoredAtEpochSeconds: null,
+    },
   });
   assert.equal(state.codexConfigured, true);
   assert.equal(state.currentWorkspaceId, 642);
@@ -171,8 +220,10 @@ test("UI state normalizes management responses and keeps the active workspace", 
   assert.equal(state.originalCodexHome, "/users/test/.codex");
   assert.equal(state.originalCodexHomeState.captured, true);
   assert.equal(state.originalCodexHomeState.wasSet, false);
-  assert.equal(state.userCodexHomeSynchronized, true);
-  assert.equal(state.desktopEnvironmentManaged, true);
+  assert.equal(state.externalCodexHome, "/isolated/workspace-642");
+  assert.equal(state.legacyGlobalCodexHome.restoreRequired, true);
+  assert.equal(state.legacyGlobalCodexHome.canRestore, true);
+  assert.equal(state.legacyGlobalCodexHome.restoreValue, "");
   assert.equal(state.activeProfile.workspaceId, 642);
   assert.deepEqual(credentialStatusMeta(state.credentialStatus), { label: "已验证", tone: "success" });
 });

@@ -1,13 +1,17 @@
 import {
   DEFAULT_MODEL,
+  connectorStartupRetryable,
   credentialStatusMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
+  setupStatusMeta,
   shouldShowSetupProgress,
 } from "./state.mjs";
 
 const elementIds = [
-  "refresh-button", "open-codex-button", "message", "error", "warning",
+  "refresh-button", "open-codex-button", "message", "error", "error-text",
+  "error-retry-button", "warning",
+  "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
   "credential-badge", "active-workspace", "active-codex-home", "active-model",
   "codex-configured", "auth-mode", "auth-profile-list", "setup-status",
   "setup-message", "setup-retry-button", "setup-progress", "setup-progress-label",
@@ -23,6 +27,8 @@ let setupState = null;
 let setupMonitorGeneration = 0;
 let pendingCodexLaunch = null;
 let accountBusy = false;
+let errorRetryAction = null;
+const STARTUP_RETRY_ATTEMPTS = 20;
 
 function bridge() {
   const api = window.baijimuLocalApp;
@@ -32,18 +38,49 @@ function bridge() {
   return api;
 }
 
+async function invokeManagement(operation, argumentsValue = undefined) {
+  let lastError;
+  for (let attempt = 0; attempt < STARTUP_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await bridge().invoke(operation, argumentsValue);
+    } catch (error) {
+      lastError = error;
+      if (!connectorStartupRetryable(error) || attempt + 1 >= STARTUP_RETRY_ATTEMPTS) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, Math.min(500, 100 + attempt * 25)));
+    }
+  }
+  throw lastError || new Error("Codex Connector 初始化超时。");
+}
+
 function setMessage(target, value) {
   elements[target].textContent = value;
   elements[target].hidden = !value;
 }
 
+function showError(value, { action = null, label = "重试" } = {}) {
+  const message = value == null ? "" : String(value);
+  errorRetryAction = typeof action === "function" ? action : null;
+  elements["error-text"].textContent = message;
+  elements.error.hidden = !message;
+  elements["error-retry-button"].textContent = label;
+  elements["error-retry-button"].hidden = !errorRetryAction;
+  elements["error-retry-button"].disabled = accountBusy;
+}
+
 function clearNotices() {
   setMessage("message", "");
-  setMessage("error", "");
+  showError("");
 }
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error || "操作失败");
+}
+
+function setupRetryLabel() {
+  return ({
+    interrupted: "立即重试",
+    needs_retry: "重新验证",
+  })[String(setupState?.status || "")] || "重新安装并修复";
 }
 
 function setAccountBusy(value) {
@@ -51,7 +88,9 @@ function setAccountBusy(value) {
   elements["refresh-button"].disabled = value;
   elements["open-codex-button"].disabled = value;
   elements["setup-retry-button"].disabled = value;
-  elements["setup-retry-button"].textContent = value ? "正在处理…" : "重新安装并修复";
+  elements["error-retry-button"].disabled = value || !errorRetryAction;
+  elements["restore-external-home-button"].disabled = value;
+  elements["setup-retry-button"].textContent = value ? "正在处理…" : setupRetryLabel();
   document.querySelectorAll(".auth-switch").forEach((button) => {
     button.disabled = value || button.dataset.profileDisabled === "true";
   });
@@ -161,6 +200,15 @@ function renderCredentialState() {
   elements["active-model"].textContent = active?.model || DEFAULT_MODEL;
   elements["codex-configured"].textContent = state?.codexConfigured ? "已由 Connector 管理" : "尚未完成配置";
   setMessage("warning", state?.discoveryWarning || "");
+  const migration = state?.legacyGlobalCodexHome;
+  elements["legacy-home-migration"].hidden = !migration?.restoreRequired;
+  if (migration?.restoreRequired) {
+    const restoreTarget = migration.restoreValue || "系统默认 .codex（取消用户级 CODEX_HOME）";
+    elements["legacy-home-message"].textContent = migration.canRestore
+      ? `检测到旧版 Connector 留下的用户级 CODEX_HOME。可恢复为：${restoreTarget}；当前已打开的外部 Codex/终端需要重启。`
+      : "检测到用户级 CODEX_HOME 指向 Connector 私有目录，但无法证明原始值，已保持不变。";
+    elements["restore-external-home-button"].hidden = !migration.canRestore;
+  }
   renderAuthProfiles();
 }
 
@@ -215,7 +263,7 @@ async function launchCodex(request, progressMessage) {
   elements["switch-progress-message"].textContent = progressMessage;
   elements["switch-progress"].hidden = false;
   try {
-    const response = await bridge().invoke("launchCodex", request);
+    const response = await invokeManagement("launchCodex", request);
     credentialState = normalizeCredentialState(response);
     renderCredentialState();
     setMessage(
@@ -225,8 +273,12 @@ async function launchCodex(request, progressMessage) {
         : "Codex 已使用所选百积木工作区启动并验证。",
     );
   } catch (error) {
-    setMessage("error", errorMessage(error));
+    const message = errorMessage(error);
     await loadState({ ensureReady: false, monitor: false });
+    showError(message, {
+      action: () => launchCodex(request, progressMessage),
+      label: "重试启动",
+    });
   } finally {
     elements["switch-progress"].hidden = true;
     setAccountBusy(false);
@@ -234,19 +286,16 @@ async function launchCodex(request, progressMessage) {
 }
 
 function renderSetupState() {
-  const status = String(setupState?.status || "pending");
-  const labels = {
-    pending: "等待初始化",
-    running: "正在初始化",
-    succeeded: "已完成",
-    failed: "初始化失败",
-  };
-  elements["setup-status"].textContent = labels[status] || status;
-  elements["setup-message"].textContent = setupState?.error || setupState?.message || "等待初始化";
+  const meta = setupStatusMeta(setupState);
+  const status = meta.status;
+  elements["setup-status"].textContent = meta.label;
+  elements["setup-message"].textContent = meta.showCurrentError
+    ? setupState.error
+    : setupState?.message || "等待初始化";
   renderSetupProgress();
   setAccountBusy(status === "running");
-  elements["setup-retry-button"].hidden = status !== "failed";
-  elements["setup-retry-button"].textContent = "重新安装并修复";
+  elements["setup-retry-button"].hidden = !meta.retryable;
+  elements["setup-retry-button"].textContent = setupRetryLabel();
 }
 
 function formatBytes(value) {
@@ -312,7 +361,7 @@ async function monitorSetup() {
     await new Promise((resolve) => window.setTimeout(resolve, 1000));
     if (generation !== setupMonitorGeneration) return;
     try {
-      setupState = await bridge().invoke("setupState");
+      setupState = await invokeManagement("setupState");
       renderSetupState();
       if (setupState?.status === "succeeded") {
         await loadState({ ensureReady: false, monitor: false });
@@ -320,19 +369,25 @@ async function monitorSetup() {
         return;
       }
       if (setupState?.status === "failed") {
-        setMessage("error", setupState?.error || "Codex 初始化失败。");
+        showError(setupState?.error || "Codex 初始化失败。", {
+          action: retrySetup,
+          label: "重新安装并修复",
+        });
         return;
       }
     } catch (error) {
       setAccountBusy(false);
-      setMessage("error", errorMessage(error));
+      showError(errorMessage(error), {
+        action: () => loadState({ ensureReady: false }),
+        label: "重新检查",
+      });
       return;
     }
   }
 }
 
 async function ensureCodexReady() {
-  const readiness = await bridge().invoke("ensureCodexReady", {});
+  const readiness = await invokeManagement("ensureCodexReady", {});
   setupState = readiness?.setup || setupState;
   renderSetupState();
   switch (readiness?.readiness) {
@@ -343,10 +398,16 @@ async function ensureCodexReady() {
       void monitorSetup();
       return;
     case "failed":
-      setMessage("error", readiness?.message || "Codex 初始化失败，请检查失败步骤后重新安装修复。");
+      showError(readiness?.message || "Codex 初始化失败，请检查失败步骤后重新安装修复。", {
+        action: retrySetup,
+        label: "重新安装并修复",
+      });
       return;
     case "needs_workspace":
-      setMessage("error", readiness?.message || "请先完成当前百积木工作区授权。");
+      showError(readiness?.message || "请先完成当前百积木工作区授权。", {
+        action: () => loadState({ ensureReady: true }),
+        label: "重新检查",
+      });
       return;
     default:
       throw new Error(readiness?.message || "无法确认本机 Codex 初始化状态。");
@@ -358,8 +419,8 @@ async function loadState({ ensureReady = false, monitor = true, successMessage =
   setAccountBusy(true);
   try {
     const [credential, setup] = await Promise.all([
-      bridge().invoke("credentialState"),
-      bridge().invoke("setupState"),
+      invokeManagement("credentialState"),
+      invokeManagement("setupState"),
     ]);
     credentialState = normalizeCredentialState(credential);
     setupState = setup;
@@ -369,7 +430,10 @@ async function loadState({ ensureReady = false, monitor = true, successMessage =
     else if (monitor && setupState?.status === "running") void monitorSetup();
     if (successMessage) setMessage("message", successMessage);
   } catch (error) {
-    setMessage("error", errorMessage(error));
+    showError(errorMessage(error), {
+      action: () => loadState({ ensureReady, monitor, successMessage }),
+      label: "重新加载",
+    });
   } finally {
     if (setupState?.status !== "running") setAccountBusy(false);
   }
@@ -379,18 +443,43 @@ async function retrySetup() {
   clearNotices();
   const workspaceId = credentialState?.currentWorkspaceId;
   if (!workspaceId) {
-    setMessage("error", "客户端当前授权中缺少工作区信息。");
+    showError("客户端当前授权中缺少工作区信息。", {
+      action: () => loadState({ ensureReady: true }),
+      label: "重新检查",
+    });
     return;
   }
   setAccountBusy(true);
   try {
-    setupState = await bridge().invoke("setupRetry", { workspaceId });
+    setupState = await invokeManagement("setupRetry", { workspaceId });
     renderSetupState();
     setMessage("message", "已开始重新安装并修复本机 Codex。");
     void monitorSetup();
   } catch (error) {
     setAccountBusy(false);
-    setMessage("error", errorMessage(error));
+    showError(errorMessage(error), {
+      action: retrySetup,
+      label: "重试修复",
+    });
+  }
+}
+
+async function restoreExternalCodexHome() {
+  clearNotices();
+  setAccountBusy(true);
+  try {
+    credentialState = normalizeCredentialState(
+      await invokeManagement("restoreExternalCodexHome", {}),
+    );
+    renderCredentialState();
+    setMessage("message", "旧版 Connector 留下的用户级 CODEX_HOME 已恢复；请重启已打开的外部 Codex 和终端。");
+  } catch (error) {
+    showError(errorMessage(error), {
+      action: restoreExternalCodexHome,
+      label: "重试恢复",
+    });
+  } finally {
+    setAccountBusy(false);
   }
 }
 
@@ -404,7 +493,10 @@ async function openCodex() {
       : { mode: "chatgpt" };
     await launchCodex(request, "正在重新启动并验证当前 Codex 环境…");
   } catch (error) {
-    setMessage("error", errorMessage(error));
+    showError(errorMessage(error), {
+      action: openCodex,
+      label: "重试启动",
+    });
   } finally {
     elements["open-codex-button"].textContent = "打开 Codex";
     setAccountBusy(false);
@@ -417,6 +509,11 @@ elements["refresh-button"].addEventListener("click", () => void loadState({
 }));
 elements["open-codex-button"].addEventListener("click", () => void openCodex());
 elements["setup-retry-button"].addEventListener("click", () => void retrySetup());
+elements["restore-external-home-button"].addEventListener("click", () => void restoreExternalCodexHome());
+elements["error-retry-button"].addEventListener("click", () => {
+  const action = errorRetryAction;
+  if (action && !accountBusy) void action();
+});
 elements["auth-switch-cancel"].addEventListener("click", closeAuthSwitchModal);
 elements["auth-switch-confirm"].addEventListener("click", () => void confirmAuthSwitch());
 elements["auth-switch-modal"].addEventListener("click", (event) => {

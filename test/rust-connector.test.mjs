@@ -120,7 +120,6 @@ test("host-managed foreground runtime records and safely stops its verified PID"
     ...process.env,
     BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
     CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
-    CODEX_CONNECTOR_TEST_SKIP_RECONCILE: "1",
     CODEX_CONNECTOR_TEST_STARTUP_DELAY_MS: "1500",
   };
   const proc = spawn(cli, [
@@ -191,7 +190,6 @@ test("a competing startup cannot rotate management state before acquiring the po
     ...process.env,
     BAIJIMU_CONNECTOR_DATA_DIR: activeHome,
     CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
-    CODEX_CONNECTOR_TEST_SKIP_RECONCILE: "1",
   };
   const proc = spawn(cli, ["start", "--port", String(port)], {
     cwd: root,
@@ -420,7 +418,7 @@ test("rust connector forwards Codex app-server calls", async () => {
       occurredAt: domainAttempts[1].occurredAt,
       source: "codex-app-server",
       sourceMethod: "turn/completed",
-      connectorVersion: "1.2.40",
+      connectorVersion: "1.2.41",
     });
     assert.ok(emittedEvents.some((event) => event.event === "codexNotification"));
   } finally {
@@ -726,6 +724,8 @@ test("rust connector launches an isolated Baijimu workspace and can launch the p
     assert.equal(workspaceState.activeMode, "baijimu");
     assert.equal(workspaceState.activeWorkspaceId, 1390);
     assert.equal(workspaceState.activeCodexHome, workspaceHome);
+    assert.equal(workspaceState.externalCodexHome, personalHome);
+    assert.equal(workspaceState.legacyGlobalCodexHome.restoreRequired, false);
     const workspaceStatus = await postJson(port, "/invoke/status");
     assert.equal(workspaceStatus.data.appServer.codexHome, workspaceHome);
 
