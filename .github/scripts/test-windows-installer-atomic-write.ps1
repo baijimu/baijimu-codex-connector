@@ -14,7 +14,21 @@ if (-not $urlMatch.Success -or -not $shaMatch.Success) {
 }
 
 $scriptPath = Join-Path $env:RUNNER_TEMP "windows-configure-terminal-and-login.ps1"
-Invoke-WebRequest -UseBasicParsing -Uri $urlMatch.Groups[1].Value -OutFile $scriptPath
+& curl.exe `
+  --fail `
+  --location `
+  --silent `
+  --show-error `
+  --retry 6 `
+  --retry-all-errors `
+  --retry-delay 3 `
+  --connect-timeout 15 `
+  --max-time 120 `
+  --output $scriptPath `
+  $urlMatch.Groups[1].Value
+if ($LASTEXITCODE -ne 0) {
+  throw "Unable to download the pinned Windows installer: curl.exe exit $LASTEXITCODE"
+}
 $actualSha256 = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualSha256 -ne $shaMatch.Groups[1].Value) {
   throw "Pinned Windows installer SHA-256 mismatch: $actualSha256"

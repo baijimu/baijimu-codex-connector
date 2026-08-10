@@ -61,7 +61,20 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /Verify Windows binaries are self-contained/);
   assert.match(workflow, /Verify installer atomic writes with Windows PowerShell 5\.1/);
   assert.match(workflow, /shell: powershell/);
+  assert.match(
+    workflow,
+    /Verify installer atomic writes with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
+  );
   assert.match(workflow, /test-windows-installer-atomic-write\.ps1/);
+  const windowsInstallerTest = await readFile(
+    join(root, ".github", "scripts", "test-windows-installer-atomic-write.ps1"),
+    "utf8",
+  );
+  assert.doesNotMatch(windowsInstallerTest, /Invoke-WebRequest/);
+  assert.match(windowsInstallerTest, /curl\.exe/);
+  assert.match(windowsInstallerTest, /--retry-all-errors/);
+  assert.match(windowsInstallerTest, /--connect-timeout 15/);
+  assert.match(windowsInstallerTest, /--max-time 120/);
   assert.match(workflow, /Verify immutable installer scripts/);
   assert.match(workflow, /read_rust_constant MACOS_SCRIPT_SHA256/);
   assert.match(workflow, /read_rust_constant WINDOWS_SCRIPT_SHA256/);
