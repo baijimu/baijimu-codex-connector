@@ -2,6 +2,8 @@
 use crate::desktop;
 use crate::{codex_binary, credential};
 use anyhow::{Context, Result};
+#[cfg(any(target_os = "windows", test))]
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,11 +26,19 @@ const MACOS_SCRIPT_SHA256: &str =
     "0a60334e37593fa95df92b5cf0787b64a9e491ab552b2502d9a195d59a0fe7be";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_URL: &str =
-    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCA7on3l_8ZIiBkZGQ0YjBkNWVkZTE0ZmE1YTgyMmQ3ZjAwYjgyZDc4Zg--";
+    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCAqqzTpv8ZIiBjNGU3Y2ZhZGZiMTc0ZjlkODc3NGU5YTA1MWQ2ODFhZA--";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_SHA256: &str =
-    "cec3ec342954ba89a05b82e7d421deea731189b2f7603440e80a6a5266d4cb5c";
+    "a109ca6562526219d4667edd92572baaa9a5b82cb97dfd26641128ff3cb7b2e0";
 const SETUP_STATUS_FILE: &str = "setup-status.json";
+#[cfg(target_os = "windows")]
+const WINDOWS_INSTALL_SCRIPT_ENV: &str = "CODEX_CONNECTOR_INSTALL_SCRIPT_PATH";
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_INSTALL_WRAPPER: &str = r#"$ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [Console]::OutputEncoding
+& $env:CODEX_CONNECTOR_INSTALL_SCRIPT_PATH
+"#;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -368,8 +378,17 @@ fn install_command(script_path: &Path) -> Result<Command> {
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new("powershell.exe");
-        command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
-        command.arg(script_path);
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-OutputFormat",
+            "Text",
+            "-EncodedCommand",
+            &powershell_encoded_command(WINDOWS_INSTALL_WRAPPER),
+        ]);
+        command.env(WINDOWS_INSTALL_SCRIPT_ENV, script_path);
         Ok(command)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -377,6 +396,15 @@ fn install_command(script_path: &Path) -> Result<Command> {
         let _ = script_path;
         anyhow::bail!("unsupported platform")
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn powershell_encoded_command(script: &str) -> String {
+    let utf16le = script
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    BASE64_STANDARD.encode(utf16le)
 }
 
 fn default_script_url() -> String {
@@ -506,12 +534,51 @@ mod tests {
         assert!(error.to_string().contains("安装脚本 SHA256 校验失败"));
     }
 
+    #[test]
+    fn powershell_wrapper_is_encoded_as_utf16le_and_forces_utf8_output() {
+        let encoded = powershell_encoded_command(WINDOWS_INSTALL_WRAPPER);
+        let bytes = BASE64_STANDARD.decode(encoded).unwrap();
+        let units = bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        let decoded = String::from_utf16(&units).unwrap();
+
+        assert_eq!(decoded, WINDOWS_INSTALL_WRAPPER);
+        assert!(decoded.contains("[Console]::OutputEncoding"));
+        assert!(decoded.contains("$OutputEncoding = [Console]::OutputEncoding"));
+        assert!(decoded.contains("& $env:CODEX_CONNECTOR_INSTALL_SCRIPT_PATH"));
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn default_windows_installer_is_pinned_to_an_immutable_oss_version() {
         assert!(WINDOWS_SCRIPT_URL.starts_with("https://download.baijimu.com/"));
         assert!(WINDOWS_SCRIPT_URL.contains("?versionId="));
         assert_eq!(WINDOWS_SCRIPT_SHA256.len(), 64);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_install_command_emits_chinese_errors_as_utf8() {
+        let path = env::temp_dir().join(format!(
+            "codex-setup-utf8-error-{}-{}.ps1",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::write(
+            &path,
+            r#"$message = -join @([char]0x8def, [char]0x5f84, [char]0x683c, [char]0x5f0f, [char]0x9519, [char]0x8bef)
+throw $message
+"#,
+        )
+        .unwrap();
+
+        let output = install_command(&path).unwrap().output().unwrap();
+        fs::remove_file(path).unwrap();
+        assert!(!output.status.success());
+        let stderr = std::str::from_utf8(&output.stderr).unwrap();
+        assert!(stderr.contains("路径格式错误"), "stderr={stderr:?}");
     }
 
     #[test]

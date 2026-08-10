@@ -288,6 +288,11 @@ jobs:
           }
           Write-Host "Verified Windows artifacts do not require VCRUNTIME/MSVCP"
 
+      - name: Verify installer atomic writes with Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: .github/scripts/test-windows-installer-atomic-write.ps1
+
       - name: Download and run Windows signing tool
         if: runner.os == 'Windows' && needs.validate.outputs.publish == 'true'
         shell: pwsh

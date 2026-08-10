@@ -59,6 +59,9 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /RUSTFLAGS: "-C target-feature=\+crt-static -D warnings"/);
   assert.match(workflow, /\$PSNativeCommandUseErrorActionPreference = \$true/);
   assert.match(workflow, /Verify Windows binaries are self-contained/);
+  assert.match(workflow, /Verify installer atomic writes with Windows PowerShell 5\.1/);
+  assert.match(workflow, /shell: powershell/);
+  assert.match(workflow, /test-windows-installer-atomic-write\.ps1/);
   assert.match(workflow, /Verify immutable installer scripts/);
   assert.match(workflow, /read_rust_constant MACOS_SCRIPT_SHA256/);
   assert.match(workflow, /read_rust_constant WINDOWS_SCRIPT_SHA256/);
@@ -209,6 +212,10 @@ test("macOS and Windows setup launch the official desktop only after activating 
   assert.ok(activationIndex > deferIndex, "CODEX_HOME activation must follow installation");
   assert.ok(launchIndex > activationIndex, "official desktop launch must follow CODEX_HOME activation");
   assert.match(setup, /credential::restore_active_home\(active_home_snapshot\)/);
+  assert.match(setup, /"-EncodedCommand"/);
+  assert.match(setup, /"-OutputFormat"/);
+  assert.match(setup, /"Text"/);
+  assert.match(setup, /\[Console\]::OutputEncoding/);
   assert.ok(desktop.includes('Start-Process explorer.exe "shell:AppsFolder\\$($app[0].AppID)"'));
   assert.match(desktop, /MainWindowHandle -ne 0/);
   assert.match(desktop, /no visible window was detected within 45 seconds/);
