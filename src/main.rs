@@ -1,6 +1,7 @@
 mod codex_binary;
 mod credential;
 mod desktop;
+mod events;
 mod json_compat;
 mod project_checkout;
 mod setup;
@@ -36,6 +37,8 @@ const DEFAULT_THREAD_SORT_DIRECTION: &str = "desc";
 const MANAGEMENT_TOKEN_FILE: &str = "management-token";
 const CONNECTOR_HEALTH_IO_TIMEOUT: Duration = Duration::from_secs(1);
 const CONNECTOR_HEALTH_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
+const DOMAIN_EVENT_PUBLISH_ATTEMPTS: usize = 5;
+const DOMAIN_EVENT_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug)]
 struct ServerOptions {
@@ -71,6 +74,7 @@ struct CodexClient {
     codex_binary_error: Option<codex_binary::ResolutionError>,
     codex_cli_inspection: Option<codex_binary::CliInspection>,
     event_publisher: Option<EventPublisher>,
+    event_stream_id: String,
 }
 
 #[derive(Clone)]
@@ -240,6 +244,7 @@ impl CodexClient {
             codex_binary_error: None,
             codex_cli_inspection: None,
             event_publisher,
+            event_stream_id: random_event_id(),
         };
         client.refresh_codex_binary_resolution();
         client
@@ -586,14 +591,31 @@ impl CodexClient {
             }
         }
         self.event_sequence += 1;
+        let received_at = timestamp();
+        let domain_event = match events::normalize_codex_notification(
+            method,
+            &params,
+            &received_at,
+            &self.event_stream_id,
+            self.event_sequence,
+        ) {
+            Ok(event) => event,
+            Err(error) => {
+                eprintln!("failed to normalize Codex domain event {method}: {error}");
+                None
+            }
+        };
         let event = ConnectorEvent {
             sequence: self.event_sequence,
-            received_at: timestamp(),
+            received_at,
             method: method.to_string(),
             params,
         };
         if let Some(publisher) = self.event_publisher.clone() {
-            publisher.publish(event.clone());
+            publisher.publish_raw(event.clone());
+            if let Some(domain_event) = domain_event {
+                publisher.publish_domain(domain_event);
+            }
         }
         self.events.push_back(event);
         while self.events.len() > MAX_EVENTS {
@@ -659,33 +681,89 @@ impl EventPublisher {
         })
     }
 
-    fn publish(&self, event: ConnectorEvent) {
-        let publisher = self.clone();
-        thread::spawn(move || {
-            let event_id = random_event_id();
-            let payload = json!({
+    fn publish_raw(&self, event: ConnectorEvent) {
+        self.publish(
+            "codexNotification",
+            random_event_id(),
+            event.received_at.clone(),
+            json!({
                 "sequence": event.sequence,
                 "receivedAt": event.received_at,
                 "method": event.method,
                 "params": event.params,
+            }),
+            1,
+        );
+    }
+
+    fn publish_domain(&self, event: events::DomainEvent) {
+        self.publish(
+            event.name,
+            event.event_id,
+            event.occurred_at,
+            event.payload,
+            DOMAIN_EVENT_PUBLISH_ATTEMPTS,
+        );
+    }
+
+    fn publish(
+        &self,
+        event_name: &'static str,
+        event_id: String,
+        occurred_at: String,
+        payload: Value,
+        attempts: usize,
+    ) {
+        let publisher = self.clone();
+        thread::spawn(move || {
+            let request = json!({
+                "connectorId": "com.baijimu.connector.codex",
+                "event": event_name,
+                "eventId": event_id,
+                "payload": payload,
+                "occurredAt": occurred_at,
             });
-            if let Err(error) = publisher
-                .client
-                .post(&publisher.endpoint)
-                .bearer_auth(&publisher.token)
-                .json(&json!({
-                    "connectorId": "com.baijimu.connector.codex",
-                    "event": "codexNotification",
-                    "eventId": event_id,
-                    "payload": payload,
-                    "occurredAt": event.received_at,
-                }))
-                .send()
-            {
-                eprintln!("failed to publish codexNotification: {error}");
+            let attempts = attempts.max(1);
+            for attempt in 1..=attempts {
+                match publisher
+                    .client
+                    .post(&publisher.endpoint)
+                    .bearer_auth(&publisher.token)
+                    .json(&request)
+                    .send()
+                {
+                    Ok(response) if response.status().is_success() => return,
+                    Ok(response) if !retryable_event_status(response.status().as_u16()) => {
+                        eprintln!(
+                            "failed to publish {event_name}: bridge returned HTTP {}",
+                            response.status()
+                        );
+                        return;
+                    }
+                    Ok(response) if attempt == attempts => {
+                        eprintln!(
+                            "failed to publish {event_name} after {attempts} attempts: bridge returned HTTP {}",
+                            response.status()
+                        );
+                    }
+                    Err(error) if attempt == attempts => {
+                        eprintln!(
+                            "failed to publish {event_name} after {attempts} attempts: {error}"
+                        );
+                    }
+                    Ok(_) | Err(_) => {}
+                }
+                if attempt < attempts {
+                    let multiplier = 1_u32 << (attempt - 1).min(8);
+                    thread::sleep(DOMAIN_EVENT_RETRY_BASE_DELAY * multiplier);
+                }
             }
         });
     }
+}
+
+fn retryable_event_status(status: u16) -> bool {
+    status == 408 || status == 429 || status >= 500
 }
 
 #[derive(Debug)]
@@ -2666,6 +2744,16 @@ fn print_help() {
 #[cfg(test)]
 mod project_state_tests {
     use super::*;
+
+    #[test]
+    fn event_delivery_retries_only_temporary_failures() {
+        for status in [408, 429, 500, 503] {
+            assert!(retryable_event_status(status), "status {status}");
+        }
+        for status in [400, 401, 403, 404, 409, 422] {
+            assert!(!retryable_event_status(status), "status {status}");
+        }
+    }
 
     #[test]
     fn startup_readiness_separates_liveness_from_initialization() {

@@ -24,7 +24,24 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.transport.type, "http");
   assert.ok(manifest.methods.some((method) => method.name === "status"));
-  assert.ok(manifest.events.some((event) => event.name === "codexNotification"));
+  assert.deepEqual(
+    manifest.events.map((event) => event.name),
+    [
+      "codexNotification",
+      "codexTurnCompleted",
+      "codexThreadClosed",
+      "codexThreadArchived",
+      "codexThreadDeleted",
+    ],
+  );
+  const turnCompleted = manifest.events.find((event) => event.name === "codexTurnCompleted");
+  assert.equal(turnCompleted.enabled, true);
+  assert.deepEqual(turnCompleted.payload_schema.properties.status.enum, [
+    "completed",
+    "interrupted",
+    "failed",
+  ]);
+  assert.equal(turnCompleted.payload_schema.additionalProperties, false);
   assert.equal(manifest.services, undefined);
   assert.equal(manifest.serviceRegistrationFiles, undefined);
   assert.deepEqual(manifest.runtime.args, ["start"]);

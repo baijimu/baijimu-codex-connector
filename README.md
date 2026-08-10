@@ -87,6 +87,18 @@ businessId:
 
 `request` is an advanced raw JSON-RPC forwarder and should be treated as high risk in remote authorization policies.
 
+The Connector publishes the raw `codexNotification` stream for diagnostics and
+four versioned domain events for stable automation contracts:
+
+- `codexTurnCompleted` identifies the completed, interrupted, or failed turn by
+  `threadId` and `turnId` without copying turn items or assistant output.
+- `codexThreadClosed`, `codexThreadArchived`, and `codexThreadDeleted` represent
+  distinct thread lifecycle transitions and must not be interpreted as turn completion.
+
+Domain-event delivery uses an idempotent event ID and retries temporary local
+delivery failures. After Bridge Agent accepts an event, its durable outbox owns
+delivery to the platform.
+
 ## Local management API
 
 The application exposes authenticated setup and status operations for Bridge Agent:

@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.39",
+  "version": "1.2.40",
   "description": "Initialize and configure Codex, select an isolated Baijimu workspace or the original Codex environment, and launch Codex with the selected state directory.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.39"
+    "revision": "v1.2.40"
   },
   "runtime": {
     "type": "process",
@@ -112,6 +112,8 @@
     "defaultView": true
   },
   "releaseNotes": [
+    "新增 codexTurnCompleted、codexThreadClosed、codexThreadArchived 和 codexThreadDeleted 稳定领域事件；保留 codexNotification 原始协议事件用于诊断。",
+    "完成事件按 threadId 与 turnId 生成稳定幂等标识，暂时性投递失败自动重试，Bridge Agent 接收后进入持久化 outbox。",
     "macOS 不再等待 6 秒后创建并打开 ~/Documents/Codex/default，个人 Codex 使用与桌面图标相同的标准启动语义。",
     "macOS 与 Windows 统一以真实桌面进程作为启动结果，不再用窗口可见性、前台状态或窗口句柄推断成功。",
     "保留工作区切换后的 CODEX_HOME 与进程校验，轮询只等待真实进程注册且不增加固定启动延时。"
@@ -837,9 +839,131 @@
     {
       "name": "codexNotification",
       "description": "Notification emitted by local Codex app-server.",
+      "enabled": true,
       "payload_schema": {
         "type": "object",
         "additionalProperties": true
+      }
+    },
+    {
+      "name": "codexTurnCompleted",
+      "description": "Stable domain event emitted when a Codex turn completes, is interrupted, or fails.",
+      "enabled": true,
+      "payload_schema": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "threadId",
+          "turnId",
+          "status",
+          "completedAt",
+          "durationMs",
+          "error",
+          "occurredAt",
+          "source",
+          "sourceMethod",
+          "connectorVersion"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "enum": [1]
+          },
+          "threadId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "turnId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "interrupted", "failed"]
+          },
+          "completedAt": {
+            "type": ["integer", "null"]
+          },
+          "durationMs": {
+            "type": ["integer", "null"],
+            "minimum": 0
+          },
+          "error": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          },
+          "occurredAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "enum": ["codex-app-server"]
+          },
+          "sourceMethod": {
+            "type": "string",
+            "enum": ["turn/completed"]
+          },
+          "connectorVersion": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "codexThreadClosed",
+      "description": "Stable domain event emitted when Codex unloads and closes a thread.",
+      "enabled": true,
+      "payload_schema": {
+        "type": "object",
+        "required": ["schemaVersion", "threadId", "occurredAt", "source", "sourceMethod", "connectorVersion"],
+        "properties": {
+          "schemaVersion": {"type": "integer", "enum": [1]},
+          "threadId": {"type": "string", "minLength": 1},
+          "occurredAt": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "enum": ["codex-app-server"]},
+          "sourceMethod": {"type": "string", "enum": ["thread/closed"]},
+          "connectorVersion": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "codexThreadArchived",
+      "description": "Stable domain event emitted when a Codex thread is archived.",
+      "enabled": true,
+      "payload_schema": {
+        "type": "object",
+        "required": ["schemaVersion", "threadId", "occurredAt", "source", "sourceMethod", "connectorVersion"],
+        "properties": {
+          "schemaVersion": {"type": "integer", "enum": [1]},
+          "threadId": {"type": "string", "minLength": 1},
+          "occurredAt": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "enum": ["codex-app-server"]},
+          "sourceMethod": {"type": "string", "enum": ["thread/archived"]},
+          "connectorVersion": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "codexThreadDeleted",
+      "description": "Stable domain event emitted when a Codex thread is deleted.",
+      "enabled": true,
+      "payload_schema": {
+        "type": "object",
+        "required": ["schemaVersion", "threadId", "occurredAt", "source", "sourceMethod", "connectorVersion"],
+        "properties": {
+          "schemaVersion": {"type": "integer", "enum": [1]},
+          "threadId": {"type": "string", "minLength": 1},
+          "occurredAt": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "enum": ["codex-app-server"]},
+          "sourceMethod": {"type": "string", "enum": ["thread/deleted"]},
+          "connectorVersion": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
       }
     }
   ]

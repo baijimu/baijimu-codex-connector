@@ -218,8 +218,12 @@ rl.on("line", (line) => {
         threadId: message.params.threadId,
         turn: {
           id: "turn_test",
+          status: "completed",
+          items: [],
+          completedAt: 1786400000,
+          durationMs: 25,
+          error: null,
         },
-        status: "completed",
       },
     });
     return;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -266,6 +267,29 @@ test("rust connector forwards Codex app-server calls", async () => {
   const connectorHome = await mkdtemp(join(tmpdir(), "codex-app-data-"));
   const configHome = join(connectorHome, "config");
   await mkdir(configHome, { recursive: true });
+  const eventTokenPath = join(connectorHome, "event-token");
+  await writeFile(eventTokenPath, "test-event-token\n", { mode: 0o600 });
+  const emittedEvents = [];
+  let turnCompletedAttempts = 0;
+  const eventServer = createHttpServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const event = JSON.parse(body);
+    emittedEvents.push(event);
+    if (event.event === "codexTurnCompleted") {
+      turnCompletedAttempts += 1;
+      if (turnCompletedAttempts === 1) {
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(JSON.stringify({ accepted: false }));
+        return;
+      }
+    }
+    response.writeHead(202, { "content-type": "application/json" });
+    response.end(JSON.stringify({ accepted: true, durable: true, eventId: event.eventId }));
+  });
+  eventServer.listen(0, "127.0.0.1");
+  await once(eventServer, "listening");
+  const eventPort = eventServer.address().port;
   const proc = spawn(cli, [
     "start",
     "--port",
@@ -279,6 +303,8 @@ test("rust connector forwards Codex app-server calls", async () => {
       ...process.env,
       BAIJIMU_CONFIG_HOME: configHome,
       BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+      BAIJIMU_CONNECTOR_EVENT_ENDPOINT: `http://127.0.0.1:${eventPort}/events`,
+      BAIJIMU_CONNECTOR_EVENT_TOKEN_FILE: eventTokenPath,
       CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
     },
   });
@@ -373,8 +399,33 @@ test("rust connector forwards Codex app-server calls", async () => {
       limit: 20,
     });
     assert.ok(events.data.events.some((event) => event.method === "item/agentMessage/delta"));
+
+    const eventDeadline = Date.now() + 5_000;
+    while (turnCompletedAttempts < 2 && Date.now() < eventDeadline) {
+      await delay(25);
+    }
+    assert.equal(turnCompletedAttempts, 2, JSON.stringify(emittedEvents));
+    const domainAttempts = emittedEvents.filter(
+      (event) => event.event === "codexTurnCompleted",
+    );
+    assert.equal(domainAttempts[0].eventId, domainAttempts[1].eventId);
+    assert.deepEqual(domainAttempts[1].payload, {
+      schemaVersion: 1,
+      threadId: "thr_test",
+      turnId: "turn_test",
+      status: "completed",
+      completedAt: 1786400000,
+      durationMs: 25,
+      error: null,
+      occurredAt: domainAttempts[1].occurredAt,
+      source: "codex-app-server",
+      sourceMethod: "turn/completed",
+      connectorVersion: "1.2.40",
+    });
+    assert.ok(emittedEvents.some((event) => event.event === "codexNotification"));
   } finally {
     await stopConnector(proc, port);
+    await new Promise((resolvePromise) => eventServer.close(resolvePromise));
     await rm(connectorHome, { recursive: true, force: true });
   }
 });
