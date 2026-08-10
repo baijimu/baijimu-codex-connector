@@ -148,6 +148,18 @@ function Stop-TestConnector {
   }
 }
 
+function Assert-ManagementTokenReady {
+  param([Parameter(Mandatory = $true)]$Context)
+  $tokenPath = Join-Path $Context.Directory "management-token"
+  if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf)) {
+    throw "Management token was not created before the Connector became live: $tokenPath"
+  }
+  $token = (Get-Content -LiteralPath $tokenPath -Raw).Trim()
+  if ($token.Length -lt 32) {
+    throw "Management token was not fully persisted before the Connector became live"
+  }
+}
+
 $delayed = Start-TestConnector -DelayMs 1500
 try {
   $live = Wait-ConnectorResponse -Port $delayed.Port -Path "/healthz" -Accept {
@@ -157,6 +169,7 @@ try {
   if (-not $live.Body.ok) {
     throw "Liveness endpoint must remain healthy while initialization is running"
   }
+  Assert-ManagementTokenReady -Context $delayed
   $initializing = Invoke-ConnectorRequest -Port $delayed.Port -Path "/readyz"
   if ($initializing.Status -ne 503 -or $initializing.Body.error.code -ne "connector_initializing") {
     throw "Readiness endpoint did not report initialization in progress"
@@ -176,6 +189,7 @@ try {
     param($response)
     $response.Status -eq 200
   } | Out-Null
+  Assert-ManagementTokenReady -Context $failed
   $failure = Wait-ConnectorResponse -Port $failed.Port -Path "/readyz" -Accept {
     param($response)
     $response.Status -eq 503 -and $response.Body.status.startup.status -eq "failed"
