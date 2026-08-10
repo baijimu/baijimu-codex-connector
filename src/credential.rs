@@ -12,6 +12,11 @@ use crate::user_environment;
 
 const METADATA_VERSION: u32 = 3;
 const METADATA_FILE: &str = "codex-credentials.json";
+const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
+const OWNERSHIP_SCHEMA_VERSION: u32 = 1;
+const OWNERSHIP_OWNER: &str = "baijimu-connector-codex";
+const OWNED_AUTH_FILE: &str = "auth.json";
+const OWNED_CONFIG_FILE: &str = "config.toml";
 const DEFAULT_MODEL: &str = "gpt-5.6-sol";
 const ROUTER_PROVIDER: &str = "baijimu-router";
 const ROUTER_BASE_URL: &str = "https://router.baijimu.com/api/claudecode/v1";
@@ -115,6 +120,15 @@ struct CredentialMetadata {
     active_workspace_id: Option<u64>,
     #[serde(default)]
     original_codex_home_state: OriginalCodexHomeState,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CodexHomeOwnership {
+    schema_version: u32,
+    owner: String,
+    initialized_at_epoch_seconds: u64,
+    managed_files: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -290,12 +304,19 @@ pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceP
         client_id.as_deref(),
         workspace_id,
     );
-    let profile_home = workspace_profile_home(
-        &store.environment,
-        user_id,
-        client_id.as_deref(),
-        workspace_id,
-    );
+    let mut metadata = load_metadata()?;
+    let profile_home = metadata
+        .profiles
+        .iter()
+        .find(|profile| profile.profile_id == profile_id)
+        .map(|profile| PathBuf::from(&profile.codex_home))
+        .unwrap_or(select_new_profile_home(
+            &metadata,
+            &store.environment,
+            user_id,
+            client_id.as_deref(),
+            workspace_id,
+        )?);
     let auth_path = profile_home.join("auth.json");
     let existing = read_codex_api_key(&auth_path)?;
     let credential = match existing {
@@ -318,7 +339,6 @@ pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceP
         .find(|item| item.workspace_id == workspace_id)
         .map(|item| item.name)
         .unwrap_or_else(|| format!("工作区 {workspace_id}"));
-    let mut metadata = load_metadata()?;
     let previous_activation = metadata
         .profiles
         .iter()
@@ -479,6 +499,7 @@ pub fn finalize_workspace_setup(profile: &CredentialProfile, auto_activate: bool
     if !codex_ready_for_workspace(profile.workspace_id) {
         anyhow::bail!("独立工作区凭证档案未完成配置");
     }
+    commit_default_home_ownership(profile)?;
     Ok(())
 }
 
@@ -1144,6 +1165,94 @@ fn workspace_profile_home(
         .join(format!("workspace-{workspace_id}"))
 }
 
+fn select_new_profile_home(
+    metadata: &CredentialMetadata,
+    environment: &str,
+    user_id: Option<u64>,
+    client_id: Option<&str>,
+    workspace_id: u64,
+) -> Result<PathBuf> {
+    let private_home = workspace_profile_home(environment, user_id, client_id, workspace_id);
+    if !metadata.profiles.is_empty() || user_environment::read_codex_home()?.is_some() {
+        return Ok(private_home);
+    }
+
+    let default_home = default_original_codex_home();
+    if default_home_can_be_initialized(&default_home)? {
+        Ok(default_home)
+    } else {
+        Ok(private_home)
+    }
+}
+
+fn default_home_can_be_initialized(path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(true);
+    }
+    if !path.is_dir() {
+        anyhow::bail!("Codex 默认状态路径不是目录: {}", path.display());
+    }
+    match read_valid_ownership(path) {
+        Ok(Some(_)) => return Ok(true),
+        Ok(None) => {}
+        Err(_) => return Ok(false),
+    }
+    let mut entries = fs::read_dir(path)
+        .with_context(|| format!("读取 Codex 默认状态目录失败: {}", path.display()))?;
+    Ok(entries.next().transpose()?.is_none())
+}
+
+fn commit_default_home_ownership(profile: &CredentialProfile) -> Result<()> {
+    let profile_home = Path::new(&profile.codex_home);
+    if profile_home != default_original_codex_home() {
+        return Ok(());
+    }
+    if read_valid_ownership(profile_home)?.is_some() {
+        return Ok(());
+    }
+    if read_codex_api_key(&profile_home.join(OWNED_AUTH_FILE))?.is_none()
+        || !managed_config_ready(&profile_home.join(OWNED_CONFIG_FILE))
+    {
+        anyhow::bail!("默认 Codex 状态目录尚未完成百积木初始化");
+    }
+    let ownership = CodexHomeOwnership {
+        schema_version: OWNERSHIP_SCHEMA_VERSION,
+        owner: OWNERSHIP_OWNER.to_string(),
+        initialized_at_epoch_seconds: now_epoch_seconds(),
+        managed_files: vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()],
+    };
+    let marker = profile_home.join(OWNERSHIP_MARKER_FILE);
+    atomic_write_private(&marker, &serde_json::to_vec_pretty(&ownership)?)?;
+    let verified =
+        read_valid_ownership(profile_home)?.context("百积木 Codex 所有权标记写入后无法回读")?;
+    if verified != ownership {
+        anyhow::bail!("百积木 Codex 所有权标记回读不一致");
+    }
+    Ok(())
+}
+
+fn read_valid_ownership(home: &Path) -> Result<Option<CodexHomeOwnership>> {
+    let path = home.join(OWNERSHIP_MARKER_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read(&path)
+        .with_context(|| format!("读取百积木 Codex 所有权标记失败: {}", path.display()))?;
+    let marker: CodexHomeOwnership = crate::json_compat::from_slice(&content)
+        .with_context(|| format!("解析百积木 Codex 所有权标记失败: {}", path.display()))?;
+    let expected_files = vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()];
+    if marker.schema_version != OWNERSHIP_SCHEMA_VERSION
+        || marker.owner != OWNERSHIP_OWNER
+        || marker.managed_files != expected_files
+    {
+        anyhow::bail!(
+            "百积木 Codex 所有权标记不受当前版本支持: {}",
+            path.display()
+        );
+    }
+    Ok(Some(marker))
+}
+
 fn sanitize_path_segment(value: &str) -> String {
     let value = value
         .chars()
@@ -1702,6 +1811,63 @@ mod tests {
         );
         assert_eq!(metadata.active_workspace_id, Some(642));
         assert!(!personal_home.join("auth.json").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pristine_default_home_is_initialized_and_marked_without_business_identifiers() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-default-home-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let default_home = user_home.join(".codex");
+
+        assert!(default_home_can_be_initialized(&default_home).unwrap());
+        write_workspace_auth(&default_home.join("auth.json"), "workspace-token").unwrap();
+        write_workspace_config(&default_home.join("config.toml")).unwrap();
+        let mut profile = test_workspace_profile(&data_dir, 642);
+        profile.codex_home = default_home.display().to_string();
+        commit_default_home_ownership(&profile).unwrap();
+
+        let marker_content = fs::read_to_string(default_home.join(OWNERSHIP_MARKER_FILE)).unwrap();
+        let marker = read_valid_ownership(&default_home).unwrap().unwrap();
+        assert_eq!(marker.owner, OWNERSHIP_OWNER);
+        assert_eq!(
+            marker.managed_files,
+            vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()]
+        );
+        assert!(!marker_content.contains("642"));
+        assert!(!marker_content.contains("workspace-token"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn existing_or_ambiguously_marked_default_home_is_never_adopted() {
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-owned-home-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("state.db"), b"user-state").unwrap();
+        assert!(!default_home_can_be_initialized(&root).unwrap());
+
+        fs::remove_file(root.join("state.db")).unwrap();
+        fs::write(
+            root.join(OWNERSHIP_MARKER_FILE),
+            br#"{"schemaVersion":999,"owner":"baijimu-connector-codex","initializedAtEpochSeconds":1,"managedFiles":[]}"#,
+        )
+        .unwrap();
+        assert!(!default_home_can_be_initialized(&root).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 

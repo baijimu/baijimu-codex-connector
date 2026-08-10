@@ -1,46 +1,28 @@
 import {
   DEFAULT_MODEL,
-  codexTurnMessages,
   credentialStatusMeta,
-  formatCodexSessionTime,
-  normalizeCodexProjects,
-  normalizeCodexSessions,
   normalizeCredentialState,
   normalizeSetupProgress,
   shouldShowSetupProgress,
 } from "./state.mjs";
 
 const elementIds = [
-  "refresh-button", "message", "error", "warning", "sessions-view", "account-view",
-  "credential-badge", "active-workspace", "active-model", "codex-configured",
-  "auth-mode", "auth-profile-list",
-  "setup-status", "setup-message", "setup-retry-button", "setup-progress",
-  "setup-progress-label", "setup-progress-percent", "setup-progress-track",
-  "setup-progress-bar", "setup-step-list",
-  "new-session-button", "session-project-filter", "session-list", "load-more-sessions",
-  "session-path", "session-title", "session-status", "conversation", "prompt-form",
-  "session-cwd", "session-project-options", "session-model", "prompt-input", "prompt-hint",
-  "interrupt-button", "send-button",
-  "auth-switch-modal", "auth-switch-modal-title", "auth-switch-modal-message",
-  "auth-switch-cancel", "auth-switch-confirm",
+  "refresh-button", "open-codex-button", "message", "error", "warning",
+  "credential-badge", "active-workspace", "active-codex-home", "active-model",
+  "codex-configured", "auth-mode", "auth-profile-list", "setup-status",
+  "setup-message", "setup-retry-button", "setup-progress", "setup-progress-label",
+  "setup-progress-percent", "setup-progress-track", "setup-progress-bar", "setup-step-list",
+  "switch-progress", "switch-progress-message", "auth-switch-modal",
+  "auth-switch-modal-title", "auth-switch-modal-message", "auth-switch-cancel",
+  "auth-switch-confirm",
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
 
-let activeView = "sessions";
 let credentialState = null;
 let setupState = null;
 let setupMonitorGeneration = 0;
-let codexProjects = [];
-let sessions = [];
-let nextSessionCursor = null;
-let selectedSessionId = "";
-let selectedTurnId = "";
-let sessionBusy = false;
-let eventSequence = 0;
-let monitorGeneration = 0;
-let pendingAuthSwitch = null;
-let readinessPromise = null;
-let returnToSessionsAfterSetup = false;
+let pendingCodexLaunch = null;
+let accountBusy = false;
 
 function bridge() {
   const api = window.baijimuLocalApp;
@@ -64,27 +46,12 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error || "操作失败");
 }
 
-function option(value, label) {
-  const item = document.createElement("option");
-  item.value = String(value);
-  item.textContent = label;
-  return item;
-}
-
-function switchView(view) {
-  activeView = view;
-  elements["sessions-view"].hidden = view !== "sessions";
-  elements["account-view"].hidden = view !== "account";
-  document.querySelectorAll("[data-view]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === view);
-  });
-  if (view === "sessions" && sessions.length === 0) void prepareSessions();
-  if (view === "account" && !credentialState) void loadState();
-}
-
 function setAccountBusy(value) {
+  accountBusy = value;
+  elements["refresh-button"].disabled = value;
+  elements["open-codex-button"].disabled = value;
   elements["setup-retry-button"].disabled = value;
-  elements["setup-retry-button"].textContent = value ? "正在初始化…" : "重新初始化";
+  elements["setup-retry-button"].textContent = value ? "正在处理…" : "重新安装并修复";
   document.querySelectorAll(".auth-switch").forEach((button) => {
     button.disabled = value || button.dataset.profileDisabled === "true";
   });
@@ -92,86 +59,118 @@ function setAccountBusy(value) {
 
 function profileRow({ title, detail, meta, active, disabled, actionLabel, onSwitch }) {
   const row = document.createElement("div");
-  row.className = `profile-row${active ? " active" : ""}`;
+  row.className = `profile-row${active ? " active" : ""}${disabled ? " unavailable" : ""}`;
   const copy = document.createElement("div");
   copy.className = "profile-copy";
+  const heading = document.createElement("div");
+  heading.className = "profile-heading";
   const strong = document.createElement("strong");
   strong.textContent = title;
+  heading.append(strong);
+  if (active) {
+    const current = document.createElement("span");
+    current.className = "current-label";
+    current.textContent = "当前环境";
+    heading.append(current);
+  }
   const span = document.createElement("span");
   span.textContent = detail;
   const small = document.createElement("small");
   small.textContent = meta;
-  copy.append(strong, span, small);
+  copy.append(heading, span, small);
   const button = document.createElement("button");
   button.type = "button";
   button.className = `button ${active ? "secondary" : "primary"} compact auth-switch`;
-  button.textContent = active ? "当前使用" : (actionLabel || "切换");
-  button.dataset.profileDisabled = String(active || disabled);
-  button.disabled = active || disabled;
+  button.textContent = actionLabel || (active ? "重新启动 Codex" : "启动 Codex");
+  button.dataset.profileDisabled = String(disabled);
+  button.disabled = accountBusy || disabled;
   button.addEventListener("click", onSwitch);
   row.append(copy, button);
   return row;
 }
 
-function renderAuthProfiles() {
+function authProfiles() {
   const state = credentialState;
-  const list = elements["auth-profile-list"];
-  list.replaceChildren();
-  const chatgptActive = state?.activeMode === "chatgpt";
-  list.append(profileRow({
+  const profiles = [{
+    key: "chatgpt",
     title: "原有 Codex 环境",
-    detail: state?.chatgpt?.accountId ? `账号 ${state.chatgpt.accountId}` : "默认 Codex 登录",
-    meta: state?.chatgpt?.configured ? "已登录；使用原有配置和会话" : "尚未登录；恢复后可从桌面应用完成登录",
-    active: chatgptActive,
+    detail: state?.chatgpt?.accountId ? `ChatGPT 账号 ${state.chatgpt.accountId}` : "接管前的默认 Codex 登录",
+    meta: state?.chatgpt?.configured ? "已配置；恢复后使用原有登录、配置和会话" : "尚未登录；恢复后可在 Codex 中完成登录",
+    active: state?.activeMode === "chatgpt",
     disabled: false,
-    actionLabel: "恢复原有 Codex 环境",
-    onSwitch: () => openAuthSwitchModal({ mode: "chatgpt" }),
-  }));
-  state?.workspaces.forEach((workspace) => {
+    actionLabel: state?.activeMode === "chatgpt" ? "重新启动个人 Codex" : "启动个人 Codex",
+    request: { mode: "chatgpt" },
+  }];
+  for (const workspace of state?.workspaces || []) {
     const profile = state.profiles.find((item) => item.workspaceId === workspace.workspaceId);
     const active = state.activeMode === "baijimu" && state.activeWorkspaceId === workspace.workspaceId;
-    const users = workspace.userIds.length ? `用户 ${workspace.userIds.join("、")} · ` : "";
-    list.append(profileRow({
-      title: `${workspace.name}（${workspace.workspaceId}）`,
-      detail: `${users}${profile?.environment || "prod"} 环境`,
+    profiles.push({
+      key: `workspace-${workspace.workspaceId}`,
+      title: `${workspace.name || `工作区 ${workspace.workspaceId}`}（${workspace.workspaceId}）`,
+      detail: `${profile?.environment || "prod"} 环境`,
       meta: workspace.authorized
-        ? (profile ? "凭证已保存；切换后桌面应用与远程会话共用该工作区" : "已授权；首次切换时创建工作区凭证档案")
+        ? (profile ? "凭证档案已保存；可以直接启动 Codex" : "已授权；首次启动时自动创建工作区凭证档案")
         : "当前百积木账号未授权这个工作区",
       active,
       disabled: !workspace.authorized,
-      onSwitch: () => openAuthSwitchModal({ mode: "baijimu", workspaceId: workspace.workspaceId }),
-    }));
+      actionLabel: active ? "重新启动 Codex" : "启动 Codex",
+      request: { mode: "baijimu", workspaceId: workspace.workspaceId },
+    });
+  }
+  return profiles.sort((left, right) => {
+    if (left.active !== right.active) return left.active ? -1 : 1;
+    if (left.disabled !== right.disabled) return left.disabled ? 1 : -1;
+    return 0;
   });
+}
+
+function renderAuthProfiles() {
+  const list = elements["auth-profile-list"];
+  list.replaceChildren();
+  for (const profile of authProfiles()) {
+    list.append(profileRow({
+      ...profile,
+      onSwitch: () => openAuthSwitchModal(profile.request),
+    }));
+  }
+  if (!list.children.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "没有可用的 Codex 环境。";
+    list.append(empty);
+  }
 }
 
 function renderCredentialState() {
   const state = credentialState;
   const active = state?.activeProfile;
   const status = credentialStatusMeta(state?.credentialStatus);
-  elements["credential-badge"].textContent = status.label;
-  elements["credential-badge"].className = `status-badge ${status.tone}`;
   const currentWorkspaceId = state?.activeWorkspaceId || active?.workspaceId;
   const currentWorkspace = state?.workspaces.find((item) => item.workspaceId === currentWorkspaceId);
-  elements["auth-mode"].textContent = state?.activeMode === "baijimu" ? "百积木 API Key" : "ChatGPT 账号登录";
+  elements["credential-badge"].textContent = status.label;
+  elements["credential-badge"].className = `status-badge ${status.tone}`;
+  elements["auth-mode"].textContent = state?.activeMode === "baijimu" ? "百积木工作区凭证" : "原有 ChatGPT 登录";
   elements["active-workspace"].textContent = state?.activeMode === "chatgpt"
     ? "原有 Codex 环境"
     : currentWorkspaceId
-    ? `${currentWorkspace?.name || active?.workspaceName || `工作区 ${currentWorkspaceId}`}（${currentWorkspaceId}）`
-    : "尚未识别";
+      ? `${currentWorkspace?.name || active?.workspaceName || `工作区 ${currentWorkspaceId}`}（${currentWorkspaceId}）`
+      : "尚未识别";
+  const activeHome = state?.activeCodexHome || active?.codexHome || state?.originalCodexHome;
+  elements["active-codex-home"].textContent = activeHome || "使用 Codex 默认目录";
+  elements["active-codex-home"].title = activeHome || "";
   elements["active-model"].textContent = active?.model || DEFAULT_MODEL;
-  elements["codex-configured"].textContent = state?.codexConfigured ? "已由本地应用管理" : "尚未完成管理配置";
+  elements["codex-configured"].textContent = state?.codexConfigured ? "已由 Connector 管理" : "尚未完成配置";
   setMessage("warning", state?.discoveryWarning || "");
-  if (active) {
-    elements["session-model"].value = active.model;
-  }
   renderAuthProfiles();
 }
 
-function authSwitchCopy(request) {
+function codexLaunchCopy(request) {
+  const currentName = elements["active-workspace"].textContent || "当前环境";
   if (request.mode === "chatgpt") {
     return {
-      title: "恢复原有 Codex 环境",
-      message: "将关闭并重启 Codex，恢复百积木接管前的 CODEX_HOME。不会删除任何工作区目录。",
+      title: "启动个人 Codex",
+      message: `将关闭当前 Codex，并使用“${currentName}”接管前的个人状态目录重新启动。不会删除任何工作区目录。`,
+      progress: "正在使用个人状态目录启动 Codex…",
     };
   }
   const workspace = credentialState?.workspaces?.find(
@@ -181,20 +180,21 @@ function authSwitchCopy(request) {
     ? `${workspace.name}（${workspace.workspaceId}）`
     : `工作区 ${request.workspaceId}`;
   return {
-    title: `切换到${name}`,
-    message: "将关闭并重启 Codex，并把用户级 CODEX_HOME 切换到所选百积木工作区。不会删除其他工作区目录。",
+    title: `使用${name}启动 Codex`,
+    message: `将关闭当前 Codex，选择“${name}”的独立状态目录并重新启动。不会删除个人或其他工作区数据。`,
+    progress: `正在使用${name}启动并验证 Codex…`,
   };
 }
 
 function closeAuthSwitchModal() {
-  pendingAuthSwitch = null;
+  pendingCodexLaunch = null;
   elements["auth-switch-modal"].hidden = true;
 }
 
 function openAuthSwitchModal(request) {
-  if (pendingAuthSwitch) return;
-  const copy = authSwitchCopy(request);
-  pendingAuthSwitch = request;
+  if (pendingCodexLaunch || accountBusy) return;
+  const copy = codexLaunchCopy(request);
+  pendingCodexLaunch = request;
   elements["auth-switch-modal-title"].textContent = copy.title;
   elements["auth-switch-modal-message"].textContent = copy.message;
   elements["auth-switch-modal"].hidden = false;
@@ -202,35 +202,33 @@ function openAuthSwitchModal(request) {
 }
 
 async function confirmAuthSwitch() {
-  const request = pendingAuthSwitch;
+  const request = pendingCodexLaunch;
   if (!request) return;
+  const copy = codexLaunchCopy(request);
   closeAuthSwitchModal();
-  await switchAuthProfile(request);
+  await launchCodex(request, copy.progress);
 }
 
-async function switchAuthProfile(request) {
+async function launchCodex(request, progressMessage) {
   clearNotices();
   setAccountBusy(true);
-  setMessage("message", "正在切换账号与工作区…");
+  elements["switch-progress-message"].textContent = progressMessage;
+  elements["switch-progress"].hidden = false;
   try {
-    const response = await bridge().invoke("switchAuthProfile", request);
+    const response = await bridge().invoke("launchCodex", request);
     credentialState = normalizeCredentialState(response);
-    sessions = [];
-    codexProjects = [];
-    selectedSessionId = "";
     renderCredentialState();
-    const desktopNotice = credentialState.desktopEnvironmentManaged
-      ? " 用户级 CODEX_HOME 已同步并生效。"
-      : "";
     setMessage(
       "message",
-      (request.mode === "chatgpt"
-        ? "已恢复原有 Codex 环境。"
-        : "已切换到百积木工作区，远程会话将使用独立凭证。") + desktopNotice,
+      request.mode === "chatgpt"
+        ? "个人 Codex 已启动并验证。"
+        : "Codex 已使用所选百积木工作区启动并验证。",
     );
   } catch (error) {
     setMessage("error", errorMessage(error));
+    await loadState({ ensureReady: false, monitor: false });
   } finally {
+    elements["switch-progress"].hidden = true;
     setAccountBusy(false);
   }
 }
@@ -317,13 +315,8 @@ async function monitorSetup() {
       setupState = await bridge().invoke("setupState");
       renderSetupState();
       if (setupState?.status === "succeeded") {
-        await loadState("", { monitor: false });
-        if (returnToSessionsAfterSetup) {
-          returnToSessionsAfterSetup = false;
-          await prepareSessions({ successMessage: "Codex 应用初始化已完成，开发会话已就绪。" });
-        } else {
-          setMessage("message", "Codex 应用初始化已完成。");
-        }
+        await loadState({ ensureReady: false, monitor: false });
+        setMessage("message", "本机 Codex 已完成安装配置，可以切换工作区或直接打开 Codex。");
         return;
       }
       if (setupState?.status === "failed") {
@@ -338,7 +331,29 @@ async function monitorSetup() {
   }
 }
 
-async function loadState(successMessage = "", { monitor = true } = {}) {
+async function ensureCodexReady() {
+  const readiness = await bridge().invoke("ensureCodexReady", {});
+  setupState = readiness?.setup || setupState;
+  renderSetupState();
+  switch (readiness?.readiness) {
+    case "ready":
+      return;
+    case "initializing":
+      setMessage("message", readiness?.message || "正在自动下载安装并配置本机 Codex。");
+      void monitorSetup();
+      return;
+    case "failed":
+      setMessage("error", readiness?.message || "Codex 初始化失败，请检查失败步骤后重新安装修复。");
+      return;
+    case "needs_workspace":
+      setMessage("error", readiness?.message || "请先完成当前百积木工作区授权。");
+      return;
+    default:
+      throw new Error(readiness?.message || "无法确认本机 Codex 初始化状态。");
+  }
+}
+
+async function loadState({ ensureReady = false, monitor = true, successMessage = "" } = {}) {
   clearNotices();
   setAccountBusy(true);
   try {
@@ -350,334 +365,57 @@ async function loadState(successMessage = "", { monitor = true } = {}) {
     setupState = setup;
     renderCredentialState();
     renderSetupState();
-    if (monitor && setupState?.status === "running") void monitorSetup();
+    if (ensureReady) await ensureCodexReady();
+    else if (monitor && setupState?.status === "running") void monitorSetup();
     if (successMessage) setMessage("message", successMessage);
   } catch (error) {
-    credentialState = null;
     setMessage("error", errorMessage(error));
-    setAccountBusy(false);
+  } finally {
+    if (setupState?.status !== "running") setAccountBusy(false);
   }
 }
 
 async function retrySetup() {
   clearNotices();
   const workspaceId = credentialState?.currentWorkspaceId;
-  if (!workspaceId) return setMessage("error", "客户端当前授权中缺少工作区信息。");
+  if (!workspaceId) {
+    setMessage("error", "客户端当前授权中缺少工作区信息。");
+    return;
+  }
   setAccountBusy(true);
   try {
     setupState = await bridge().invoke("setupRetry", { workspaceId });
     renderSetupState();
-    returnToSessionsAfterSetup = true;
     setMessage("message", "已开始重新安装并修复本机 Codex。");
     void monitorSetup();
   } catch (error) {
+    setAccountBusy(false);
     setMessage("error", errorMessage(error));
+  }
+}
+
+async function openCodex() {
+  clearNotices();
+  setAccountBusy(true);
+  elements["open-codex-button"].textContent = "正在打开…";
+  try {
+    const request = credentialState?.activeMode === "baijimu" && credentialState?.activeWorkspaceId
+      ? { mode: "baijimu", workspaceId: credentialState.activeWorkspaceId }
+      : { mode: "chatgpt" };
+    await launchCodex(request, "正在重新启动并验证当前 Codex 环境…");
+  } catch (error) {
+    setMessage("error", errorMessage(error));
+  } finally {
+    elements["open-codex-button"].textContent = "打开 Codex";
     setAccountBusy(false);
   }
 }
 
-function setSessionPreparing(message = "正在准备本机 Codex…") {
-  elements["new-session-button"].disabled = true;
-  elements["send-button"].disabled = true;
-  elements["session-cwd"].disabled = true;
-  elements["session-model"].disabled = true;
-  elements["session-status"].textContent = "准备中";
-  elements["session-status"].className = "status-badge warning";
-  elements["session-list"].replaceChildren();
-  const empty = document.createElement("div");
-  empty.className = "empty-state";
-  empty.textContent = message;
-  elements["session-list"].append(empty);
-}
-
-async function runPrepareSessions({ successMessage = "" } = {}) {
-  clearNotices();
-  setSessionPreparing();
-  try {
-    if (!credentialState || !setupState) {
-      await loadState("", { monitor: false });
-    }
-    const readiness = await bridge().invoke("ensureCodexReady", {});
-    setupState = readiness?.setup || setupState;
-    renderSetupState();
-    switch (readiness?.readiness) {
-      case "ready":
-        switchView("sessions");
-        await loadSessions();
-        setSessionBusy(false);
-        if (successMessage) setMessage("message", successMessage);
-        return;
-      case "initializing":
-        returnToSessionsAfterSetup = true;
-        switchView("account");
-        setMessage("message", readiness?.message || "正在自动下载安装并配置本机 Codex。");
-        void monitorSetup();
-        return;
-      case "failed":
-        switchView("account");
-        setMessage("error", readiness?.message || "Codex 初始化失败，请检查失败步骤后重新安装修复。");
-        return;
-      case "needs_workspace":
-        switchView("account");
-        setMessage("error", readiness?.message || "请先完成当前百积木工作区授权。");
-        return;
-      default:
-        throw new Error(readiness?.message || "无法确认本机 Codex 初始化状态。");
-    }
-  } catch (error) {
-    setMessage("error", errorMessage(error));
-    switchView("account");
-  }
-}
-
-function prepareSessions(options = {}) {
-  if (readinessPromise) return readinessPromise;
-  readinessPromise = runPrepareSessions(options).finally(() => {
-    readinessPromise = null;
-  });
-  return readinessPromise;
-}
-
-function renderCodexProjects() {
-  const currentFilter = elements["session-project-filter"].value;
-  elements["session-project-filter"].replaceChildren(option("", "全部项目"));
-  elements["session-project-options"].replaceChildren();
-  codexProjects.forEach((project) => {
-    elements["session-project-filter"].append(option(project.path, project.title));
-    elements["session-project-options"].append(option(project.path, project.title));
-  });
-  if (codexProjects.some((project) => project.path === currentFilter)) elements["session-project-filter"].value = currentFilter;
-}
-
-function renderSessionList() {
-  const cwd = elements["session-project-filter"].value;
-  const visible = cwd ? sessions.filter((session) => session.cwd === cwd) : sessions;
-  elements["session-list"].replaceChildren();
-  if (!visible.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "没有符合条件的会话。";
-    elements["session-list"].append(empty);
-  }
-  visible.forEach((session) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `session-item${selectedSessionId === session.id ? " active" : ""}`;
-    const title = document.createElement("strong");
-    title.textContent = session.name;
-    const preview = document.createElement("span");
-    preview.textContent = session.preview || session.cwd || "暂无摘要";
-    const time = document.createElement("small");
-    time.textContent = formatCodexSessionTime(session);
-    button.append(title, preview, time);
-    button.addEventListener("click", () => void openSession(session));
-    elements["session-list"].append(button);
-  });
-  elements["load-more-sessions"].hidden = !nextSessionCursor;
-}
-
-function renderConversation(turns) {
-  const messages = codexTurnMessages(turns);
-  elements.conversation.replaceChildren();
-  if (!messages.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = selectedSessionId ? "这个会话还没有可显示的消息。" : "输入第一条开发指令开始新会话。";
-    elements.conversation.append(empty);
-    return;
-  }
-  messages.forEach((message) => {
-    const article = document.createElement("article");
-    article.className = `chat-message ${message.role}`;
-    const role = document.createElement("strong");
-    role.textContent = message.role === "user" ? "你" : message.role === "assistant" ? "Codex" : "系统";
-    const text = document.createElement("pre");
-    text.textContent = message.text;
-    article.append(role, text);
-    elements.conversation.append(article);
-  });
-  elements.conversation.scrollTop = elements.conversation.scrollHeight;
-}
-
-function setSessionBusy(value, status = value ? "执行中" : "就绪") {
-  sessionBusy = value;
-  elements["send-button"].disabled = value;
-  elements["session-cwd"].disabled = value || Boolean(selectedSessionId);
-  elements["session-model"].disabled = value;
-  elements["new-session-button"].disabled = value;
-  elements["interrupt-button"].hidden = !value;
-  elements["session-status"].textContent = status;
-  elements["session-status"].className = `status-badge ${value ? "warning" : "success"}`;
-  elements["send-button"].textContent = value ? "Codex 正在执行…" : "发送";
-}
-
-async function loadSessions({ append = false } = {}) {
-  clearNotices();
-  try {
-    if (!append) {
-      const projectsResponse = await bridge().invoke("listCodexProjects", { limit: 100, includeThreadStats: false });
-      codexProjects = normalizeCodexProjects(projectsResponse?.result);
-      renderCodexProjects();
-    }
-    const response = await bridge().invoke("listCodexSessions", {
-      limit: 50,
-      cursor: append ? nextSessionCursor : null,
-      sortKey: "updated_at",
-      sortDirection: "desc",
-      archived: false,
-    });
-    const page = normalizeCodexSessions(response?.result);
-    sessions = append ? normalizeCodexSessions([...sessions, ...page]) : page;
-    nextSessionCursor = response?.result?.nextCursor || null;
-    renderSessionList();
-  } catch (error) {
-    setMessage("error", errorMessage(error));
-    elements["session-list"].replaceChildren();
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "暂时无法读取 Codex 会话。";
-    elements["session-list"].append(empty);
-  }
-}
-
-async function readTurns(threadId) {
-  const response = await bridge().invoke("listCodexTurns", {
-    threadId,
-    limit: 100,
-    sortDirection: "asc",
-    itemsView: "full",
-  });
-  const turns = Array.isArray(response?.result?.data) ? response.result.data : [];
-  renderConversation(turns);
-  return turns;
-}
-
-async function openSession(session) {
-  monitorGeneration += 1;
-  selectedSessionId = session.id;
-  selectedTurnId = "";
-  elements["session-cwd"].value = session.cwd;
-  elements["session-title"].textContent = session.name;
-  elements["session-path"].textContent = session.cwd || "目录未知";
-  elements["prompt-hint"].textContent = "继续发送指令会在当前会话中启动新的 turn。";
-  setSessionBusy(false);
-  renderSessionList();
-  try {
-    await readTurns(session.id);
-  } catch (error) {
-    setMessage("error", errorMessage(error));
-  }
-}
-
-function newSession() {
-  monitorGeneration += 1;
-  selectedSessionId = "";
-  selectedTurnId = "";
-  elements["session-title"].textContent = "新建会话";
-  elements["session-path"].textContent = "选择项目目录后发送第一条指令";
-  elements["session-cwd"].value = elements["session-project-filter"].value || codexProjects[0]?.path || "";
-  elements["prompt-input"].value = "";
-  elements["prompt-hint"].textContent = "发送首条指令时会创建会话并立即开始执行。";
-  renderConversation([]);
-  renderSessionList();
-  setSessionBusy(false);
-  elements["prompt-input"].focus();
-}
-
-function eventMatchesTurn(event, threadId, turnId) {
-  const params = event?.params || {};
-  const eventTurnId = params?.turnId || params?.turn?.id;
-  const eventThreadId = params?.threadId || params?.thread?.id;
-  return (!eventTurnId || eventTurnId === turnId) && (!eventThreadId || eventThreadId === threadId);
-}
-
-async function monitorTurn(threadId, turnId, generation) {
-  const deadline = Date.now() + 30 * 60 * 1000;
-  while (generation === monitorGeneration && Date.now() < deadline) {
-    await new Promise((resolve) => window.setTimeout(resolve, 1200));
-    if (generation !== monitorGeneration) return;
-    try {
-      const response = await bridge().invoke("recentCodexEvents", { afterSequence: eventSequence, limit: 200 });
-      const events = Array.isArray(response?.events) ? response.events : [];
-      eventSequence = Math.max(
-        eventSequence,
-        Number(response?.latestSequence) || 0,
-        ...events.map((event) => Number(event?.sequence) || 0),
-      );
-      await readTurns(threadId);
-      const terminal = events.find((event) => eventMatchesTurn(event, threadId, turnId)
-        && ["turn/completed", "turn/failed", "turn/cancelled", "turn/interrupted"].includes(event.method));
-      if (terminal) {
-        setSessionBusy(false, terminal.method === "turn/completed" ? "已完成" : "已停止");
-        await loadSessions();
-        return;
-      }
-    } catch (error) {
-      setSessionBusy(false, "读取失败");
-      setMessage("error", errorMessage(error));
-      return;
-    }
-  }
-  if (generation === monitorGeneration) {
-    setSessionBusy(false, "仍在后台执行");
-    setMessage("warning", "会话仍在后台运行，请稍后刷新查看结果。");
-  }
-}
-
-async function sendPrompt(event) {
-  event.preventDefault();
-  clearNotices();
-  const cwd = elements["session-cwd"].value.trim();
-  const model = elements["session-model"].value.trim();
-  const prompt = elements["prompt-input"].value.trim();
-  if (!cwd || !model || !prompt || sessionBusy) return;
-  const generation = ++monitorGeneration;
-  setSessionBusy(true);
-  try {
-    if (!selectedSessionId) {
-      const started = await bridge().invoke("startCodexSession", { cwd, model });
-      selectedSessionId = String(started?.result?.thread?.id || "");
-      if (!selectedSessionId) throw new Error("Codex 没有返回新会话 ID。");
-      elements["session-title"].textContent = "新会话";
-      elements["session-path"].textContent = cwd;
-      elements["session-cwd"].disabled = true;
-    }
-    const startedTurn = await bridge().invoke("startCodexTurn", {
-      threadId: selectedSessionId,
-      input: prompt,
-      cwd,
-      model,
-    });
-    selectedTurnId = String(startedTurn?.result?.turn?.id || "");
-    elements["prompt-input"].value = "";
-    elements["prompt-hint"].textContent = "Codex 正在本机项目中执行；完成后可以继续发送。";
-    await readTurns(selectedSessionId);
-    void monitorTurn(selectedSessionId, selectedTurnId, generation);
-  } catch (error) {
-    setSessionBusy(false, "执行失败");
-    setMessage("error", errorMessage(error));
-  }
-}
-
-async function interruptTurn() {
-  if (!sessionBusy || !selectedSessionId) return;
-  try {
-    await bridge().invoke("interruptCodexTurn", { threadId: selectedSessionId, turnId: selectedTurnId || null });
-    monitorGeneration += 1;
-    setSessionBusy(false, "已停止");
-    await readTurns(selectedSessionId);
-  } catch (error) {
-    setMessage("error", errorMessage(error));
-  }
-}
-
-document.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
-elements["refresh-button"].addEventListener("click", () => activeView === "sessions" ? void prepareSessions() : void loadState("状态已刷新。"));
-elements["new-session-button"].addEventListener("click", newSession);
-elements["session-project-filter"].addEventListener("change", renderSessionList);
-elements["load-more-sessions"].addEventListener("click", () => void loadSessions({ append: true }));
-elements["prompt-form"].addEventListener("submit", (event) => void sendPrompt(event));
-elements["interrupt-button"].addEventListener("click", () => void interruptTurn());
+elements["refresh-button"].addEventListener("click", () => void loadState({
+  ensureReady: true,
+  successMessage: "工作区状态已刷新。",
+}));
+elements["open-codex-button"].addEventListener("click", () => void openCodex());
 elements["setup-retry-button"].addEventListener("click", () => void retrySetup());
 elements["auth-switch-cancel"].addEventListener("click", closeAuthSwitchModal);
 elements["auth-switch-confirm"].addEventListener("click", () => void confirmAuthSwitch());
@@ -685,7 +423,7 @@ elements["auth-switch-modal"].addEventListener("click", (event) => {
   if (event.target === elements["auth-switch-modal"]) closeAuthSwitchModal();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && pendingAuthSwitch) closeAuthSwitchModal();
+  if (event.key === "Escape" && pendingCodexLaunch) closeAuthSwitchModal();
 });
 
-void prepareSessions();
+void loadState({ ensureReady: true });

@@ -2,7 +2,7 @@ export const DEFAULT_MODEL = "gpt-5.6-sol";
 
 function positiveInteger(value) {
   const number = Number(value);
-  return Number.isInteger(number) && number > 0 ? number : 0;
+  return Number.isInteger(number) && number > 0 ? number : null;
 }
 
 export function normalizeCredentialState(value) {
@@ -16,7 +16,7 @@ export function normalizeCredentialState(value) {
           configured: workspace?.configured === true,
           userIds: Array.isArray(workspace?.userIds) ? workspace.userIds.map(positiveInteger).filter(Boolean) : [],
         }))
-        .filter((workspace) => workspace.workspaceId > 0)
+        .filter((workspace) => workspace.workspaceId)
     : [];
   const profiles = Array.isArray(input.profiles)
     ? input.profiles.map(normalizeProfile).filter(Boolean)
@@ -126,102 +126,4 @@ export function normalizeSetupProgress(value) {
 export function shouldShowSetupProgress(value) {
   const progress = normalizeSetupProgress(value);
   return progress.status !== "succeeded" && progress.steps.length > 0;
-}
-
-export function formatActivatedAt(epochSeconds) {
-  if (!epochSeconds) return "尚未记录切换时间";
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(epochSeconds * 1000));
-}
-
-function timestampValue(value) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value < 10_000_000_000 ? value * 1000 : value;
-  }
-  const parsed = Date.parse(String(value || ""));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-export function codexSessionTimestamp(session) {
-  return timestampValue(
-    session?.updatedAt
-      ?? session?.updated_at
-      ?? session?.recencyAt
-      ?? session?.recency_at
-      ?? session?.createdAt
-      ?? session?.created_at,
-  );
-}
-
-export function normalizeCodexSessions(value) {
-  const raw = Array.isArray(value) ? value : Array.isArray(value?.data) ? value.data : [];
-  return raw
-    .map((item) => {
-      const thread = item?.thread && typeof item.thread === "object" ? item.thread : item;
-      const id = String(thread?.id || "").trim();
-      if (!id) return null;
-      return {
-        ...item,
-        ...thread,
-        id,
-        name: String(thread?.name || thread?.title || thread?.preview || "未命名会话").trim(),
-        cwd: String(thread?.cwd || "").trim(),
-        preview: String(thread?.preview || "").trim(),
-      };
-    })
-    .filter(Boolean)
-    .sort((left, right) => codexSessionTimestamp(right) - codexSessionTimestamp(left));
-}
-
-export function normalizeCodexProjects(value) {
-  const raw = Array.isArray(value) ? value : Array.isArray(value?.projects) ? value.projects : [];
-  return raw
-    .map((project) => ({
-      ...project,
-      path: String(project?.path || project?.cwd || "").trim(),
-      title: String(project?.title || project?.name || project?.path || "").trim(),
-    }))
-    .filter((project) => project.path);
-}
-
-function itemText(item) {
-  if (typeof item?.text === "string") return item.text;
-  if (typeof item?.content === "string") return item.content;
-  if (Array.isArray(item?.content)) {
-    return item.content
-      .map((part) => typeof part === "string" ? part : part?.text || part?.content || "")
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-export function codexTurnMessages(turns) {
-  const out = [];
-  for (const turn of Array.isArray(turns) ? turns : []) {
-    for (const item of Array.isArray(turn?.items) ? turn.items : []) {
-      const type = String(item?.type || "").toLowerCase();
-      const text = itemText(item).trim();
-      if (!text) continue;
-      const role = type.includes("user") ? "user" : type.includes("agent") || type.includes("assistant") ? "assistant" : "system";
-      out.push({ id: String(item?.id || `${turn?.id || "turn"}-${out.length}`), role, text });
-    }
-  }
-  return out;
-}
-
-export function formatCodexSessionTime(session) {
-  const timestamp = codexSessionTimestamp(session);
-  if (!timestamp) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
 }

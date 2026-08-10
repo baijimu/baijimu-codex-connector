@@ -289,8 +289,24 @@ test("macOS and Windows setup launch the official desktop only after activating 
   assert.match(desktop, /OsString::from\("CODEX_HOME="\)/);
   assert.match(desktop, /Command::new\("\/usr\/bin\/lsappinfo"\)/);
   assert.match(desktop, /has_visible_window\(&last_info\)/);
+  assert.match(desktop, /tell application id .* to quit/);
+  assert.match(desktop, /Command::new\("\/bin\/ps"\)/);
+  assert.match(desktop, /没有使用所选工作区状态目录/);
   assert.match(desktop, /reopen_with_project\(&app_path\)/);
   assert.doesNotMatch(desktop, /pkill/);
+});
+
+test("new-user ownership is explicit and never captures business identifiers", async () => {
+  const credential = await readFile(join(root, "src", "credential.rs"), "utf8");
+  assert.match(credential, /OWNERSHIP_MARKER_FILE: &str = "\.baijimu-owner\.json"/);
+  assert.match(credential, /OWNERSHIP_OWNER: &str = "baijimu-connector-codex"/);
+  assert.match(credential, /default_home_can_be_initialized/);
+  assert.match(credential, /read_valid_ownership/);
+  assert.match(credential, /commit_default_home_ownership/);
+  assert.match(credential, /managed_files: vec!\[OWNED_AUTH_FILE\.to_string\(\), OWNED_CONFIG_FILE\.to_string\(\)\]/);
+  assert.match(credential, /assert!\(!marker_content\.contains\("642"\)\)/);
+  assert.match(credential, /assert!\(!marker_content\.contains\("workspace-token"\)\)/);
+  assert.match(credential, /existing_or_ambiguously_marked_default_home_is_never_adopted/);
 });
 
 test("all package identities agree with the GitHub source tag", async () => {

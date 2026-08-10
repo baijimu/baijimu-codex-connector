@@ -6,10 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   credentialStatusMeta,
   normalizeCredentialState,
-  normalizeCodexSessions,
   normalizeSetupProgress,
   shouldShowSetupProgress,
-  codexTurnMessages,
 } from "../ui/state.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -41,7 +39,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.deepEqual(manifest.ui, {
     type: "embedded",
     entry: "ui/index.html",
-    title: "Codex 远程开发",
+    title: "Codex 工作区管理",
     defaultView: true,
   });
   assert.deepEqual(Object.keys(manifest.management.operations).sort(), [
@@ -49,6 +47,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
     "credentialState",
     "ensureCodexReady",
     "interruptCodexTurn",
+    "launchCodex",
     "listCodexProjects",
     "listCodexSessions",
     "listCodexTurns",
@@ -59,7 +58,6 @@ test("connector manifest declares the packaged embedded UI", async () => {
     "setupState",
     "startCodexSession",
     "startCodexTurn",
-    "switchAuthProfile",
   ]);
   assert.equal(manifest.setup, undefined);
   assert.deepEqual(manifest.hostRequirements, {
@@ -72,14 +70,16 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /href="\.\/styles\.css"/);
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/i);
   assert.doesNotMatch(html, /项目 ID|确认设备/);
-  assert.match(html, /切换账号与工作区/);
+  assert.match(html, /选择工作区并启动 Codex/);
   assert.match(html, /auth-switch-modal/);
-  assert.match(html, /原有 CODEX_HOME/);
+  assert.match(html, /全新用户会直接初始化默认 \.codex/);
   const app = await readFile(join(root, "ui", "app.js"), "utf8");
-  assert.match(app, /恢复原有 Codex 环境/);
+  assert.match(app, /启动个人 Codex/);
   assert.match(app, /不会删除任何工作区目录/);
   assert.doesNotMatch(app, /window\.confirm/);
   assert.match(app, /openAuthSwitchModal/);
+  assert.match(app, /bridge\(\)\.invoke\("launchCodex"/);
+  assert.doesNotMatch(app, /switchAuthProfile|openCodexDesktop/);
   assert.doesNotMatch(app, /请关闭后重新打开/);
   assert.match(app, /bridge\(\)\.invoke\("ensureCodexReady"/);
   assert.match(app, /重新安装并修复/);
@@ -116,24 +116,6 @@ test("UI derives Codex initialization progress from installer steps and download
   assert.equal(normalizeSetupProgress({ status: "succeeded", installerStatus: { steps: [] } }).percent, 100);
   assert.equal(shouldShowSetupProgress({ status: "running", installerStatus: { steps: [{ state: "running" }] } }), true);
   assert.equal(shouldShowSetupProgress({ status: "succeeded", installerStatus: { steps: [{ state: "completed" }] } }), false);
-});
-
-test("UI keeps Codex sessions newest-first and extracts conversation messages", () => {
-  const sessions = normalizeCodexSessions([
-    { id: "old", name: "Old", updated_at: 100 },
-    { id: "new", name: "New", updated_at: 200 },
-  ]);
-  assert.deepEqual(sessions.map((session) => session.id), ["new", "old"]);
-  assert.deepEqual(codexTurnMessages([{
-    id: "turn-1",
-    items: [
-      { id: "user-1", type: "user_message", text: "实现功能" },
-      { id: "agent-1", type: "agent_message", content: [{ text: "已经完成" }] },
-    ],
-  }]), [
-    { id: "user-1", role: "user", text: "实现功能" },
-    { id: "agent-1", role: "assistant", text: "已经完成" },
-  ]);
 });
 
 test("UI state normalizes management responses and keeps the active workspace", () => {

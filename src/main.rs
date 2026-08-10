@@ -1185,7 +1185,7 @@ fn handle_management(
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
-        ("POST", "/management/v1/auth/switch") => {
+        ("POST", "/management/v1/codex/launch") => {
             let _credential_guard = state
                 .credential_management
                 .lock()
@@ -1193,7 +1193,7 @@ fn handle_management(
             if state.setup.state().status == "running" {
                 return Err(HttpError::new(
                     409,
-                    "Codex 正在安装配置，完成后再切换授权档案",
+                    "Codex 正在安装配置，完成后再启动所选工作区",
                 ));
             }
             let mode = body
@@ -1221,11 +1221,15 @@ fn handle_management(
                 .lock()
                 .map_err(|_| HttpError::internal("client lock poisoned"))?;
             client.shutdown();
-            let desktop_switch = desktop::stop_for_codex_home_switch().map_err(|error| {
-                client.switch_to_active_profile();
-                let _ = client.ensure_started();
-                HttpError::new(409, error.to_string())
-            })?;
+            let desktop_switch = if test_control_enabled() {
+                desktop::DesktopSwitch::default()
+            } else {
+                desktop::stop_for_codex_home_switch().map_err(|error| {
+                    client.switch_to_active_profile();
+                    let _ = client.ensure_started();
+                    HttpError::new(409, error.to_string())
+                })?
+            };
             let activation = match mode {
                 "chatgpt" => credential::activate_chatgpt_profile().map(|_| ()),
                 "baijimu" => credential::activate_prepared_workspace_profile(
@@ -1245,10 +1249,17 @@ fn handle_management(
                 .ensure_started()
                 .map_err(|error| error.message)
                 .and_then(|_| {
-                    desktop_switch
-                        .restart_and_verify()
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
+                    if test_control_enabled() {
+                        return Ok(());
+                    }
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
+                    {
+                        desktop::launch_and_verify().map_err(|error| error.to_string())
+                    }
+                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                    {
+                        Ok(())
+                    }
                 })
                 .and_then(|_| {
                     let state = credential::state().map_err(|error| error.to_string())?;
@@ -1268,8 +1279,7 @@ fn handle_management(
                     let app_server_rollback =
                         client.ensure_started().err().map(|item| item.message);
                     let desktop_rollback = desktop_switch.restart_and_verify().err();
-                    let mut message =
-                        format!("切换后的进程验证失败，已恢复原有 Codex 环境：{error}");
+                    let mut message = format!("Codex 启动验证失败，已恢复原有环境：{error}");
                     if let Err(rollback) = rollback {
                         message.push_str(&format!("；状态指针回滚失败：{rollback}"));
                     }

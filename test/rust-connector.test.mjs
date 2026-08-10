@@ -523,7 +523,7 @@ test("rust connector resolves current Codex project IDs to their real roots", as
   }
 });
 
-test("rust connector restores the original Codex environment after an isolated Baijimu workspace", async () => {
+test("rust connector launches an isolated Baijimu workspace and can launch the personal profile again", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const { createServer } = await import("node:http");
   const platform = createServer(async (request, response) => {
@@ -619,7 +619,7 @@ test("rust connector restores the original Codex environment after an isolated B
     );
     assert.equal(readiness.readiness, "ready");
     assert.equal(readiness.setup.workspaceId, 1390);
-    const workspaceState = await postManagementJson(port, managementToken, "/management/v1/auth/switch", {
+    const workspaceState = await postManagementJson(port, managementToken, "/management/v1/codex/launch", {
       mode: "baijimu", workspaceId: 1390,
     });
     assert.equal(workspaceState.activeMode, "baijimu");
@@ -628,7 +628,7 @@ test("rust connector restores the original Codex environment after an isolated B
     const workspaceStatus = await postJson(port, "/invoke/status");
     assert.equal(workspaceStatus.data.appServer.codexHome, workspaceHome);
 
-    const personalState = await postManagementJson(port, managementToken, "/management/v1/auth/switch", { mode: "chatgpt" });
+    const personalState = await postManagementJson(port, managementToken, "/management/v1/codex/launch", { mode: "chatgpt" });
     assert.equal(personalState.activeMode, "chatgpt");
     assert.equal(personalState.activeCodexHome, personalHome);
     const personalStatus = await postJson(port, "/invoke/status");
