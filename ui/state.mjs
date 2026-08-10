@@ -1,5 +1,17 @@
 export const DEFAULT_MODEL = "gpt-5.6-sol";
 
+export function connectorStartupRetryable(error) {
+  const code = String(
+    error?.code || error?.data?.code || error?.data?.error?.code || "",
+  ).toLowerCase();
+  const message = error instanceof Error
+    ? error.message.toLowerCase()
+    : String(error || "").toLowerCase();
+  return code === "connector_initializing"
+    || message.includes("connector_initializing")
+    || message.includes("正在初始化 codex connector");
+}
+
 function positiveInteger(value) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : null;
@@ -44,9 +56,21 @@ export function normalizeCredentialState(value) {
       captureSource: String(input.originalCodexHomeState?.captureSource || ""),
     },
     activeCodexHome: String(input.activeCodexHome || ""),
-    userCodexHome: typeof input.userCodexHome === "string" ? input.userCodexHome : "",
-    userCodexHomeSynchronized: input.userCodexHomeSynchronized === true,
-    desktopEnvironmentManaged: input.desktopEnvironmentManaged === true,
+    externalCodexHome: typeof input.externalCodexHome === "string" ? input.externalCodexHome : "",
+    legacyGlobalCodexHome: {
+      restoreRequired: input.legacyGlobalCodexHome?.restoreRequired === true,
+      canRestore: input.legacyGlobalCodexHome?.canRestore === true,
+      currentValue: typeof input.legacyGlobalCodexHome?.currentValue === "string"
+        ? input.legacyGlobalCodexHome.currentValue
+        : "",
+      restoreValue: typeof input.legacyGlobalCodexHome?.restoreValue === "string"
+        ? input.legacyGlobalCodexHome.restoreValue
+        : "",
+      restoredAtEpochSeconds: Math.max(
+        0,
+        Number(input.legacyGlobalCodexHome?.restoredAtEpochSeconds) || 0,
+      ),
+    },
     discoveryWarning: typeof input.discoveryWarning === "string" ? input.discoveryWarning.trim() : "",
   };
 }
@@ -86,12 +110,32 @@ export function credentialStatusMeta(status) {
   }
 }
 
+export function setupStatusMeta(value) {
+  const status = String(value?.status || "pending");
+  const labels = {
+    pending: "等待初始化",
+    running: "正在初始化",
+    succeeded: "已完成",
+    failed: "初始化失败",
+    interrupted: "初始化已中断",
+    needs_retry: "需要重新验证",
+  };
+  return {
+    status,
+    label: labels[status] || status,
+    retryable: value?.retryable === true
+      || ["failed", "interrupted", "needs_retry"].includes(status),
+    showCurrentError: status === "failed" && Boolean(String(value?.error || "").trim()),
+  };
+}
+
 export function normalizeSetupProgress(value) {
   const setupStatus = String(value?.status || "pending");
   const installer = value?.installerStatus && typeof value.installerStatus === "object"
     ? value.installerStatus
     : {};
-  const steps = (Array.isArray(installer.steps) ? installer.steps : []).map((step, index) => ({
+  const sourceSteps = setupStatus === "needs_retry" ? [] : installer.steps;
+  const steps = (Array.isArray(sourceSteps) ? sourceSteps : []).map((step, index) => ({
     index: Math.max(1, Number(step?.index) || index + 1),
     name: String(step?.name || `步骤 ${index + 1}`),
     state: String(step?.state || "pending"),

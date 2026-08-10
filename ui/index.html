@@ -21,8 +21,17 @@
       </header>
 
       <div id="message" class="message" role="status" aria-live="polite" hidden></div>
-      <div id="error" class="message error" role="alert" hidden></div>
+      <div id="error" class="message error error-with-action" role="alert" hidden>
+        <span id="error-text"></span>
+        <button id="error-retry-button" class="button secondary compact" type="button" hidden>重试</button>
+      </div>
       <div id="warning" class="message warning" role="status" hidden></div>
+      <div id="legacy-home-migration" class="message warning error-with-action" role="status" hidden>
+        <span id="legacy-home-message"></span>
+        <button id="restore-external-home-button" class="button secondary compact" type="button">
+          恢复外部 Codex 环境
+        </button>
+      </div>
 
       <div id="auth-switch-modal" class="modal-backdrop" hidden>
         <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-switch-modal-title">
@@ -115,7 +124,7 @@
           <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
         </div>
         <div class="form-actions">
-          <p>全新用户会直接初始化默认 .codex；检测到既有用户状态时才创建隔离档案，并完成 CLI、配置和桌面应用验证。</p>
+          <p>全新用户会直接初始化默认 .codex；检测到既有用户状态时只创建隔离档案。桌面 Codex 仅在你从上方明确选择配置并启动时打开。</p>
           <button id="setup-retry-button" class="button primary" type="button" hidden>重新安装并修复</button>
         </div>
       </section>

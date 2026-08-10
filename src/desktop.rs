@@ -1,11 +1,10 @@
 use anyhow::Result;
+use std::path::Path;
 
 #[derive(Clone, Debug, Default)]
 pub struct DesktopSwitch {
     #[cfg(any(windows, target_os = "macos"))]
     was_running: bool,
-    #[cfg(windows)]
-    app_id: Option<String>,
 }
 
 pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
@@ -13,13 +12,13 @@ pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn launch_and_verify() -> Result<()> {
-    platform::launch_and_verify()
+pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
+    platform::launch_and_verify(codex_home)
 }
 
 impl DesktopSwitch {
-    pub fn restart_and_verify(&self) -> Result<bool> {
-        platform::restart_and_verify(self)
+    pub fn restart_and_verify(&self, codex_home: &Path) -> Result<bool> {
+        platform::restart_and_verify(self, codex_home)
     }
 }
 
@@ -34,7 +33,6 @@ mod platform {
     #[serde(rename_all = "camelCase")]
     struct StopResult {
         was_running: bool,
-        app_id: Option<String>,
     }
 
     const STOP_SCRIPT: &str = r#"
@@ -44,11 +42,6 @@ if (-not $packages) {
   $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
 }
 $roots = @($packages | ForEach-Object { $_.InstallLocation } | Where-Object { $_ })
-$familyNames = @($packages | ForEach-Object { $_.PackageFamilyName } | Where-Object { $_ })
-$app = @(Get-StartApps | Where-Object {
-  $id = $_.AppID
-  ($familyNames | Where-Object { $id -like "$_*" }).Count -gt 0
-} | Select-Object -First 1)
 $targets = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
   try {
     $path = $_.Path
@@ -66,48 +59,27 @@ if ($wasRunning) {
   } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex desktop processes did not stop within 15 seconds' }
 }
-[pscustomobject]@{ wasRunning = $wasRunning; appId = if ($app) { $app[0].AppID } else { $null } } | ConvertTo-Json -Compress
-"#;
-
-    const RESTART_SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-$appId = $env:BAIJIMU_CODEX_DESKTOP_APP_ID
-if (-not $appId) { throw 'ChatGPT/Codex Start menu application id is unavailable' }
-Start-Process explorer.exe "shell:AppsFolder\$appId"
-$packages = @('OpenAI.Codex', 'OpenAI.ChatGPT') | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ }
-if (-not $packages) {
-  $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
-}
-$roots = @($packages | ForEach-Object { $_.InstallLocation } | Where-Object { $_ })
-$deadline = (Get-Date).AddSeconds(30)
-do {
-  $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    try {
-      $path = $_.Path
-      if (-not $path) { return $false }
-      return ($roots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
-    } catch { return $false }
-  })
-  if ($running.Count -eq 0) { Start-Sleep -Milliseconds 500 }
-} while ($running.Count -eq 0 -and (Get-Date) -lt $deadline)
-if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not restart within 30 seconds' }
-[pscustomobject]@{ running = $true; processCount = $running.Count } | ConvertTo-Json -Compress
+[pscustomobject]@{ wasRunning = $wasRunning } | ConvertTo-Json -Compress
 "#;
 
     const LAUNCH_AND_VERIFY_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
+$codexHome = $env:CODEX_HOME
+if (-not $codexHome) { throw 'Explicit CODEX_HOME is required for isolated desktop launch' }
 $packages = @('OpenAI.Codex', 'OpenAI.ChatGPT') | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ }
 if (-not $packages) {
   $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
 }
 if (-not $packages) { throw 'ChatGPT/Codex desktop package is not installed for the current user' }
 $roots = @($packages | ForEach-Object { $_.InstallLocation } | Where-Object { $_ })
-$familyNames = @($packages | ForEach-Object { $_.PackageFamilyName } | Where-Object { $_ })
-$app = @(Get-StartApps | Where-Object {
-  $id = $_.AppID
-  ($familyNames | Where-Object { $id -like "$_*" }).Count -gt 0
+$entry = @($packages | ForEach-Object {
+  $package = $_
+  [xml]$manifest = Get-Content -LiteralPath (Join-Path $package.InstallLocation 'AppxManifest.xml')
+  @($manifest.Package.Applications.Application | Where-Object { $_.Executable } | Select-Object -First 1) | ForEach-Object {
+    [pscustomobject]@{ package = $package; executable = (Join-Path $package.InstallLocation ([string]$_.Executable)) }
+  }
 } | Select-Object -First 1)
-if (-not $app) { throw 'ChatGPT/Codex Start menu application id is unavailable' }
+if (-not $entry -or -not (Test-Path -LiteralPath $entry[0].executable)) { throw 'ChatGPT/Codex packaged desktop executable is unavailable' }
 $existing = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
   try {
     $path = $_.Path
@@ -124,7 +96,7 @@ if ($existing.Count -gt 0) {
   } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex desktop processes did not stop within 15 seconds' }
 }
-Start-Process explorer.exe "shell:AppsFolder\$($app[0].AppID)"
+Start-Process -FilePath $entry[0].executable -ErrorAction Stop
 $deadline = (Get-Date).AddSeconds(45)
 do {
   $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
@@ -137,7 +109,7 @@ do {
   if ($running.Count -eq 0) { Start-Sleep -Milliseconds 500 }
 } while ($running.Count -eq 0 -and (Get-Date) -lt $deadline)
 if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not start within 45 seconds' }
-[pscustomobject]@{ running = $true; processCount = $running.Count; appId = $app[0].AppID } | ConvertTo-Json -Compress
+[pscustomobject]@{ running = $true; processCount = $running.Count; executable = $entry[0].executable; codexHome = $codexHome } | ConvertTo-Json -Compress
 "#;
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
@@ -146,29 +118,25 @@ if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not start within 45
             .context("解析 ChatGPT/Codex 桌面停止结果失败")?;
         Ok(DesktopSwitch {
             was_running: result.was_running,
-            app_id: result.app_id,
         })
     }
 
-    pub fn launch_and_verify() -> Result<()> {
-        run_powershell(LAUNCH_AND_VERIFY_SCRIPT, None)?;
+    pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
+        run_powershell(LAUNCH_AND_VERIFY_SCRIPT, Some(codex_home))?;
         Ok(())
     }
 
-    pub fn restart_and_verify(state: &DesktopSwitch) -> Result<bool> {
+    pub fn restart_and_verify(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
         if !state.was_running {
             return Ok(false);
         }
-        let app_id = state
-            .app_id
-            .as_deref()
-            .context("切换前桌面应用正在运行，但没有找到 Start menu application id")?;
-        run_powershell(RESTART_SCRIPT, Some(app_id))?;
+        launch_and_verify(codex_home)?;
         Ok(true)
     }
 
-    fn run_powershell(script: &str, app_id: Option<&str>) -> Result<Vec<u8>> {
+    fn run_powershell(script: &str, codex_home: Option<&Path>) -> Result<Vec<u8>> {
         let mut command = Command::new("powershell.exe");
+        crate::child_process::isolate_from_connector_environment(&mut command);
         command.args([
             "-NoLogo",
             "-NoProfile",
@@ -178,8 +146,8 @@ if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not start within 45
             "-Command",
             script,
         ]);
-        if let Some(app_id) = app_id {
-            command.env("BAIJIMU_CODEX_DESKTOP_APP_ID", app_id);
+        if let Some(codex_home) = codex_home {
+            command.env("CODEX_HOME", codex_home);
         }
         let output = command
             .output()
@@ -192,13 +160,50 @@ if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not start within 45
         }
         Ok(output.stdout)
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::io::Write;
+        use std::process::Stdio;
+
+        #[test]
+        fn desktop_management_scripts_parse_in_windows_powershell() {
+            for script in [STOP_SCRIPT, LAUNCH_AND_VERIFY_SCRIPT] {
+                let mut child = Command::new("powershell.exe")
+                    .args([
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        "[scriptblock]::Create([Console]::In.ReadToEnd()) | Out-Null",
+                    ])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(script.as_bytes())
+                    .unwrap();
+                let output = child.wait_with_output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
 mod platform {
     use super::*;
     use anyhow::Context;
-    use std::env;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
     use std::thread;
@@ -237,21 +242,21 @@ mod platform {
         anyhow::bail!("ChatGPT/Codex 桌面应用未在 15 秒内退出")
     }
 
-    pub fn restart_and_verify(state: &DesktopSwitch) -> Result<bool> {
+    pub fn restart_and_verify(state: &DesktopSwitch, codex_home: &Path) -> Result<bool> {
         if !state.was_running {
             return Ok(false);
         }
-        launch_and_verify()?;
+        launch_and_verify(codex_home)?;
         Ok(true)
     }
 
-    pub fn launch_and_verify() -> Result<()> {
+    pub fn launch_and_verify(codex_home: &Path) -> Result<()> {
         let app_path =
             installed_application_path().context("没有找到已安装的 ChatGPT/Codex 桌面应用")?;
         let bundle_id = application_bundle_id(&app_path)?;
 
         run_checked(
-            open_application_command(&app_path),
+            open_application_command(&app_path, codex_home),
             "打开 ChatGPT/Codex 桌面应用失败",
         )?;
 
@@ -259,7 +264,7 @@ mod platform {
         while started.elapsed() < LAUNCH_TIMEOUT {
             let info = application_info(&bundle_id)?;
             if has_running_process(&info) {
-                verify_application_codex_home(&info)?;
+                verify_application_codex_home(&info, codex_home)?;
                 return Ok(());
             }
             thread::sleep(POLL_INTERVAL);
@@ -317,7 +322,7 @@ mod platform {
         })
     }
 
-    fn verify_application_codex_home(info: &str) -> Result<()> {
+    fn verify_application_codex_home(info: &str, codex_home: &Path) -> Result<()> {
         let pid = application_pid(info).context("无法读取 ChatGPT/Codex 桌面进程 PID")?;
         let output = Command::new("/bin/ps")
             .args(["eww", "-p", &pid.to_string()])
@@ -330,29 +335,19 @@ mod platform {
             );
         }
         let process = String::from_utf8_lossy(&output.stdout);
-        match env::var_os("CODEX_HOME") {
-            Some(expected) => {
-                let expected = format!("CODEX_HOME={}", expected.to_string_lossy());
-                if !process.contains(&expected) {
-                    anyhow::bail!("ChatGPT/Codex 已启动，但没有使用所选工作区状态目录");
-                }
-            }
-            None => {
-                if process.contains("CODEX_HOME=") {
-                    anyhow::bail!("ChatGPT/Codex 已启动，但仍继承了非预期的 CODEX_HOME");
-                }
-            }
+        let expected = format!("CODEX_HOME={}", codex_home.to_string_lossy());
+        if !process.contains(&expected) {
+            anyhow::bail!("ChatGPT/Codex 已启动，但没有使用所选工作区状态目录");
         }
         Ok(())
     }
 
-    fn open_application_command(app_path: &Path) -> Command {
+    fn open_application_command(app_path: &Path, codex_home: &Path) -> Command {
         let mut command = Command::new("/usr/bin/open");
-        if let Some(codex_home) = env::var_os("CODEX_HOME") {
-            let mut assignment = std::ffi::OsString::from("CODEX_HOME=");
-            assignment.push(codex_home);
-            command.arg("--env").arg(assignment);
-        }
+        crate::child_process::isolate_from_connector_environment(&mut command);
+        let mut assignment = std::ffi::OsString::from("CODEX_HOME=");
+        assignment.push(codex_home);
+        command.arg("--env").arg(assignment);
         command.arg(app_path);
         command
     }
@@ -398,7 +393,7 @@ mod platform {
         Ok(DesktopSwitch::default())
     }
 
-    pub fn restart_and_verify(_state: &DesktopSwitch) -> Result<bool> {
+    pub fn restart_and_verify(_state: &DesktopSwitch, _codex_home: &Path) -> Result<bool> {
         Ok(false)
     }
 }

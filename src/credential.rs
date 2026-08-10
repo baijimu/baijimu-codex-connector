@@ -10,7 +10,7 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::user_environment;
 
-const METADATA_VERSION: u32 = 3;
+const METADATA_VERSION: u32 = 4;
 const METADATA_FILE: &str = "codex-credentials.json";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
 const OWNERSHIP_SCHEMA_VERSION: u32 = 1;
@@ -86,9 +86,8 @@ pub struct CredentialManagerState {
     pub original_codex_home_state: OriginalCodexHomeState,
     pub original_codex_home: String,
     pub active_codex_home: String,
-    pub user_codex_home: Option<String>,
-    pub user_codex_home_synchronized: bool,
-    pub desktop_environment_managed: bool,
+    pub external_codex_home: Option<String>,
+    pub legacy_global_codex_home: LegacyGlobalCodexHomeState,
     pub codex_auth_path: String,
     pub codex_config_path: String,
 }
@@ -102,7 +101,7 @@ pub struct PreparedWorkspaceProfile {
 #[derive(Clone, Debug)]
 pub struct ActiveHomeSnapshot {
     metadata: CredentialMetadata,
-    user_codex_home: Option<PathBuf>,
+    pub codex_home: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,6 +119,18 @@ struct CredentialMetadata {
     active_workspace_id: Option<u64>,
     #[serde(default)]
     original_codex_home_state: OriginalCodexHomeState,
+    #[serde(default)]
+    legacy_global_codex_home_restored_at_epoch_seconds: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyGlobalCodexHomeState {
+    pub restore_required: bool,
+    pub can_restore: bool,
+    pub current_value: Option<String>,
+    pub restore_value: Option<String>,
+    pub restored_at_epoch_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -151,6 +162,7 @@ impl Default for CredentialMetadata {
             active_profile_id: None,
             active_workspace_id: None,
             original_codex_home_state: OriginalCodexHomeState::default(),
+            legacy_global_codex_home_restored_at_epoch_seconds: None,
         }
     }
 }
@@ -228,8 +240,9 @@ pub fn state() -> Result<CredentialManagerState> {
     };
     let auth_path = active_home.join("auth.json");
     let config_path = active_home.join("config.toml");
-    let user_codex_home = user_environment::read_codex_home()?;
-    let desired_user_codex_home = desired_user_codex_home(&metadata);
+    let external_codex_home = user_environment::read_codex_home()?;
+    let legacy_global_codex_home =
+        legacy_global_codex_home_state(&metadata, external_codex_home.as_deref());
     let mut credential_status = match metadata.active_mode {
         AuthMode::Chatgpt if chatgpt.configured => "verified".to_string(),
         AuthMode::Chatgpt => "not_configured".to_string(),
@@ -279,11 +292,10 @@ pub fn state() -> Result<CredentialManagerState> {
         original_codex_home_state: metadata.original_codex_home_state.clone(),
         original_codex_home: original_home.display().to_string(),
         active_codex_home: active_home.display().to_string(),
-        user_codex_home: user_codex_home
+        external_codex_home: external_codex_home
             .as_ref()
             .map(|path| path.display().to_string()),
-        user_codex_home_synchronized: user_codex_home == desired_user_codex_home,
-        desktop_environment_managed: user_environment::persisted_for_desktop(),
+        legacy_global_codex_home,
         codex_auth_path: auth_path.display().to_string(),
         codex_config_path: config_path.display().to_string(),
     })
@@ -383,7 +395,7 @@ pub fn activate_prepared_workspace_profile(
     metadata.active_mode = AuthMode::Baijimu;
     metadata.active_profile_id = Some(prepared.profile_id.clone());
     metadata.active_workspace_id = Some(prepared.workspace_id);
-    commit_active_home_change(&previous, &metadata)?;
+    save_metadata(&metadata)?;
     metadata
         .profiles
         .into_iter()
@@ -398,25 +410,14 @@ pub fn activate_chatgpt_profile() -> Result<PathBuf> {
     metadata.active_mode = AuthMode::Chatgpt;
     metadata.active_profile_id = None;
     metadata.active_workspace_id = None;
-    commit_active_home_change(&previous, &metadata)?;
+    save_metadata(&metadata)?;
     Ok(home)
 }
 
 pub fn active_codex_home() -> PathBuf {
     load_metadata()
         .ok()
-        .and_then(|metadata| {
-            if metadata.active_mode == AuthMode::Chatgpt {
-                return Some(original_home_from_metadata(&metadata));
-            }
-            metadata.active_profile_id.as_deref().and_then(|id| {
-                metadata
-                    .profiles
-                    .iter()
-                    .find(|profile| profile.profile_id == id)
-                    .map(|profile| PathBuf::from(&profile.codex_home))
-            })
-        })
+        .map(|metadata| active_home_from_metadata(&metadata))
         .unwrap_or_else(default_original_codex_home)
 }
 
@@ -426,24 +427,38 @@ pub fn original_codex_home() -> PathBuf {
         .unwrap_or_else(|_| default_original_codex_home())
 }
 
-pub fn reconcile_active_user_codex_home() -> Result<()> {
-    let metadata = load_metadata()?;
-    let desired = desired_user_codex_home(&metadata);
-    user_environment::activate_codex_home(desired.as_deref())?;
-    Ok(())
-}
-
 pub fn active_home_snapshot() -> Result<ActiveHomeSnapshot> {
+    let metadata = load_metadata()?;
+    let codex_home = active_home_from_metadata(&metadata);
     Ok(ActiveHomeSnapshot {
-        metadata: load_metadata()?,
-        user_codex_home: user_environment::read_codex_home()?,
+        metadata,
+        codex_home,
     })
 }
 
 pub fn restore_active_home(snapshot: ActiveHomeSnapshot) -> Result<()> {
-    save_metadata(&snapshot.metadata)?;
-    user_environment::activate_codex_home(snapshot.user_codex_home.as_deref())?;
-    Ok(())
+    save_metadata(&snapshot.metadata)
+}
+
+pub fn restore_legacy_global_codex_home() -> Result<CredentialManagerState> {
+    let mut metadata = load_metadata()?;
+    let current = user_environment::read_codex_home()?;
+    let migration = legacy_global_codex_home_state(&metadata, current.as_deref());
+    if !migration.restore_required {
+        return state();
+    }
+    if !migration.can_restore {
+        anyhow::bail!("当前用户级 CODEX_HOME 无法证明由旧版 Connector 设置，未进行修改");
+    }
+    let restore_value = metadata
+        .original_codex_home_state
+        .value
+        .as_deref()
+        .map(Path::new);
+    user_environment::restore_codex_home(restore_value)?;
+    metadata.legacy_global_codex_home_restored_at_epoch_seconds = Some(now_epoch_seconds());
+    save_metadata(&metadata).context("用户级 CODEX_HOME 已恢复，但迁移审计状态写入失败")?;
+    state()
 }
 
 #[cfg(test)]
@@ -1038,48 +1053,48 @@ fn original_home_from_metadata(metadata: &CredentialMetadata) -> PathBuf {
         .unwrap_or_else(default_original_codex_home)
 }
 
-fn default_original_codex_home() -> PathBuf {
-    home_dir().join(".codex")
-}
-
-fn desired_user_codex_home(metadata: &CredentialMetadata) -> Option<PathBuf> {
-    match metadata.active_mode {
-        AuthMode::Chatgpt => metadata
-            .original_codex_home_state
-            .value
-            .as_deref()
-            .map(PathBuf::from),
-        AuthMode::Baijimu => metadata.active_profile_id.as_deref().and_then(|id| {
+fn active_home_from_metadata(metadata: &CredentialMetadata) -> PathBuf {
+    if metadata.active_mode == AuthMode::Chatgpt {
+        return original_home_from_metadata(metadata);
+    }
+    metadata
+        .active_profile_id
+        .as_deref()
+        .and_then(|id| {
             metadata
                 .profiles
                 .iter()
                 .find(|profile| profile.profile_id == id)
                 .map(|profile| PathBuf::from(&profile.codex_home))
-        }),
-    }
+        })
+        .unwrap_or_else(|| original_home_from_metadata(metadata))
 }
 
-fn commit_active_home_change(
-    previous: &CredentialMetadata,
-    next: &CredentialMetadata,
-) -> Result<()> {
-    let previous_environment = user_environment::read_codex_home()?;
-    save_metadata(next)?;
-    let desired = desired_user_codex_home(next);
-    if let Err(error) = user_environment::activate_codex_home(desired.as_deref()) {
-        let metadata_rollback = save_metadata(previous).err();
-        let environment_rollback =
-            user_environment::activate_codex_home(previous_environment.as_deref()).err();
-        let mut message = format!("切换用户级 CODEX_HOME 失败，已执行回滚：{error}");
-        if let Some(rollback) = metadata_rollback {
-            message.push_str(&format!("；元数据回滚失败：{rollback}"));
-        }
-        if let Some(rollback) = environment_rollback {
-            message.push_str(&format!("；环境变量回滚失败：{rollback}"));
-        }
-        anyhow::bail!(message);
+fn default_original_codex_home() -> PathBuf {
+    home_dir().join(".codex")
+}
+
+fn is_managed_codex_home(metadata: &CredentialMetadata, path: &Path) -> bool {
+    let managed_root = connector_data_dir().join("codex-profiles");
+    path.starts_with(&managed_root)
+        || metadata
+            .profiles
+            .iter()
+            .any(|profile| Path::new(&profile.codex_home) == path)
+}
+
+fn legacy_global_codex_home_state(
+    metadata: &CredentialMetadata,
+    current: Option<&Path>,
+) -> LegacyGlobalCodexHomeState {
+    let restore_required = current.is_some_and(|path| is_managed_codex_home(metadata, path));
+    LegacyGlobalCodexHomeState {
+        restore_required,
+        can_restore: restore_required && metadata.original_codex_home_state.captured,
+        current_value: current.map(|path| path.display().to_string()),
+        restore_value: metadata.original_codex_home_state.value.clone(),
+        restored_at_epoch_seconds: metadata.legacy_global_codex_home_restored_at_epoch_seconds,
     }
-    Ok(())
 }
 
 fn save_metadata(metadata: &CredentialMetadata) -> Result<()> {
@@ -1606,13 +1621,21 @@ mod tests {
         assert_eq!(original_codex_home(), user_home.join(".codex"));
 
         activate_chatgpt_profile().unwrap();
+        assert_eq!(
+            std::env::var_os("CODEX_HOME"),
+            Some(managed_home.into_os_string())
+        );
+        let migration = state().unwrap().legacy_global_codex_home;
+        assert!(migration.restore_required);
+        assert!(migration.can_restore);
+        restore_legacy_global_codex_home().unwrap();
         assert_eq!(std::env::var_os("CODEX_HOME"), None);
         assert_eq!(load_metadata().unwrap().active_mode, AuthMode::Chatgpt);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn original_value_does_not_drift_after_workspace_activation_and_restart_reconcile() {
+    fn internal_profile_switch_does_not_change_the_external_codex_home() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "baijimu-codex-personal-baseline-{}-{}",
@@ -1647,15 +1670,12 @@ mod tests {
         );
         let profile = metadata.profiles[0].clone();
         activate_prepared_workspace_profile(&profile).unwrap();
-        let workspace_home = PathBuf::from(&profile.codex_home);
         assert_eq!(
             std::env::var_os("CODEX_HOME"),
-            Some(workspace_home.into_os_string())
+            Some(personal_home.clone().into_os_string())
         );
         assert_eq!(original_codex_home(), personal_home);
 
-        reconcile_active_user_codex_home().unwrap();
-        assert_eq!(original_codex_home(), personal_home);
         activate_chatgpt_profile().unwrap();
         assert_eq!(
             std::env::var_os("CODEX_HOME"),
@@ -1665,7 +1685,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_pointer_activation_restores_metadata_and_previous_environment() {
+    fn workspace_activation_only_updates_connector_metadata() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "baijimu-codex-pointer-rollback-{}-{}",
@@ -1689,10 +1709,8 @@ mod tests {
         })
         .unwrap();
 
-        crate::user_environment::fail_next_activation();
-        let error = activate_prepared_workspace_profile(&profile).unwrap_err();
-        assert!(error.to_string().contains("已执行回滚"));
-        assert_eq!(load_metadata().unwrap().active_mode, AuthMode::Chatgpt);
+        activate_prepared_workspace_profile(&profile).unwrap();
+        assert_eq!(load_metadata().unwrap().active_mode, AuthMode::Baijimu);
         assert_eq!(
             std::env::var_os("CODEX_HOME"),
             Some(original_home.into_os_string())

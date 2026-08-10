@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.40",
+  "version": "1.2.41",
   "description": "Initialize and configure Codex, select an isolated Baijimu workspace or the original Codex environment, and launch Codex with the selected state directory.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.40"
+    "revision": "v1.2.41"
   },
   "runtime": {
     "type": "process",
@@ -56,6 +56,10 @@
       "launchCodex": {
         "method": "POST",
         "path": "/management/v1/codex/launch"
+      },
+      "restoreExternalCodexHome": {
+        "method": "POST",
+        "path": "/management/v1/codex/restore-external-home"
       },
       "checkoutPlatformProject": {
         "method": "POST",
@@ -112,11 +116,15 @@
     "defaultView": true
   },
   "releaseNotes": [
+    "Connector 启动和内部工作区切换不再写用户级 CODEX_HOME，也不再广播 WM_SETTINGCHANGE；管理接口启动桌面时按单次进程显式传入所选目录。",
+    "Windows 使用 Appx 清单声明的全信任可执行入口启动隔离桌面配置，不再通过 Explorer 继承用户级环境；Codex 子进程会剥离 Connector 私有环境变量。",
+    "旧版本留下的全局 CODEX_HOME 仅在管理界面明确操作且所有权可证明时恢复，初始化完成后不再自动打开桌面应用。",
+    "旧版本遗留失败升级后转为需要重新验证，安装中断转为可恢复状态；连接器不再无条件重写未变化的历史状态。",
+    "初始化、启动和状态读取等可恢复错误统一提供上下文重试入口；未授权工作区只重新检查，不触发无效重装。",
     "新增 codexTurnCompleted、codexThreadClosed、codexThreadArchived 和 codexThreadDeleted 稳定领域事件；保留 codexNotification 原始协议事件用于诊断。",
     "完成事件按 threadId 与 turnId 生成稳定幂等标识，暂时性投递失败自动重试，Bridge Agent 接收后进入持久化 outbox。",
     "macOS 不再等待 6 秒后创建并打开 ~/Documents/Codex/default，个人 Codex 使用与桌面图标相同的标准启动语义。",
-    "macOS 与 Windows 统一以真实桌面进程作为启动结果，不再用窗口可见性、前台状态或窗口句柄推断成功。",
-    "保留工作区切换后的 CODEX_HOME 与进程校验，轮询只等待真实进程注册且不增加固定启动延时。"
+    "macOS 与 Windows 统一以真实桌面进程作为启动结果，不再用窗口可见性、前台状态或窗口句柄推断成功。"
   ],
   "configSchema": {
     "type": "object",

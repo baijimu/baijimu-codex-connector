@@ -3,15 +3,11 @@ use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 pub(crate) static TEST_ENVIRONMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-#[cfg(test)]
-static FAIL_NEXT_ACTIVATION: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CodexHomeActivation {
+pub struct CodexHomeRestore {
     pub previous: Option<PathBuf>,
     pub current: Option<PathBuf>,
-    pub persisted_for_desktop: bool,
     pub environment_broadcast: bool,
 }
 
@@ -19,41 +15,23 @@ pub fn read_codex_home() -> Result<Option<PathBuf>> {
     platform::read_codex_home()
 }
 
-pub fn persisted_for_desktop() -> bool {
-    platform::PERSISTED_FOR_DESKTOP
-}
-
-pub fn activate_codex_home(value: Option<&Path>) -> Result<CodexHomeActivation> {
+pub fn restore_codex_home(value: Option<&Path>) -> Result<CodexHomeRestore> {
     let previous = read_codex_home()?;
     platform::write_codex_home(value)?;
-    match value {
-        Some(path) => std::env::set_var("CODEX_HOME", path),
-        None => std::env::remove_var("CODEX_HOME"),
-    }
     let current = read_codex_home()?;
     let expected = value.map(Path::to_path_buf);
     if current != expected {
         anyhow::bail!(
-            "用户级 CODEX_HOME 回读不一致：期望 {}，实际 {}",
+            "恢复用户级 CODEX_HOME 后回读不一致：期望 {}，实际 {}",
             display_optional(expected.as_deref()),
             display_optional(current.as_deref())
         );
     }
-    #[cfg(test)]
-    if FAIL_NEXT_ACTIVATION.swap(false, std::sync::atomic::Ordering::SeqCst) {
-        anyhow::bail!("injected CODEX_HOME activation failure");
-    }
-    Ok(CodexHomeActivation {
+    Ok(CodexHomeRestore {
         previous,
         current,
-        persisted_for_desktop: platform::PERSISTED_FOR_DESKTOP,
         environment_broadcast: platform::broadcast_environment_change()?,
     })
-}
-
-#[cfg(test)]
-pub(crate) fn fail_next_activation() {
-    FAIL_NEXT_ACTIVATION.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 fn display_optional(value: Option<&Path>) -> String {
@@ -72,8 +50,6 @@ mod platform {
     };
     use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
     use winreg::RegKey;
-
-    pub const PERSISTED_FOR_DESKTOP: bool = true;
 
     pub fn read_codex_home() -> Result<Option<PathBuf>> {
         let current_user = RegKey::predef(HKEY_CURRENT_USER);
@@ -96,16 +72,16 @@ mod platform {
             .create_subkey_with_flags("Environment", KEY_READ | KEY_WRITE)
             .context("打开 HKCU\\Environment 失败")?;
         match value {
-            Some(path) => {
-                let value = path.as_os_str().to_string_lossy().into_owned();
-                environment
-                    .set_value("CODEX_HOME", &value)
-                    .context("写入用户级 CODEX_HOME 失败")
-            }
+            Some(path) => environment
+                .set_value(
+                    "CODEX_HOME",
+                    &path.as_os_str().to_string_lossy().into_owned(),
+                )
+                .context("恢复用户级 CODEX_HOME 失败"),
             None => match environment.delete_value("CODEX_HOME") {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error).context("删除用户级 CODEX_HOME 失败"),
+                Err(error) => Err(error).context("删除旧版 Connector 留下的用户级 CODEX_HOME 失败"),
             },
         }
     }
@@ -128,7 +104,7 @@ mod platform {
             )
         };
         if sent == 0 {
-            anyhow::bail!("用户级 CODEX_HOME 已写入，但广播 WM_SETTINGCHANGE 失败");
+            anyhow::bail!("用户级 CODEX_HOME 已恢复，但广播 WM_SETTINGCHANGE 失败")
         }
         Ok(true)
     }
@@ -138,13 +114,15 @@ mod platform {
 mod platform {
     use super::*;
 
-    pub const PERSISTED_FOR_DESKTOP: bool = false;
-
     pub fn read_codex_home() -> Result<Option<PathBuf>> {
         Ok(std::env::var_os("CODEX_HOME").map(PathBuf::from))
     }
 
-    pub fn write_codex_home(_value: Option<&Path>) -> Result<()> {
+    pub fn write_codex_home(value: Option<&Path>) -> Result<()> {
+        match value {
+            Some(path) => std::env::set_var("CODEX_HOME", path),
+            None => std::env::remove_var("CODEX_HOME"),
+        }
         Ok(())
     }
 
@@ -158,17 +136,21 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
 
-    #[cfg(not(windows))]
     #[test]
-    fn non_windows_activation_updates_process_environment() {
+    fn explicit_restore_updates_and_reads_back_the_original_value() {
         let _guard = TEST_ENVIRONMENT_LOCK.lock().unwrap();
         let previous = std::env::var_os("CODEX_HOME");
-        let target = std::env::temp_dir().join("baijimu-user-environment-test");
-        let activation = activate_codex_home(Some(&target)).unwrap();
-        assert_eq!(activation.current, Some(target.clone()));
+        let managed = std::env::temp_dir().join("baijimu-managed-codex-home");
+        let original = std::env::temp_dir().join("user-original-codex-home");
+        std::env::set_var("CODEX_HOME", &managed);
+
+        let restored = restore_codex_home(Some(&original)).unwrap();
+
+        assert_eq!(restored.previous, Some(managed));
+        assert_eq!(restored.current, Some(original.clone()));
         assert_eq!(
             std::env::var_os("CODEX_HOME"),
-            Some(target.into_os_string())
+            Some(original.into_os_string())
         );
         restore("CODEX_HOME", previous);
     }

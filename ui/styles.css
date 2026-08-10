@@ -152,6 +152,14 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 .message.error { border-color: #efc2c2; color: var(--red); background: var(--red-soft); }
 .message.warning { border-color: #efd99e; color: var(--amber); background: var(--amber-soft); }
+.error-with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.error-with-action[hidden] { display: none; }
+.error-with-action .button { flex: 0 0 auto; }
 
 .modal-backdrop {
   position: fixed;

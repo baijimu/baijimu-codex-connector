@@ -1,5 +1,3 @@
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-use crate::desktop;
 use crate::{codex_binary, credential};
 use anyhow::{Context, Result};
 #[cfg(any(target_os = "windows", test))]
@@ -31,6 +29,11 @@ const WINDOWS_SCRIPT_URL: &str =
 const WINDOWS_SCRIPT_SHA256: &str =
     "3098b28442a39a7fe5e1baf73157bf42b2362008a39fcf7d072ecff19b6d87ae";
 const SETUP_STATUS_FILE: &str = "setup-status.json";
+const SETUP_STATUS_SCHEMA_VERSION: u32 = 2;
+const CONNECTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
+const ERROR_CODE_INTERRUPTED: &str = "SETUP_INTERRUPTED";
+const ERROR_CODE_RETRY_AFTER_UPGRADE: &str = "SETUP_RETRY_REQUIRED_AFTER_UPGRADE";
+const ERROR_CODE_FAILED: &str = "SETUP_FAILED";
 #[cfg(target_os = "windows")]
 const WINDOWS_INSTALL_SCRIPT_ENV: &str = "CODEX_CONNECTOR_INSTALL_SCRIPT_PATH";
 #[cfg(any(target_os = "windows", test))]
@@ -43,10 +46,24 @@ $OutputEncoding = [Console]::OutputEncoding
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupStatus {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub attempt_id: Option<String>,
+    #[serde(default)]
+    pub connector_version: Option<String>,
     pub status: String,
     pub workspace_id: Option<u64>,
     pub message: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub retryable: bool,
+    #[serde(default)]
+    pub automatic_retry_count: u32,
     pub started_at_epoch_seconds: Option<u64>,
     pub completed_at_epoch_seconds: Option<u64>,
     pub installer_status: Option<Value>,
@@ -55,10 +72,17 @@ pub struct SetupStatus {
 impl Default for SetupStatus {
     fn default() -> Self {
         Self {
+            schema_version: SETUP_STATUS_SCHEMA_VERSION,
+            attempt_id: None,
+            connector_version: Some(CONNECTOR_VERSION.to_string()),
             status: "pending".to_string(),
             workspace_id: None,
             message: "等待初始化".to_string(),
             error: None,
+            last_error: None,
+            error_code: None,
+            retryable: false,
+            automatic_retry_count: 0,
             started_at_epoch_seconds: None,
             completed_at_epoch_seconds: None,
             installer_status: None,
@@ -73,23 +97,19 @@ pub struct SetupManager {
 
 impl SetupManager {
     pub fn load() -> Self {
-        let status = fs::read(status_path())
+        let (status, should_persist) = match fs::read(status_path())
             .ok()
             .and_then(|content| crate::json_compat::from_slice::<SetupStatus>(&content).ok())
-            .map(|mut status| {
-                if status.status == "running" {
-                    status.status = "failed".to_string();
-                    status.error = Some("连接器在初始化过程中退出，请重试".to_string());
-                    status.message = "上次初始化未完成".to_string();
-                    status.completed_at_epoch_seconds = Some(now_epoch_seconds());
-                }
-                status
-            })
-            .unwrap_or_default();
+        {
+            Some(status) => recover_persisted_status(status),
+            None => (SetupStatus::default(), true),
+        };
         let manager = Self {
             state: Arc::new(Mutex::new(status)),
         };
-        let _ = manager.persist();
+        if should_persist {
+            let _ = manager.persist();
+        }
         manager
     }
 
@@ -103,7 +123,12 @@ impl SetupManager {
                 error: Some("初始化状态锁异常".to_string()),
                 ..SetupStatus::default()
             });
-        status.installer_status = read_json(installer_state_dir().join("status.json"));
+        status.installer_status = match status.status.as_str() {
+            "running" | "failed" | "interrupted" | "succeeded" => {
+                read_json(installer_state_dir().join("status.json"))
+            }
+            _ => None,
+        };
         status
     }
 
@@ -117,7 +142,7 @@ impl SetupManager {
         if workspace_id == 0 {
             anyhow::bail!("workspaceId must be a positive integer");
         }
-        {
+        let automatic_retry_count = {
             let current = self
                 .state
                 .lock()
@@ -136,20 +161,37 @@ impl SetupManager {
             {
                 return Ok(current.clone());
             }
-        }
+            if force {
+                0
+            } else {
+                current.automatic_retry_count
+            }
+        };
 
+        let started_at = now_epoch_seconds();
         let running = SetupStatus {
+            schema_version: SETUP_STATUS_SCHEMA_VERSION,
+            attempt_id: Some(format!(
+                "{CONNECTOR_VERSION}-{}-{started_at}",
+                std::process::id()
+            )),
+            connector_version: Some(CONNECTOR_VERSION.to_string()),
             status: "running".to_string(),
             workspace_id: Some(workspace_id),
             message: "正在初始化 Codex 应用".to_string(),
             error: None,
-            started_at_epoch_seconds: Some(now_epoch_seconds()),
+            last_error: None,
+            error_code: None,
+            retryable: false,
+            automatic_retry_count,
+            started_at_epoch_seconds: Some(started_at),
             completed_at_epoch_seconds: None,
             installer_status: None,
         };
         self.replace(running.clone())?;
 
         let manager = self.clone();
+        let background = running.clone();
         thread::spawn(move || {
             let completed = match run_install(
                 workspace_id,
@@ -157,23 +199,40 @@ impl SetupManager {
                 verify_app_server_capability,
             ) {
                 Ok(()) => SetupStatus {
+                    schema_version: SETUP_STATUS_SCHEMA_VERSION,
+                    attempt_id: background.attempt_id.clone(),
+                    connector_version: Some(CONNECTOR_VERSION.to_string()),
                     status: "succeeded".to_string(),
                     workspace_id: Some(workspace_id),
                     message: "Codex 应用初始化已完成".to_string(),
                     error: None,
-                    started_at_epoch_seconds: running.started_at_epoch_seconds,
+                    last_error: None,
+                    error_code: None,
+                    retryable: false,
+                    automatic_retry_count: background.automatic_retry_count,
+                    started_at_epoch_seconds: background.started_at_epoch_seconds,
                     completed_at_epoch_seconds: Some(now_epoch_seconds()),
                     installer_status: None,
                 },
-                Err(error) => SetupStatus {
-                    status: "failed".to_string(),
-                    workspace_id: Some(workspace_id),
-                    message: "Codex 应用初始化失败".to_string(),
-                    error: Some(compact_error(&error.to_string())),
-                    started_at_epoch_seconds: running.started_at_epoch_seconds,
-                    completed_at_epoch_seconds: Some(now_epoch_seconds()),
-                    installer_status: None,
-                },
+                Err(error) => {
+                    let error = compact_error(&error.to_string());
+                    SetupStatus {
+                        schema_version: SETUP_STATUS_SCHEMA_VERSION,
+                        attempt_id: background.attempt_id.clone(),
+                        connector_version: Some(CONNECTOR_VERSION.to_string()),
+                        status: "failed".to_string(),
+                        workspace_id: Some(workspace_id),
+                        message: "Codex 应用初始化失败".to_string(),
+                        error: Some(error.clone()),
+                        last_error: Some(error),
+                        error_code: Some(ERROR_CODE_FAILED.to_string()),
+                        retryable: true,
+                        automatic_retry_count: background.automatic_retry_count,
+                        started_at_epoch_seconds: background.started_at_epoch_seconds,
+                        completed_at_epoch_seconds: Some(now_epoch_seconds()),
+                        installer_status: None,
+                    }
+                }
             };
             let _ = manager.replace(completed);
         });
@@ -198,6 +257,38 @@ impl SetupManager {
     }
 }
 
+fn recover_persisted_status(mut status: SetupStatus) -> (SetupStatus, bool) {
+    if status.status == "running" {
+        status.schema_version = SETUP_STATUS_SCHEMA_VERSION;
+        status.status = "interrupted".to_string();
+        status.last_error = status.error.take().or(status.last_error);
+        status.error_code = Some(ERROR_CODE_INTERRUPTED.to_string());
+        status.retryable = true;
+        status.automatic_retry_count = status.automatic_retry_count.saturating_add(1);
+        status.message = "上次初始化被中断，将自动重新验证；也可以手动重试".to_string();
+        status.completed_at_epoch_seconds = Some(now_epoch_seconds());
+        return (status, true);
+    }
+
+    if status.status == "failed" && status.connector_version.as_deref() != Some(CONNECTOR_VERSION) {
+        let previous_version = status
+            .connector_version
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("旧版本");
+        status.schema_version = SETUP_STATUS_SCHEMA_VERSION;
+        status.status = "needs_retry".to_string();
+        status.last_error = status.error.take().or(status.last_error);
+        status.error_code = Some(ERROR_CODE_RETRY_AFTER_UPGRADE.to_string());
+        status.retryable = true;
+        status.message =
+            format!("检测到 {previous_version} 留下的初始化失败记录，当前版本将重新验证");
+        return (status, true);
+    }
+
+    (status, false)
+}
+
 fn run_install(
     workspace_id: u64,
     codex_cli: Option<&Path>,
@@ -215,9 +306,6 @@ fn run_install(
     let install_result = (|| -> Result<()> {
         let prepared = credential::prepare_workspace_profile(workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        let active_home_snapshot = credential::active_home_snapshot()
-            .context("保存 ChatGPT/Codex 桌面应用启动前的环境状态失败")?;
         atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
 
         let script_override = env::var("CODEX_CONNECTOR_INSTALL_SCRIPT_URL")
@@ -285,16 +373,6 @@ fn run_install(
             anyhow::bail!("官方安装脚本执行失败: {}", compact_error(&errors));
         }
         credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Err(error) = desktop::launch_and_verify() {
-            let rollback = credential::restore_active_home(active_home_snapshot);
-            let mut message =
-                format!("工作区配置已完成，但自动打开 ChatGPT/Codex 桌面应用失败：{error}");
-            if let Err(rollback) = rollback {
-                message.push_str(&format!("；用户级 CODEX_HOME 回滚失败：{rollback}"));
-            }
-            anyhow::bail!(message);
-        }
         Ok(())
     })();
     let _ = fs::remove_file(&secret_path);
@@ -515,6 +593,67 @@ fn now_epoch_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn persisted_status(status: &str, connector_version: Option<&str>) -> SetupStatus {
+        SetupStatus {
+            schema_version: 1,
+            connector_version: connector_version.map(str::to_string),
+            status: status.to_string(),
+            workspace_id: Some(1197),
+            message: "历史初始化状态".to_string(),
+            error: Some("历史安装错误".to_string()),
+            started_at_epoch_seconds: Some(100),
+            completed_at_epoch_seconds: Some(200),
+            ..SetupStatus::default()
+        }
+    }
+
+    #[test]
+    fn interrupted_install_becomes_retryable_without_replaying_the_old_error() {
+        let (recovered, changed) =
+            recover_persisted_status(persisted_status("running", Some(CONNECTOR_VERSION)));
+
+        assert!(changed);
+        assert_eq!(recovered.status, "interrupted");
+        assert_eq!(recovered.error, None);
+        assert_eq!(recovered.last_error.as_deref(), Some("历史安装错误"));
+        assert_eq!(
+            recovered.error_code.as_deref(),
+            Some(ERROR_CODE_INTERRUPTED)
+        );
+        assert!(recovered.retryable);
+        assert_eq!(recovered.automatic_retry_count, 1);
+        assert_eq!(recovered.schema_version, SETUP_STATUS_SCHEMA_VERSION);
+        assert!(recovered.completed_at_epoch_seconds.unwrap_or_default() >= 200);
+    }
+
+    #[test]
+    fn failed_status_from_an_older_connector_requires_fresh_verification() {
+        let (recovered, changed) =
+            recover_persisted_status(persisted_status("failed", Some("1.2.27")));
+
+        assert!(changed);
+        assert_eq!(recovered.status, "needs_retry");
+        assert_eq!(recovered.error, None);
+        assert_eq!(recovered.last_error.as_deref(), Some("历史安装错误"));
+        assert_eq!(
+            recovered.error_code.as_deref(),
+            Some(ERROR_CODE_RETRY_AFTER_UPGRADE)
+        );
+        assert!(recovered.retryable);
+        assert!(recovered.message.contains("1.2.27"));
+    }
+
+    #[test]
+    fn current_connector_failure_is_not_rewritten_on_restart() {
+        let original = persisted_status("failed", Some(CONNECTOR_VERSION));
+        let (recovered, changed) = recover_persisted_status(original.clone());
+
+        assert!(!changed);
+        assert_eq!(recovered.status, original.status);
+        assert_eq!(recovered.error, original.error);
+        assert_eq!(recovered.completed_at_epoch_seconds, Some(200));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
