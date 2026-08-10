@@ -72,8 +72,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     $request = $line | ConvertFrom-Json -ErrorAction Stop
   } catch {
     $lineBytes = [System.Text.Encoding]::UTF8.GetBytes($line)
-    [Console]::Error.WriteLine("FAKE_SERVER_INPUT_BASE64=$([Convert]::ToBase64String($lineBytes))")
     [Console]::Error.WriteLine($_.Exception.ToString())
+    [Console]::Error.WriteLine("FAKE_SERVER_INPUT_BASE64=$([Convert]::ToBase64String($lineBytes))")
     exit 90
   }
   if ($request.method -eq "initialize") {
