@@ -61,8 +61,8 @@ if ($wasRunning) {
   $targets | Stop-Process -Force -ErrorAction Stop
   $deadline = (Get-Date).AddSeconds(15)
   do {
-    Start-Sleep -Milliseconds 250
     $remaining = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $targets.Id -contains $_.Id })
+    if ($remaining.Count -gt 0) { Start-Sleep -Milliseconds 250 }
   } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex desktop processes did not stop within 15 seconds' }
 }
@@ -81,7 +81,6 @@ if (-not $packages) {
 $roots = @($packages | ForEach-Object { $_.InstallLocation } | Where-Object { $_ })
 $deadline = (Get-Date).AddSeconds(30)
 do {
-  Start-Sleep -Milliseconds 500
   $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
     try {
       $path = $_.Path
@@ -89,6 +88,7 @@ do {
       return ($roots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
     } catch { return $false }
   })
+  if ($running.Count -eq 0) { Start-Sleep -Milliseconds 500 }
 } while ($running.Count -eq 0 -and (Get-Date) -lt $deadline)
 if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not restart within 30 seconds' }
 [pscustomobject]@{ running = $true; processCount = $running.Count } | ConvertTo-Json -Compress
@@ -119,15 +119,14 @@ if ($existing.Count -gt 0) {
   $existing | Stop-Process -Force -ErrorAction Stop
   $deadline = (Get-Date).AddSeconds(15)
   do {
-    Start-Sleep -Milliseconds 250
     $remaining = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $existing.Id -contains $_.Id })
+    if ($remaining.Count -gt 0) { Start-Sleep -Milliseconds 250 }
   } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex desktop processes did not stop within 15 seconds' }
 }
 Start-Process explorer.exe "shell:AppsFolder\$($app[0].AppID)"
 $deadline = (Get-Date).AddSeconds(45)
 do {
-  Start-Sleep -Milliseconds 500
   $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
     try {
       $path = $_.Path
@@ -135,10 +134,10 @@ do {
       return ($roots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
     } catch { return $false }
   })
-  $visible = @($running | Where-Object { $_.MainWindowHandle -ne 0 })
-} while ($visible.Count -eq 0 -and (Get-Date) -lt $deadline)
-if ($visible.Count -eq 0) { throw 'ChatGPT/Codex desktop started but no visible window was detected within 45 seconds' }
-[pscustomobject]@{ running = $true; processCount = $running.Count; visibleWindowCount = $visible.Count; appId = $app[0].AppID } | ConvertTo-Json -Compress
+  if ($running.Count -eq 0) { Start-Sleep -Milliseconds 500 }
+} while ($running.Count -eq 0 -and (Get-Date) -lt $deadline)
+if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not start within 45 seconds' }
+[pscustomobject]@{ running = $true; processCount = $running.Count; appId = $app[0].AppID } | ConvertTo-Json -Compress
 "#;
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
@@ -200,7 +199,6 @@ mod platform {
     use super::*;
     use anyhow::Context;
     use std::env;
-    use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
     use std::thread;
@@ -208,7 +206,6 @@ mod platform {
 
     const APPLICATION_PATHS: [&str; 2] = ["/Applications/ChatGPT.app", "/Applications/Codex.app"];
     const LAUNCH_TIMEOUT: Duration = Duration::from_secs(45);
-    const PROJECT_REOPEN_DELAY: Duration = Duration::from_secs(6);
     const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
@@ -232,10 +229,10 @@ mod platform {
         )?;
         let deadline = Instant::now() + Duration::from_secs(15);
         while Instant::now() < deadline {
-            thread::sleep(POLL_INTERVAL);
             if !has_running_process(&application_info(&bundle_id)?) {
                 return Ok(DesktopSwitch { was_running: true });
             }
+            thread::sleep(POLL_INTERVAL);
         }
         anyhow::bail!("ChatGPT/Codex 桌面应用未在 15 秒内退出")
     }
@@ -254,30 +251,21 @@ mod platform {
         let bundle_id = application_bundle_id(&app_path)?;
 
         run_checked(
-            open_application_command(&app_path, None),
+            open_application_command(&app_path),
             "打开 ChatGPT/Codex 桌面应用失败",
         )?;
 
         let started = Instant::now();
-        let mut project_reopened = false;
-        let mut last_info = String::new();
         while started.elapsed() < LAUNCH_TIMEOUT {
-            thread::sleep(POLL_INTERVAL);
-            last_info = application_info(&bundle_id)?;
-            if has_visible_window(&last_info) {
-                verify_application_codex_home(&last_info)?;
+            let info = application_info(&bundle_id)?;
+            if has_running_process(&info) {
+                verify_application_codex_home(&info)?;
                 return Ok(());
             }
-            if !project_reopened && started.elapsed() >= PROJECT_REOPEN_DELAY {
-                reopen_with_project(&app_path)?;
-                project_reopened = true;
-            }
+            thread::sleep(POLL_INTERVAL);
         }
 
-        if !has_running_process(&last_info) {
-            anyhow::bail!("ChatGPT/Codex 桌面应用未在 45 秒内启动");
-        }
-        anyhow::bail!("ChatGPT/Codex 桌面应用已启动，但 45 秒内没有检测到可见窗口");
+        anyhow::bail!("ChatGPT/Codex 桌面应用未在 45 秒内启动");
     }
 
     fn installed_application_path() -> Option<PathBuf> {
@@ -306,9 +294,9 @@ mod platform {
 
     fn application_info(bundle_id: &str) -> Result<String> {
         let output = Command::new("/usr/bin/lsappinfo")
-            .args(["info", "-only", "pid,front,visible,windows", bundle_id])
+            .args(["info", "-only", "pid", bundle_id])
             .output()
-            .context("检查 ChatGPT/Codex 桌面进程和窗口失败")?;
+            .context("检查 ChatGPT/Codex 桌面进程失败")?;
         let mut info = String::from_utf8_lossy(&output.stdout).into_owned();
         info.push_str(&String::from_utf8_lossy(&output.stderr));
         Ok(info)
@@ -319,20 +307,6 @@ mod platform {
             let line = line.trim();
             line.starts_with("\"pid\"=") && !line.contains("[ NULL ]")
         })
-    }
-
-    fn has_visible_window(info: &str) -> bool {
-        let application_visible = info.lines().any(|line| {
-            let line = line.trim();
-            line.starts_with("\"visible\"=")
-                && !line.contains("[ NULL ]")
-                && !line.ends_with("=false")
-        });
-        let window_present = info.lines().any(|line| {
-            let line = line.trim();
-            line.starts_with("\"windows\"=") && !line.contains("[ NULL ]")
-        });
-        application_visible && window_present
     }
 
     fn application_pid(info: &str) -> Option<u32> {
@@ -372,32 +346,14 @@ mod platform {
         Ok(())
     }
 
-    fn reopen_with_project(app_path: &Path) -> Result<()> {
-        let home = env::var_os("HOME").context("HOME 未设置，无法创建 Codex 默认项目目录")?;
-        let project = PathBuf::from(home)
-            .join("Documents")
-            .join("Codex")
-            .join("default");
-        fs::create_dir_all(&project)
-            .with_context(|| format!("创建 Codex 默认项目目录失败: {}", project.display()))?;
-        run_checked(
-            open_application_command(app_path, Some(&project)),
-            "请求 ChatGPT/Codex 打开默认项目失败",
-        )
-    }
-
-    fn open_application_command(app_path: &Path, document: Option<&Path>) -> Command {
+    fn open_application_command(app_path: &Path) -> Command {
         let mut command = Command::new("/usr/bin/open");
         if let Some(codex_home) = env::var_os("CODEX_HOME") {
             let mut assignment = std::ffi::OsString::from("CODEX_HOME=");
             assignment.push(codex_home);
             command.arg("--env").arg(assignment);
         }
-        if let Some(document) = document {
-            command.arg("-a").arg(app_path).arg(document);
-        } else {
-            command.arg(app_path);
-        }
+        command.arg(app_path);
         command
     }
 
@@ -423,24 +379,13 @@ mod platform {
         use super::*;
 
         #[test]
-        fn parses_lsappinfo_process_and_window_state() {
+        fn parses_lsappinfo_process_state_without_requiring_a_window() {
             let hidden = "\"pid\"=682\n\"visible\"=[ NULL ]\n\"windows\"=[ NULL ]\n";
             assert!(has_running_process(hidden));
-            assert!(!has_visible_window(hidden));
-
-            let hidden_with_window =
-                "\"pid\"=682\n\"visible\"=false\n\"windows\"=( { \"windowID\"=123 } )\n";
-            assert!(has_running_process(hidden_with_window));
-            assert!(!has_visible_window(hidden_with_window));
-
-            let visible = "\"pid\"=682\n\"visible\"=true\n\"windows\"=( { \"windowID\"=123 } )\n";
-            assert!(has_running_process(visible));
-            assert!(has_visible_window(visible));
-            assert_eq!(application_pid(visible), Some(682));
+            assert_eq!(application_pid(hidden), Some(682));
 
             let missing = "Application not found\n";
             assert!(!has_running_process(missing));
-            assert!(!has_visible_window(missing));
         }
     }
 }

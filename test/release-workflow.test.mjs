@@ -281,18 +281,19 @@ test("macOS and Windows setup launch the official desktop only after activating 
   assert.match(setup, /"Text"/);
   assert.match(setup, /\[Console\]::OutputEncoding/);
   assert.ok(desktop.includes('Start-Process explorer.exe "shell:AppsFolder\\$($app[0].AppID)"'));
-  assert.match(desktop, /MainWindowHandle -ne 0/);
-  assert.match(desktop, /no visible window was detected within 45 seconds/);
+  assert.match(desktop, /if \(\$running\.Count -eq 0\) \{ throw 'ChatGPT\/Codex desktop did not start within 45 seconds' \}/);
+  assert.doesNotMatch(desktop, /MainWindowHandle/);
+  assert.doesNotMatch(desktop, /visibleWindowCount|visible window/);
   assert.match(desktop, /\/Applications\/ChatGPT\.app/);
   assert.match(desktop, /Command::new\("\/usr\/bin\/open"\)/);
   assert.match(desktop, /command\.arg\("--env"\)\.arg\(assignment\)/);
   assert.match(desktop, /OsString::from\("CODEX_HOME="\)/);
   assert.match(desktop, /Command::new\("\/usr\/bin\/lsappinfo"\)/);
-  assert.match(desktop, /has_visible_window\(&last_info\)/);
+  assert.match(desktop, /has_running_process\(&info\)/);
   assert.match(desktop, /tell application id .* to quit/);
   assert.match(desktop, /Command::new\("\/bin\/ps"\)/);
   assert.match(desktop, /没有使用所选工作区状态目录/);
-  assert.match(desktop, /reopen_with_project\(&app_path\)/);
+  assert.doesNotMatch(desktop, /PROJECT_REOPEN_DELAY|reopen_with_project|Documents.*Codex.*default/);
   assert.doesNotMatch(desktop, /pkill/);
 });
 

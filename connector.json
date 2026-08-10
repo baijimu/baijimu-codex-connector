@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.38",
+  "version": "1.2.39",
   "description": "Initialize and configure Codex, select an isolated Baijimu workspace or the original Codex environment, and launch Codex with the selected state directory.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.38"
+    "revision": "v1.2.39"
   },
   "runtime": {
     "type": "process",
@@ -112,9 +112,9 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "管理令牌改为 Connector 启动前置条件，在报告启动成功和接收健康检查前同步完成原子创建与回读校验。",
-    "工作区初始化继续异步执行；即使初始化延迟或失败，Bridge Agent 也能读取管理令牌并展示真实状态。",
-    "新增 Linux/macOS 集成测试与 Windows 生命周期测试，覆盖首次安装的令牌就绪时序。"
+    "macOS 不再等待 6 秒后创建并打开 ~/Documents/Codex/default，个人 Codex 使用与桌面图标相同的标准启动语义。",
+    "macOS 与 Windows 统一以真实桌面进程作为启动结果，不再用窗口可见性、前台状态或窗口句柄推断成功。",
+    "保留工作区切换后的 CODEX_HOME 与进程校验，轮询只等待真实进程注册且不增加固定启动延时。"
   ],
   "configSchema": {
     "type": "object",
