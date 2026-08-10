@@ -32,6 +32,12 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.deepEqual(manifest.runtime.args, ["start"]);
   assert.deepEqual(manifest.runtime.stopArgs, ["stop"]);
   assert.equal(manifest.runtime.processOwnership, "host");
+  assert.deepEqual(manifest.runtime.healthCheck, {
+    type: "http",
+    url: "http://127.0.0.1:18110/healthz",
+    timeoutSecs: 2,
+    expectStatus: 200,
+  });
   assert.deepEqual(manifest.ui, {
     type: "embedded",
     entry: "ui/index.html",

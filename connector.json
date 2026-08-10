@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.35",
+  "version": "1.2.36",
   "description": "Initialize and configure Codex, point the user-level CODEX_HOME at an isolated Baijimu workspace or restore its original value, and manage local Codex sessions.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.35"
+    "revision": "v1.2.36"
   },
   "runtime": {
     "type": "process",
@@ -25,7 +25,7 @@
     "processOwnership": "host",
     "healthCheck": {
       "type": "http",
-      "url": "http://127.0.0.1:18110/readyz",
+      "url": "http://127.0.0.1:18110/healthz",
       "timeoutSecs": 2,
       "expectStatus": 200
     }
@@ -112,9 +112,9 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "会话列表统一返回 threadRuntimeStatus、activeFlags、isInProgress、latestTurnStatus 与 hasUnreadTurn。",
-    "会话未读状态由 Codex Desktop 状态和 Connector 观察到的 turn/completed 事件共同驱动。",
-    "新增 setThreadReadState，供平台应用在成功打开会话后显式确认已读。"
+    "宿主安装检查改用 /healthz 存活端点，避免等待只能由应用界面触发的本机初始化而形成启动死锁。",
+    "Codex CLI 下载、工作区凭据配置和失败重试继续由应用内 ensureCodexReady 管理，不阻塞宿主安装事务。",
+    "新增清单契约测试，防止后续版本再次把宿主健康检查指向 /readyz。"
   ],
   "configSchema": {
     "type": "object",
