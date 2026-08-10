@@ -303,6 +303,14 @@ jobs:
           }
           Write-Host "Verified Windows artifacts do not require VCRUNTIME/MSVCP"
 
+      - name: Verify packaged Windows Connector lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: >
+          .github/scripts/test-windows-connector-lifecycle.ps1
+          -BinaryPath "$env:RUNNER_TEMP\codex-local-app\bin\${{ matrix.platform_dir }}\baijimu-connector-codex.exe"
+
       - name: Verify installer atomic writes with Windows PowerShell 5.1
         if: runner.os == 'Windows'
         shell: powershell

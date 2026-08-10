@@ -67,6 +67,23 @@ async function waitForHealth(port) {
   throw new Error("connector did not become healthy");
 }
 
+async function waitForReadiness(port) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/readyz`, {
+        signal: AbortSignal.timeout(1_000),
+      });
+      const payload = await response.json();
+      if (response.ok) return payload;
+    } catch {
+      // Keep polling until initialization completes.
+    }
+    await delay(100);
+  }
+  throw new Error("connector did not become ready");
+}
+
 async function stopConnector(proc, port) {
   if (proc.exitCode !== null || proc.signalCode !== null) return;
   try {
@@ -88,6 +105,9 @@ test("host-managed foreground runtime records and safely stops its verified PID"
   const env = {
     ...process.env,
     BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+    CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    CODEX_CONNECTOR_TEST_SKIP_RECONCILE: "1",
+    CODEX_CONNECTOR_TEST_STARTUP_DELAY_MS: "1500",
   };
   const proc = spawn(cli, [
     "start",
@@ -103,6 +123,16 @@ test("host-managed foreground runtime records and safely stops its verified PID"
 
   try {
     await waitForHealth(port);
+    const liveness = await (await fetch(`http://127.0.0.1:${port}/healthz`)).json();
+    assert.equal(liveness.ok, true);
+    assert.equal(liveness.status.startup.status, "initializing");
+
+    const initializing = await fetch(`http://127.0.0.1:${port}/readyz`);
+    assert.equal(initializing.status, 503);
+    assert.equal((await initializing.json()).error.code, "connector_initializing");
+
+    const ready = await waitForReadiness(port);
+    assert.equal(ready.status.startup.status, "ready");
     const recordedPid = Number(
       (await readFile(join(connectorHome, "connector.pid"), "utf8")).trim(),
     );
@@ -129,6 +159,40 @@ test("host-managed foreground runtime records and safely stops its verified PID"
         }),
       ]);
     }
+  } finally {
+    await stopConnector(proc, port);
+    await rm(connectorHome, { recursive: true, force: true });
+  }
+});
+
+test("startup failures keep liveness online and expose the readiness root cause", async () => {
+  execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
+  const port = await freePort();
+  const connectorHome = await mkdtemp(join(tmpdir(), "codex-startup-failure-"));
+  const expectedError = "injected CODEX_HOME synchronization failure";
+  const env = {
+    ...process.env,
+    BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+    CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    CODEX_CONNECTOR_TEST_STARTUP_FAILURE: expectedError,
+  };
+  const proc = spawn(cli, ["start", "--port", String(port)], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env,
+  });
+
+  try {
+    await waitForHealth(port);
+    const liveness = await fetch(`http://127.0.0.1:${port}/healthz`);
+    assert.equal(liveness.status, 200);
+
+    const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
+    const payload = await readiness.json();
+    assert.equal(readiness.status, 503);
+    assert.equal(payload.status.startup.status, "failed");
+    assert.equal(payload.error.code, "connector_initialization_failed");
+    assert.equal(payload.error.message, expectedError);
   } finally {
     await stopConnector(proc, port);
     await rm(connectorHome, { recursive: true, force: true });

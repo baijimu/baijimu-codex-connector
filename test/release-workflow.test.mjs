@@ -59,6 +59,8 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /RUSTFLAGS: "-C target-feature=\+crt-static -D warnings"/);
   assert.match(workflow, /\$PSNativeCommandUseErrorActionPreference = \$true/);
   assert.match(workflow, /Verify Windows binaries are self-contained/);
+  assert.match(workflow, /Verify packaged Windows Connector lifecycle/);
+  assert.match(workflow, /test-windows-connector-lifecycle\.ps1/);
   assert.match(workflow, /Verify installer atomic writes with Windows PowerShell 5\.1/);
   assert.match(workflow, /shell: powershell/);
   assert.match(
@@ -91,6 +93,16 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /Set-Content\[\^\[:cntrl:\]\]\*\-Encoding/);
   assert.match(workflow, /dumpbin\.exe/);
   assert.match(workflow, /VCRUNTIME\|MSVCP/);
+  const windowsLifecycleTest = await readFile(
+    join(root, ".github", "scripts", "test-windows-connector-lifecycle.ps1"),
+    "utf8",
+  );
+  assert.match(windowsLifecycleTest, /\/healthz/);
+  assert.match(windowsLifecycleTest, /\/readyz/);
+  assert.match(windowsLifecycleTest, /connector_initializing/);
+  assert.match(windowsLifecycleTest, /connector_initialization_failed/);
+  assert.match(windowsLifecycleTest, /CODEX_CONNECTOR_TEST_STARTUP_DELAY_MS/);
+  assert.match(windowsLifecycleTest, /CODEX_CONNECTOR_TEST_STARTUP_FAILURE/);
 
   for (const action of ["actions/checkout", "actions/upload-artifact", "actions/download-artifact"]) {
     const pattern = new RegExp(`${action.replace("/", "\\/")}@[0-9a-f]{40}`);

@@ -84,7 +84,98 @@ struct AppState {
     client: Mutex<CodexClient>,
     credential_management: Mutex<()>,
     setup: setup::SetupManager,
-    management_token: String,
+    management_token: Mutex<Option<String>>,
+    startup: StartupReadiness,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StartupPhase {
+    Initializing,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Debug)]
+struct StartupSnapshot {
+    phase: StartupPhase,
+    message: String,
+    error: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+}
+
+#[derive(Clone)]
+struct StartupReadiness {
+    inner: Arc<Mutex<StartupSnapshot>>,
+}
+
+impl StartupReadiness {
+    fn initializing() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(StartupSnapshot {
+                phase: StartupPhase::Initializing,
+                message: "正在初始化 Codex Connector 本机环境".to_string(),
+                error: None,
+                started_at: timestamp(),
+                completed_at: None,
+            })),
+        }
+    }
+
+    fn snapshot(&self) -> StartupSnapshot {
+        self.inner
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_else(|_| StartupSnapshot {
+                phase: StartupPhase::Failed,
+                message: "Codex Connector 初始化状态不可用".to_string(),
+                error: Some("startup readiness lock poisoned".to_string()),
+                started_at: timestamp(),
+                completed_at: Some(timestamp()),
+            })
+    }
+
+    fn ready(&self) {
+        if let Ok(mut snapshot) = self.inner.lock() {
+            snapshot.phase = StartupPhase::Ready;
+            snapshot.message = "Codex Connector 已就绪".to_string();
+            snapshot.error = None;
+            snapshot.completed_at = Some(timestamp());
+        }
+    }
+
+    fn fail(&self, error: String) {
+        if let Ok(mut snapshot) = self.inner.lock() {
+            snapshot.phase = StartupPhase::Failed;
+            snapshot.message = "Codex Connector 初始化失败".to_string();
+            snapshot.error = Some(error);
+            snapshot.completed_at = Some(timestamp());
+        }
+    }
+}
+
+impl StartupSnapshot {
+    fn is_ready(&self) -> bool {
+        self.phase == StartupPhase::Ready
+    }
+
+    fn status_name(&self) -> &'static str {
+        match self.phase {
+            StartupPhase::Initializing => "initializing",
+            StartupPhase::Ready => "ready",
+            StartupPhase::Failed => "failed",
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "status": self.status_name(),
+            "message": self.message,
+            "error": self.error,
+            "startedAt": self.started_at,
+            "completedAt": self.completed_at,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -861,11 +952,10 @@ fn normalize_codex_binary_override(value: Option<String>) -> Result<Option<Strin
 }
 
 fn start_server(options: ServerOptions) -> Result<(), String> {
-    credential::reconcile_active_user_codex_home()
-        .map_err(|error| format!("failed to reconcile active CODEX_HOME: {error}"))?;
-    let management_token = load_or_create_management_token()?;
     let listener = TcpListener::bind((options.host.as_str(), options.port))
         .map_err(|error| error.to_string())?;
+    fs::create_dir_all(connector_home())
+        .map_err(|error| format!("failed to prepare connector data directory: {error}"))?;
     fs::write(pid_path(), format!("{}\n", std::process::id()))
         .map_err(|error| format!("failed to record connector process id: {error}"))?;
     println!(
@@ -877,7 +967,16 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         client: Mutex::new(CodexClient::new(options, EventPublisher::from_env())),
         credential_management: Mutex::new(()),
         setup,
-        management_token,
+        management_token: Mutex::new(None),
+        startup: StartupReadiness::initializing(),
+    });
+    let initializing_state = Arc::clone(&state);
+    thread::spawn(move || match initialize_server(&initializing_state) {
+        Ok(()) => initializing_state.startup.ready(),
+        Err(error) => {
+            eprintln!("Codex Connector initialization failed: {error}");
+            initializing_state.startup.fail(error);
+        }
     });
     for stream in listener.incoming() {
         match stream {
@@ -893,6 +992,71 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
     Ok(())
 }
 
+fn initialize_server(state: &AppState) -> Result<(), String> {
+    if test_control_enabled() {
+        if let Ok(delay_ms) = env::var("CODEX_CONNECTOR_TEST_STARTUP_DELAY_MS") {
+            let delay_ms = delay_ms
+                .parse::<u64>()
+                .map_err(|error| format!("invalid test startup delay: {error}"))?;
+            thread::sleep(Duration::from_millis(delay_ms.min(30_000)));
+        }
+        if let Ok(error) = env::var("CODEX_CONNECTOR_TEST_STARTUP_FAILURE") {
+            if !error.trim().is_empty() {
+                return Err(error);
+            }
+        }
+    }
+    if !(test_control_enabled()
+        && env::var("CODEX_CONNECTOR_TEST_SKIP_RECONCILE")
+            .ok()
+            .as_deref()
+            == Some("1"))
+    {
+        credential::reconcile_active_user_codex_home()
+            .map_err(|error| format!("同步用户级 CODEX_HOME 失败: {error}"))?;
+    }
+    let management_token = load_or_create_management_token()?;
+    let mut token = state
+        .management_token
+        .lock()
+        .map_err(|_| "management token lock poisoned".to_string())?;
+    *token = Some(management_token);
+    Ok(())
+}
+
+fn test_control_enabled() -> bool {
+    env::var("CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+fn connector_identity() -> Value {
+    json!({
+        "name": "@baijimu/connector-codex",
+        "version": VERSION,
+        "pid": std::process::id(),
+    })
+}
+
+fn startup_response(snapshot: &StartupSnapshot) -> Value {
+    json!({
+        "ok": snapshot.is_ready(),
+        "status": {
+            "connector": connector_identity(),
+            "startup": snapshot.to_value(),
+        },
+        "error": (!snapshot.is_ready()).then(|| json!({
+            "code": if snapshot.phase == StartupPhase::Failed {
+                "connector_initialization_failed"
+            } else {
+                "connector_initializing"
+            },
+            "message": snapshot.error.as_deref().unwrap_or(&snapshot.message),
+        })),
+    })
+}
+
 fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), String> {
     let request = read_http_request(&mut stream)?;
     let path = request
@@ -903,11 +1067,15 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
         .to_string();
     let response = match (request.method.as_str(), path.as_str()) {
         ("GET", "/healthz") => {
-            let mut client = state
-                .client
-                .lock()
-                .map_err(|_| "client lock poisoned".to_string())?;
-            (200, json!({"ok": true, "status": client.status()}))
+            let snapshot = state.startup.snapshot();
+            let mut response = startup_response(&snapshot);
+            response["ok"] = Value::Bool(true);
+            (200, response)
+        }
+        ("GET", "/readyz") => {
+            let snapshot = state.startup.snapshot();
+            let status = if snapshot.is_ready() { 200 } else { 503 };
+            (status, startup_response(&snapshot))
         }
         ("POST", "/__shutdown")
             if env::var("CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN")
@@ -929,6 +1097,9 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             (200, json!({"ok": true}))
         }
         ("POST", path) if path.starts_with("/invoke/") => {
+            if let Some(response) = startup_not_ready_response(&state.startup) {
+                return write_json(&mut stream, 503, &response);
+            }
             let body = if request.body.is_empty() {
                 json!({})
             } else {
@@ -954,7 +1125,16 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             }
         }
         (method, path) if path.starts_with("/management/") => {
-            if !management_authorized(request.authorization.as_deref(), &state.management_token) {
+            if let Some(response) = startup_not_ready_response(&state.startup) {
+                return write_json(&mut stream, 503, &response);
+            }
+            let management_token = state
+                .management_token
+                .lock()
+                .map_err(|_| "management token lock poisoned".to_string())?
+                .clone()
+                .ok_or_else(|| "management token unavailable after initialization".to_string())?;
+            if !management_authorized(request.authorization.as_deref(), &management_token) {
                 (
                     401,
                     json!({"ok": false, "error": {"message": "management authorization required"}}),
@@ -977,6 +1157,11 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
         _ => (404, json!({"ok": false, "error": {"message": "not found"}})),
     };
     write_json(&mut stream, response.0, &response.1)
+}
+
+fn startup_not_ready_response(startup: &StartupReadiness) -> Option<Value> {
+    let snapshot = startup.snapshot();
+    (!snapshot.is_ready()).then(|| startup_response(&snapshot))
 }
 
 fn handle_management(
@@ -2490,6 +2675,36 @@ fn print_help() {
 #[cfg(test)]
 mod project_state_tests {
     use super::*;
+
+    #[test]
+    fn startup_readiness_separates_liveness_from_initialization() {
+        let startup = StartupReadiness::initializing();
+        let initializing = startup.snapshot();
+        assert_eq!(initializing.phase, StartupPhase::Initializing);
+        assert!(!initializing.is_ready());
+        assert_eq!(
+            startup_response(&initializing)["error"]["code"],
+            "connector_initializing"
+        );
+
+        startup.ready();
+        let ready = startup.snapshot();
+        assert_eq!(ready.phase, StartupPhase::Ready);
+        assert!(ready.is_ready());
+        assert_eq!(startup_response(&ready)["ok"], true);
+    }
+
+    #[test]
+    fn startup_readiness_preserves_the_initialization_root_cause() {
+        let startup = StartupReadiness::initializing();
+        startup.fail("Windows 环境广播超时".to_string());
+
+        let failed = startup.snapshot();
+        let response = startup_response(&failed);
+        assert_eq!(failed.phase, StartupPhase::Failed);
+        assert_eq!(response["error"]["code"], "connector_initialization_failed");
+        assert_eq!(response["error"]["message"], "Windows 环境广播超时");
+    }
 
     #[test]
     fn reads_global_state_json_with_utf8_bom() {
