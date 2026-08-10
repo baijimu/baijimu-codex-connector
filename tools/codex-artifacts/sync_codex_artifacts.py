@@ -18,18 +18,53 @@ import urllib.error
 import urllib.request
 
 
-USER_AGENT = "baijimu-codex-upstream-artifact-sync/2"
+USER_AGENT = "baijimu-codex-upstream-artifact-sync/3"
 DEFAULT_RELEASE_API = "https://api.github.com/repos/openai/codex/releases/latest"
 DEFAULT_PUBLIC_BASE = "https://download.baijimu.com"
 DEFAULT_PREFIX = "codex-artifacts"
 DEFAULT_BUCKET = "baijimu-lowcode-public-20260420"
 
-CLI_ASSET_NAMES = (
-    "codex-aarch64-apple-darwin.tar.gz",
-    "codex-x86_64-apple-darwin.tar.gz",
-    "codex-aarch64-pc-windows-msvc.exe.zip",
-    "codex-x86_64-pc-windows-msvc.exe.zip",
+CLI_ASSETS = (
+    {
+        "name": "codex-aarch64-apple-darwin.tar.gz",
+        "platform": "macos",
+        "arch": "aarch64",
+        "install_layout": "legacy_single_binary_archive",
+    },
+    {
+        "name": "codex-x86_64-apple-darwin.tar.gz",
+        "platform": "macos",
+        "arch": "x86_64",
+        "install_layout": "legacy_single_binary_archive",
+    },
+    {
+        "name": "codex-aarch64-pc-windows-msvc.exe.zip",
+        "platform": "windows",
+        "arch": "aarch64",
+        "install_layout": "legacy_flat_windows_archive",
+        "deprecated": True,
+    },
+    {
+        "name": "codex-x86_64-pc-windows-msvc.exe.zip",
+        "platform": "windows",
+        "arch": "x86_64",
+        "install_layout": "legacy_flat_windows_archive",
+        "deprecated": True,
+    },
+    {
+        "name": "codex-package-aarch64-pc-windows-msvc.tar.gz",
+        "platform": "windows",
+        "arch": "aarch64",
+        "install_layout": "codex_package_v1",
+    },
+    {
+        "name": "codex-package-x86_64-pc-windows-msvc.tar.gz",
+        "platform": "windows",
+        "arch": "x86_64",
+        "install_layout": "codex_package_v1",
+    },
 )
+CLI_ASSET_NAMES = tuple(asset["name"] for asset in CLI_ASSETS)
 
 APP_ASSETS = (
     {
@@ -100,7 +135,8 @@ def fetch_existing_manifest(url: str) -> dict[str, Any] | None:
 def select_assets(release: dict[str, Any]) -> list[dict[str, Any]]:
     by_name = {asset.get("name"): asset for asset in release.get("assets", [])}
     selected: list[dict[str, Any]] = []
-    for name in CLI_ASSET_NAMES:
+    for definition in CLI_ASSETS:
+        name = definition["name"]
         source = by_name.get(name)
         if not source:
             raise RuntimeError(f"official Codex release is missing required asset: {name}")
@@ -111,8 +147,10 @@ def select_assets(release: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "name": name,
                 "component": "codex_cli",
-                "platform": "windows" if "pc-windows" in name else "macos",
-                "arch": "aarch64" if "aarch64" in name else "x86_64",
+                "platform": definition["platform"],
+                "arch": definition["arch"],
+                "install_layout": definition["install_layout"],
+                "deprecated": definition.get("deprecated", False),
                 "upstream_url": source["browser_download_url"],
                 "upstream_sha256": upstream_digest.removeprefix("sha256:"),
                 "expected_size": int(source["size"]),
@@ -318,6 +356,8 @@ def manifest_for(
                 "effective_upstream_url": asset["effective_upstream_url"],
                 "upstream_sha256": asset.get("upstream_sha256"),
                 "signature_verification": asset.get("signature_verification"),
+                "install_layout": asset.get("install_layout"),
+                "deprecated": asset.get("deprecated", False),
                 "mirror_url": f"{public_base.rstrip('/')}/{object_key}",
                 "object_key": object_key,
                 "sha256": asset["sha256"],
@@ -327,7 +367,7 @@ def manifest_for(
             }
         )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "manifest_kind": "baijimu.codex.customer-install-artifacts",
         "source": "momoplan/baijimu-connector-codex",
         "snapshot_id": sid,
@@ -338,6 +378,8 @@ def manifest_for(
                 "tag_name": release.get("tag_name"),
                 "published_at": release.get("published_at"),
                 "html_url": release.get("html_url"),
+                "windows_install_layout": "codex_package_v1",
+                "legacy_windows_archives_retained_for": "pre-package-layout-connectors",
             },
             "codex_desktop_app": {
                 "source": "official OpenAI static distribution and Microsoft Store signed packages",
@@ -357,7 +399,7 @@ def manifest_for(
 
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
-    if manifest.get("schema_version") != 2:
+    if manifest.get("schema_version") != 3:
         raise RuntimeError("unexpected manifest schema")
     assets = manifest.get("assets")
     if not isinstance(assets, list) or len(assets) != len(CLI_ASSET_NAMES) + len(APP_ASSETS):
@@ -366,6 +408,26 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     actual = {asset.get("name") for asset in assets}
     if actual != required or set(manifest.get("required_assets", [])) != required:
         raise RuntimeError(f"manifest asset set mismatch: expected {sorted(required)}, got {sorted(actual)}")
+    package_assets = [
+        asset
+        for asset in assets
+        if asset.get("platform") == "windows" and asset.get("install_layout") == "codex_package_v1"
+    ]
+    if {(asset.get("arch"), asset.get("deprecated")) for asset in package_assets} != {
+        ("aarch64", False),
+        ("x86_64", False),
+    }:
+        raise RuntimeError("manifest does not contain the canonical Windows Codex packages")
+    legacy_windows_assets = [
+        asset
+        for asset in assets
+        if asset.get("platform") == "windows"
+        and asset.get("install_layout") == "legacy_flat_windows_archive"
+    ]
+    if len(legacy_windows_assets) != 2 or not all(
+        asset.get("deprecated") is True for asset in legacy_windows_assets
+    ):
+        raise RuntimeError("legacy Windows Codex archives must be explicitly deprecated")
     for asset in assets:
         if not asset.get("mirror_url", "").startswith("https://"):
             raise RuntimeError(f"asset has invalid mirror URL: {asset.get('name')}")

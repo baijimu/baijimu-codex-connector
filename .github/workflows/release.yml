@@ -152,6 +152,10 @@ jobs:
               grep -F 'ReadLineAsync()' "$output"
               grep -F 'account/read API-key state' "$output"
               grep -F 'ConvertFrom-Json -ErrorAction Stop' "$output"
+              grep -F 'codex-package-x86_64-pc-windows-msvc.tar.gz' "$output"
+              grep -F 'codex-package.json' "$output"
+              grep -F 'codex-command-runner.exe' "$output"
+              grep -F 'codex-windows-sandbox-setup.exe' "$output"
               if grep -Eqi 'Set-Content[^[:cntrl:]]*-Encoding[[:space:]]+UTF8' "$output"; then
                 echo "Windows installer must not write UTF-8 files through Windows PowerShell Set-Content" >&2
                 exit 1
@@ -328,6 +332,14 @@ jobs:
         timeout-minutes: 5
         run: >
           .github/scripts/test-windows-installer-app-server-login.ps1
+          -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
+
+      - name: Verify official Codex package layout with Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        timeout-minutes: 5
+        run: >
+          .github/scripts/test-windows-installer-package-layout.ps1
           -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
 
       - name: Download and run Windows signing tool

@@ -73,6 +73,11 @@ test("connector owns its application release and upstream artifact sync workflow
     /Verify installer app-server login protocol with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
   );
   assert.match(workflow, /test-windows-installer-app-server-login\.ps1/);
+  assert.match(
+    workflow,
+    /Verify official Codex package layout with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
+  );
+  assert.match(workflow, /test-windows-installer-package-layout\.ps1/);
   assert.match(workflow, /Upload validated installer scripts/);
   assert.match(workflow, /Download validated installer scripts/);
   assert.match(workflow, /name: validated-installer-scripts/);
@@ -94,6 +99,14 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(windowsLoginTest, /Start-Sleep -Seconds 3/);
   assert.match(windowsLoginTest, /denied by fake server/);
   assert.match(windowsLoginTest, /exposed the API key/);
+  const windowsPackageTest = await readFile(
+    join(root, ".github", "scripts", "test-windows-installer-package-layout.ps1"),
+    "utf8",
+  );
+  assert.doesNotMatch(windowsPackageTest, /Invoke-WebRequest|curl\.exe|https?:\/\//);
+  assert.match(windowsPackageTest, /Resolve-CodexPackageContents/);
+  assert.match(windowsPackageTest, /codex-command-runner\.exe/);
+  assert.match(windowsPackageTest, /Legacy flat Windows Codex cache was not removed/);
   assert.match(windowsInstallerTest, /Get-FileHash -LiteralPath \$ScriptPath/);
   assert.match(workflow, /Verify immutable installer scripts/);
   assert.match(workflow, /read_rust_constant MACOS_SCRIPT_SHA256/);
@@ -156,7 +169,7 @@ test("upstream sync is release-side, complete, latest-only, and independently sc
   assert.match(workflow, /needs: \[verify-macos-apps, verify-windows-apps\]/);
   assert.match(workflow, /sync-codex-artifacts\.sh/);
   assert.match(wrapper, /Customer installers read the published/);
-  assert.match(synchronizer, /schema_version": 2/);
+  assert.match(synchronizer, /schema_version": 3/);
   assert.match(synchronizer, /assets\/sha256/);
   assert.match(synchronizer, /latest\.json/);
   assert.match(synchronizer, /Publishing this pointer last/);
@@ -179,6 +192,8 @@ test("upstream sync is release-side, complete, latest-only, and independently sc
     "codex-x86_64-apple-darwin.tar.gz",
     "codex-aarch64-pc-windows-msvc.exe.zip",
     "codex-x86_64-pc-windows-msvc.exe.zip",
+    "codex-package-aarch64-pc-windows-msvc.tar.gz",
+    "codex-package-x86_64-pc-windows-msvc.tar.gz",
   ]) {
     assert.match(synchronizer, new RegExp(name.replaceAll(".", "\\.")));
   }
@@ -199,8 +214,10 @@ for name in module.CLI_ASSET_NAMES:
     sources.append({
         "name": name,
         "component": "codex_cli",
-        "platform": "macos",
+        "platform": "windows" if "pc-windows" in name else "macos",
         "arch": "aarch64" if "aarch64" in name else "x86_64",
+        "install_layout": "codex_package_v1" if "codex-package-" in name else ("legacy_flat_windows_archive" if "pc-windows" in name else "legacy_single_binary_archive"),
+        "deprecated": name.endswith(".exe.zip"),
         "source_kind": "official_openai_github_release",
         "upstream_url": "https://example.invalid/" + name,
         "effective_upstream_url": "https://example.invalid/" + name,
@@ -222,8 +239,9 @@ for source in module.APP_ASSETS:
 release = {"tag_name": "rust-v-test", "published_at": "2026-01-01T00:00:00Z"}
 manifest = module.manifest_for(release, sources, "https://oss.example", "codex-artifacts")
 module.validate_manifest(manifest)
-assert manifest["schema_version"] == 2
-assert len(manifest["assets"]) == 8
+assert manifest["schema_version"] == 3
+assert len(manifest["assets"]) == 10
+assert len([item for item in manifest["assets"] if item["install_layout"] == "codex_package_v1"]) == 2
 assert all("/assets/sha256/" in item["mirror_url"] for item in manifest["assets"])
 assert not any("preserved_from_manifest" in item for item in manifest["assets"])
 `;

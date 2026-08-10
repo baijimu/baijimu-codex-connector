@@ -130,6 +130,12 @@ which intentionally have independent cadences:
   replaces `codex-artifacts/latest.json` only after every referenced object is
   available.
 
+Windows installation consumes OpenAI's canonical
+`codex-package-<target>.tar.gz` layout and preserves its declared entrypoint,
+code-mode host, `rg`, command runner, and sandbox setup resources. The older
+flat `.exe.zip` release assets remain in the public snapshot only while older
+Connector versions are still in use; new installers never select them.
+
 The synchronizer is a release-side operation. Bridge Agent and customer devices
 never execute it. First-use installers only read the already published manifest,
 download the platform asset named by that contract, and verify its SHA256.
