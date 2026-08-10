@@ -259,6 +259,9 @@ test("rust connector forwards Codex app-server calls", async () => {
     );
     assert.equal(managedSessions.result.data[0].id, "thr_listed");
     assert.equal(managedSessions.result.data[0].requestParams.sortKey, "updated_at");
+    assert.equal(managedSessions.result.data[0].threadRuntimeStatus.type, "idle");
+    assert.equal(managedSessions.result.data[0].isInProgress, false);
+    assert.equal(managedSessions.result.data[0].hasUnreadTurn, false);
 
     const managedThread = await postManagementJson(
       port,
@@ -276,12 +279,29 @@ test("rust connector forwards Codex app-server calls", async () => {
     );
     assert.equal(managedTurn.result.turn.id, "turn_test");
 
+    const unreadSessions = await postManagementJson(
+      port,
+      managementToken,
+      "/management/v1/codex/sessions",
+      { limit: 5 },
+    );
+    assert.equal(unreadSessions.result.data[0].hasUnreadTurn, true);
+
+    const readState = await postJson(port, "/invoke/setThreadReadState", {
+      threadId: "thr_test",
+      hasUnreadTurn: false,
+      observedUpdatedAt: unreadSessions.result.data[0].updatedAt,
+    });
+    assert.equal(readState.data.result.threadId, "thr_test");
+    assert.equal(readState.data.result.hasUnreadTurn, false);
+
     const thread = await postJson(port, "/invoke/startThread", { model: "gpt-test" });
     assert.equal(thread.data.result.thread.id, "thr_test");
     assert.equal(thread.data.status, undefined);
 
     const threads = await postJson(port, "/invoke/listThreads", { limit: 5 });
-    assert.equal(threads.data.result.data[0].id, "thr_listed");
+    assert.equal(threads.data.result.data[0].id, "thr_test");
+    assert.equal(threads.data.result.data[0].hasUnreadTurn, false);
     assert.equal(threads.data.result.data[0].requestParams.sortKey, "updated_at");
 
     const turns = await postJson(port, "/invoke/listThreadTurns", {

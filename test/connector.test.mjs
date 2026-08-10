@@ -165,6 +165,9 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     assert.equal(threads.data.result.data[0].cwd, "/tmp/listed");
     assert.equal(threads.data.result.data[0].requestParams.sortKey, "updated_at");
     assert.equal(threads.data.result.data[0].requestParams.sortDirection, "desc");
+    assert.equal(threads.data.result.data[0].threadRuntimeStatus.type, "idle");
+    assert.equal(threads.data.result.data[0].isInProgress, false);
+    assert.equal(threads.data.result.data[0].hasUnreadTurn, false);
     assert.equal(threads.data.status, undefined);
 
     const explicitlySortedThreads = await postJson(port, "/invoke/listThreads", {
@@ -280,6 +283,62 @@ test("flattens wrapped Codex thread list items", async () => {
         await exited;
       }
     }
+  }
+});
+
+test("projects active, waiting, and unread thread state", async () => {
+  const port = await freePort();
+  const codexHome = await mkdtemp(join(tmpdir(), "codex-unread-home-"));
+  await writeFile(join(codexHome, ".codex-global-state.json"), JSON.stringify({
+    "unread-thread-ids-by-host-v1": { local: ["thr_listed"] },
+  }));
+  const proc = spawn(process.execPath, [
+    cli,
+    "start",
+    "--port",
+    String(port),
+    "--codex-args",
+    JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+      CODEX_FAKE_THREAD_ACTIVE: "1",
+    },
+  });
+
+  try {
+    await waitForHealth(port);
+    const sessions = await postJson(port, "/invoke/listSessions", { limit: 5 });
+    const session = sessions.data.result.data[0];
+    assert.equal(session.threadRuntimeStatus.type, "active");
+    assert.deepEqual(session.activeFlags, ["waitingOnApproval"]);
+    assert.equal(session.isInProgress, true);
+    assert.equal(session.latestTurnStatus, "inProgress");
+    assert.equal(session.hasUnreadTurn, true);
+
+    const read = await postJson(port, "/invoke/setThreadReadState", {
+      threadId: session.id,
+      hasUnreadTurn: false,
+      observedUpdatedAt: session.updatedAt,
+    });
+    assert.equal(read.data.result.hasUnreadTurn, false);
+
+    const refreshed = await postJson(port, "/invoke/listSessions", { limit: 5 });
+    assert.equal(refreshed.data.result.data[0].hasUnreadTurn, false);
+  } finally {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/__shutdown`, { method: "POST" });
+      } catch {
+        proc.kill("SIGTERM");
+      }
+      await once(proc, "exit");
+    }
+    await rm(codexHome, { recursive: true, force: true });
   }
 });
 

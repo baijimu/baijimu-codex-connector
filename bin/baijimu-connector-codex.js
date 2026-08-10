@@ -3,12 +3,12 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.4.1";
+const VERSION = "1.2.33";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
 const DEFAULT_LISTEN = "stdio://";
@@ -286,6 +286,9 @@ class CodexAppServerClient {
   }
 
   pushEvent(method, params) {
+    if (method === "turn/completed" && typeof params?.threadId === "string" && params.threadId) {
+      markThreadUnread(params.threadId);
+    }
     const event = {
       sequence: ++this.eventSequence,
       receivedAt: new Date().toISOString(),
@@ -397,6 +400,10 @@ function pidPath() {
 
 function logPath() {
   return join(connectorHome(), "connector.log");
+}
+
+function threadReadStatePath() {
+  return join(connectorHome(), "thread-read-state.json");
 }
 
 function ensureConnectorHome() {
@@ -568,6 +575,135 @@ function readJsonFile(path, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function readThreadState() {
+  const path = threadReadStatePath();
+  if (!existsSync(path)) return { version: 1, threads: {} };
+  const value = JSON.parse(readFileSync(path, "utf8"));
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`invalid Connector thread state: ${path}`);
+  }
+  return {
+    version: 1,
+    threads: value.threads && typeof value.threads === "object" && !Array.isArray(value.threads)
+      ? value.threads
+      : {},
+  };
+}
+
+function writeThreadState(state) {
+  ensureConnectorHome();
+  const path = threadReadStatePath();
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  if (process.platform !== "win32") chmodSync(temporaryPath, 0o600);
+  renameSync(temporaryPath, path);
+}
+
+function desktopUnreadThreadIds() {
+  const globalStatePath = join(codexHome(), ".codex-global-state.json");
+  if (!existsSync(globalStatePath)) return new Set();
+  const globalState = JSON.parse(readFileSync(globalStatePath, "utf8"));
+  const byHost = globalState?.["unread-thread-ids-by-host-v1"];
+  if (byHost === undefined) return new Set();
+  if (!byHost || typeof byHost !== "object" || Array.isArray(byHost)) {
+    throw new Error(`invalid Codex desktop unread state: ${globalStatePath}`);
+  }
+  return new Set(uniqueStrings(byHost.local));
+}
+
+function normalizeRuntimeStatus(status) {
+  if (status && typeof status === "object" && !Array.isArray(status)) return { ...status };
+  if (typeof status === "string" && status) return { type: status };
+  return { type: "notLoaded" };
+}
+
+function latestTurnStatus(thread, runtimeStatus) {
+  const latest = Array.isArray(thread.turns) ? thread.turns.at(-1) : null;
+  const status = latest?.turn?.status ?? latest?.status;
+  if (typeof status === "string" && status) return status;
+  return runtimeStatus.type === "active" ? "inProgress" : null;
+}
+
+function enrichThreads(items) {
+  const state = readThreadState();
+  const desktopUnread = desktopUnreadThreadIds();
+  let changed = false;
+  const data = items.map((raw) => {
+    const thread = normalizeThreadListItem(raw);
+    if (!thread || typeof thread !== "object" || Array.isArray(thread)) return thread;
+    const threadId = thread.threadId ?? thread.sessionId ?? thread.id;
+    if (typeof threadId !== "string" || !threadId) return thread;
+    const updatedAt = thread.updatedAt ?? null;
+    const isDesktopUnread = desktopUnread.has(threadId);
+    const threadRuntimeStatus = normalizeRuntimeStatus(thread.status);
+    const turnStatus = latestTurnStatus(thread, threadRuntimeStatus);
+    const existing = state.threads[threadId];
+    const entry = existing && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...existing }
+      : {
+          hasUnreadTurn: isDesktopUnread,
+          observedUpdatedAt: updatedAt,
+          observedRuntimeStatusType: threadRuntimeStatus.type,
+          observedLatestTurnStatus: turnStatus,
+          observedDesktopUnread: isDesktopUnread,
+        };
+    if (existing === undefined) changed = true;
+    const revisionAdvanced = entry.observedUpdatedAt !== null
+      && entry.observedUpdatedAt !== undefined
+      && updatedAt !== null
+      && entry.observedUpdatedAt !== updatedAt;
+    const activityFinished = entry.observedRuntimeStatusType === "active" && threadRuntimeStatus.type !== "active"
+      || entry.observedLatestTurnStatus === "inProgress" && turnStatus !== "inProgress";
+    if (revisionAdvanced && activityFinished) {
+      entry.hasUnreadTurn = true;
+    }
+    if (!entry.observedDesktopUnread && isDesktopUnread) entry.hasUnreadTurn = true;
+    if (updatedAt !== null) entry.observedUpdatedAt = updatedAt;
+    entry.observedRuntimeStatusType = threadRuntimeStatus.type;
+    entry.observedLatestTurnStatus = turnStatus;
+    entry.observedDesktopUnread = isDesktopUnread;
+    if (JSON.stringify(existing) !== JSON.stringify(entry)) changed = true;
+    state.threads[threadId] = entry;
+
+    const activeFlags = Array.isArray(threadRuntimeStatus.activeFlags) ? threadRuntimeStatus.activeFlags : [];
+    return {
+      ...thread,
+      threadRuntimeStatus,
+      activeFlags,
+      isInProgress: threadRuntimeStatus.type === "active" || turnStatus === "inProgress",
+      latestTurnStatus: turnStatus,
+      hasUnreadTurn: entry.hasUnreadTurn === true,
+    };
+  });
+  if (changed) writeThreadState(state);
+  return data;
+}
+
+function setThreadReadState(threadId, hasUnreadTurn, observedUpdatedAt) {
+  const state = readThreadState();
+  const existing = state.threads[threadId] && typeof state.threads[threadId] === "object"
+    ? state.threads[threadId]
+    : {};
+  const entry = {
+    ...existing,
+    hasUnreadTurn,
+    observedDesktopUnread: desktopUnreadThreadIds().has(threadId),
+    ...(observedUpdatedAt !== undefined ? { observedUpdatedAt } : {}),
+  };
+  state.threads[threadId] = entry;
+  writeThreadState(state);
+  return { threadId, hasUnreadTurn, observedUpdatedAt: entry.observedUpdatedAt ?? null };
+}
+
+function markThreadUnread(threadId) {
+  const state = readThreadState();
+  state.threads[threadId] = {
+    ...(state.threads[threadId] || {}),
+    hasUnreadTurn: true,
+  };
+  writeThreadState(state);
 }
 
 function uniqueStrings(values) {
@@ -990,7 +1126,7 @@ async function listThreads(body, client) {
     return {
       result: {
         ...result,
-        data: result.data.map(normalizeThreadListItem),
+        data: enrichThreads(result.data),
       },
     };
   }
@@ -1077,6 +1213,18 @@ async function handleInvoke(pathname, body, client) {
       const params = mergeParams(body, pickParams(body, ["threadId", "includeTurns"]));
       const result = await client.request("thread/read", params, body.timeoutMs);
       return { result };
+    }
+    case "/invoke/setThreadReadState": {
+      const threadId = body.threadId ?? body.params?.threadId;
+      const hasUnreadTurn = body.hasUnreadTurn ?? body.params?.hasUnreadTurn;
+      if (!threadId) throw new HttpError(400, "threadId is required");
+      if (typeof hasUnreadTurn !== "boolean") throw new HttpError(400, "hasUnreadTurn is required");
+      let observedUpdatedAt = body.observedUpdatedAt ?? body.params?.observedUpdatedAt;
+      if (observedUpdatedAt === undefined) {
+        const detail = await client.request("thread/read", { threadId, includeTurns: false }, body.timeoutMs);
+        observedUpdatedAt = detail?.thread?.updatedAt;
+      }
+      return { result: setThreadReadState(threadId, hasUnreadTurn, observedUpdatedAt) };
     }
     case "/invoke/listThreadTurns":
       return listThreadTurns(body, client);
