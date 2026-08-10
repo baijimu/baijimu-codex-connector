@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.26",
+  "version": "1.2.27",
   "description": "Initialize and configure Codex, point the user-level CODEX_HOME at an isolated Baijimu workspace or restore its original value, and manage local Codex sessions.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.26"
+    "revision": "v1.2.27"
   },
   "runtime": {
     "type": "process",
@@ -108,9 +108,9 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "启动 HTTP 控制面后异步同步 Windows CODEX_HOME，避免环境广播阻塞 18110 健康端口。",
-    "新增独立的 /healthz 存活检查和 /readyz 就绪检查，并返回可诊断的初始化失败原因。",
-    "发布流水线新增 Windows 发行包启动、就绪、失败诊断与停止端到端验证。"
+    "移除 codexBinary、--codex-binary 与 CODEX_CONNECTOR_CODEX_BINARY 覆盖接口，Codex CLI 统一由 Connector 自动发现。",
+    "每次 app-server 启动优先检查标准官方安装位置，再检查进程 PATH 与用户登录环境。",
+    "明确拒绝桌面应用包内置的 Codex CLI，避免继承 Bridge Agent PATH 后误选不可独立运行的副本。"
   ],
   "configSchema": {
     "type": "object",
@@ -120,11 +120,6 @@
         "default": 18110,
         "minimum": 1024,
         "maximum": 65535
-      },
-      "codexBinary": {
-        "type": "string",
-        "minLength": 1,
-        "description": "Advanced override only: absolute path to an official Codex CLI executable or Windows command launcher. Leave unset for automatic discovery and Connector-managed installation."
       },
       "listen": {
         "type": "string",

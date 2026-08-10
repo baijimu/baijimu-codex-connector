@@ -11,7 +11,6 @@ use std::os::unix::fs::PermissionsExt;
 
 #[derive(Clone, Debug)]
 pub struct Resolution {
-    pub requested: Option<String>,
     pub path: PathBuf,
     pub source: &'static str,
     pub checked_paths: Vec<PathBuf>,
@@ -27,8 +26,7 @@ pub struct CliInspection {
 impl Resolution {
     pub fn status_value(&self, inspection: Option<&CliInspection>) -> Value {
         json!({
-            "requested": self.requested,
-            "mode": if self.requested.is_some() { "advanced_override" } else { "auto" },
+            "mode": "auto",
             "resolved": self.path,
             "source": self.source,
             "checkedPaths": display_paths(&self.checked_paths),
@@ -42,7 +40,6 @@ impl Resolution {
 
 #[derive(Clone, Debug)]
 pub struct ResolutionError {
-    pub requested: Option<String>,
     pub checked_paths: Vec<PathBuf>,
     pub reason: String,
 }
@@ -50,8 +47,7 @@ pub struct ResolutionError {
 impl ResolutionError {
     pub fn status_value(&self) -> Value {
         json!({
-            "requested": self.requested,
-            "mode": if self.requested.is_some() { "advanced_override" } else { "auto" },
+            "mode": "auto",
             "resolved": null,
             "source": null,
             "checkedPaths": display_paths(&self.checked_paths),
@@ -64,7 +60,6 @@ impl ResolutionError {
 
     pub fn data_value(&self) -> Value {
         json!({
-            "requested": self.requested,
             "checkedPaths": display_paths(&self.checked_paths),
             "reason": self.reason,
         })
@@ -75,7 +70,7 @@ impl fmt::Display for ResolutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "Codex CLI was not found or is not executable ({}). Install the official Codex CLI, or set the advanced CODEX_CONNECTOR_CODEX_BINARY override to an absolute executable path",
+            "Codex CLI was not found or is not executable ({}). Install the official Codex CLI and ensure it is available from a standard install location or the user login environment",
             self.reason
         )
     }
@@ -114,8 +109,8 @@ impl ResolverContext {
     }
 }
 
-pub fn resolve(requested: Option<&str>) -> Result<Resolution, ResolutionError> {
-    resolve_with_context(requested, &ResolverContext::from_env(), true)
+pub fn resolve() -> Result<Resolution, ResolutionError> {
+    resolve_with_context(&ResolverContext::from_env(), true)
 }
 
 pub fn inspect(resolution: &Resolution) -> CliInspection {
@@ -165,62 +160,23 @@ pub fn inspect(resolution: &Resolution) -> CliInspection {
 }
 
 fn resolve_with_context(
-    requested: Option<&str>,
     context: &ResolverContext,
     search_login_environment: bool,
 ) -> Result<Resolution, ResolutionError> {
     let mut checked_paths = Vec::new();
-    if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
-        if !Path::new(requested).is_absolute() {
-            return Err(ResolutionError {
-                requested: Some(requested.to_string()),
-                checked_paths,
-                reason: "the advanced override is not an absolute path".to_string(),
-            });
-        }
-        let path = PathBuf::from(requested);
-        checked_paths.push(path.clone());
-        for candidate in explicit_path_candidates(&path, context) {
-            if !checked_paths.contains(&candidate) {
-                checked_paths.push(candidate.clone());
-            }
-            if is_launchable_file(&candidate, context.platform) {
-                return Ok(Resolution {
-                    requested: Some(requested.to_string()),
-                    path: candidate,
-                    source: "explicit_path",
-                    checked_paths,
-                });
-            }
-        }
-        return Err(ResolutionError {
-            requested: Some(requested.to_string()),
-            checked_paths,
-            reason: if context.platform == Platform::Windows {
-                "the explicitly configured path is unavailable or is not a supported Windows .exe/.com/.bat/.cmd launcher".to_string()
-            } else {
-                "the explicitly configured path is unavailable".to_string()
-            },
-        });
-    }
-
     let command = "codex";
 
-    for path in path_candidates(command, context) {
-        if let Some(resolution) = check_candidate(
-            None,
-            path,
-            "process_path",
-            context.platform,
-            &mut checked_paths,
-        ) {
+    for (path, source) in known_codex_candidates(context) {
+        if let Some(resolution) =
+            check_candidate(path, source, context.platform, &mut checked_paths)
+        {
             return Ok(resolution);
         }
     }
 
-    for (path, source) in known_codex_candidates(context) {
+    for path in path_candidates(command, context) {
         if let Some(resolution) =
-            check_candidate(None, path, source, context.platform, &mut checked_paths)
+            check_candidate(path, "process_path", context.platform, &mut checked_paths)
         {
             return Ok(resolution);
         }
@@ -229,7 +185,6 @@ fn resolve_with_context(
     if search_login_environment {
         if let Some(path) = resolve_from_login_environment(command, context) {
             if let Some(resolution) = check_candidate(
-                None,
                 path,
                 "login_environment",
                 context.platform,
@@ -241,14 +196,12 @@ fn resolve_with_context(
     }
 
     Err(ResolutionError {
-        requested: None,
         checked_paths,
         reason: "it was absent from the process PATH, official CLI install locations, and the user login environment".to_string(),
     })
 }
 
 fn check_candidate(
-    requested: Option<&str>,
     path: PathBuf,
     source: &'static str,
     platform: Platform,
@@ -257,29 +210,31 @@ fn check_candidate(
     if !checked_paths.contains(&path) {
         checked_paths.push(path.clone());
     }
-    is_launchable_file(&path, platform).then(|| Resolution {
-        requested: requested.map(str::to_string),
-        path,
-        source,
-        checked_paths: checked_paths.clone(),
+    (!is_desktop_internal_codex_path(&path) && is_launchable_file(&path, platform)).then(|| {
+        Resolution {
+            path,
+            source,
+            checked_paths: checked_paths.clone(),
+        }
     })
 }
 
-fn explicit_path_candidates(path: &Path, context: &ResolverContext) -> Vec<PathBuf> {
-    if context.platform != Platform::Windows || path.extension().is_some() {
-        return vec![path.to_path_buf()];
+fn is_desktop_internal_codex_path(path: &Path) -> bool {
+    fn matches(path: &Path) -> bool {
+        let normalized = path
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_ascii_lowercase();
+        normalized.contains("/windowsapps/")
+            || normalized.ends_with("/app/resources/codex.exe")
+            || normalized.ends_with(".app/contents/resources/codex")
+            || normalized.contains("/baijimu-appserver-login/codex.exe")
     }
-    context
-        .path_ext
-        .iter()
-        .map(|extension| append_extension(path, extension))
-        .collect()
-}
 
-fn append_extension(path: &Path, extension: &str) -> PathBuf {
-    let mut candidate = path.as_os_str().to_os_string();
-    candidate.push(extension);
-    PathBuf::from(candidate)
+    if matches(path) {
+        return true;
+    }
+    fs::canonicalize(path).is_ok_and(|resolved| matches(&resolved))
 }
 
 fn path_candidates(requested: &str, context: &ResolverContext) -> Vec<PathBuf> {
@@ -569,7 +524,7 @@ mod tests {
         let binary = root.join(".local/bin/codex");
         executable(&binary);
 
-        let resolution = resolve_with_context(None, &context(&root, OsString::new()), false)
+        let resolution = resolve_with_context(&context(&root, OsString::new()), false)
             .expect("resolve user binary");
 
         assert_eq!(resolution.path, binary);
@@ -578,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn process_path_takes_precedence_over_known_locations() {
+    fn official_install_takes_precedence_over_process_path() {
         let root = test_root("path-priority");
         let path_binary = root.join("path-bin/codex");
         let known_binary = root.join(".local/bin/codex");
@@ -586,17 +541,16 @@ mod tests {
         executable(&known_binary);
 
         let resolution = resolve_with_context(
-            None,
             &context(
                 &root,
                 env::join_paths([root.join("path-bin")]).expect("join PATH"),
             ),
             false,
         )
-        .expect("resolve PATH binary");
+        .expect("resolve official binary");
 
-        assert_eq!(resolution.path, path_binary);
-        assert_eq!(resolution.source, "process_path");
+        assert_eq!(resolution.path, known_binary);
+        assert_eq!(resolution.source, "official_user_install");
         fs::remove_dir_all(root).expect("remove test root");
     }
 
@@ -616,7 +570,7 @@ mod tests {
         resolver_context.platform = Platform::Windows;
         resolver_context.local_app_data = Some(local_app_data);
 
-        let resolution = resolve_with_context(None, &resolver_context, false)
+        let resolution = resolve_with_context(&resolver_context, false)
             .expect("resolve managed official Windows CLI");
 
         assert_eq!(resolution.path, binary);
@@ -633,7 +587,6 @@ mod tests {
         executable(&launcher);
 
         let resolution = resolve_with_context(
-            None,
             &windows_context(&root, env::join_paths([&bin]).expect("join PATH")),
             false,
         )
@@ -645,45 +598,6 @@ mod tests {
     }
 
     #[test]
-    fn windows_explicit_extensionless_bridge_path_selects_sibling_cmd() {
-        let root = test_root("windows-explicit-cmd");
-        let shim = root.join("workbuddy/codex");
-        executable(&shim);
-        let launcher = root.join("workbuddy/codex.cmd");
-        executable(&launcher);
-
-        let resolution = resolve_with_context(
-            Some(shim.to_str().expect("utf-8 path")),
-            &windows_context(&root, OsString::new()),
-            false,
-        )
-        .expect("repair old Bridge Agent extensionless path");
-
-        assert_eq!(resolution.path, launcher);
-        assert_eq!(resolution.source, "explicit_path");
-        assert!(resolution.checked_paths.contains(&shim));
-        fs::remove_dir_all(root).expect("remove test root");
-    }
-
-    #[test]
-    fn windows_explicit_extensionless_file_without_launcher_is_rejected() {
-        let root = test_root("windows-explicit-reject");
-        let shim = root.join("workbuddy/codex");
-        executable(&shim);
-
-        let error = resolve_with_context(
-            Some(shim.to_str().expect("utf-8 path")),
-            &windows_context(&root, OsString::new()),
-            false,
-        )
-        .expect_err("extensionless Unix shim must not be launched on Windows");
-
-        assert!(error.reason.contains("supported Windows"));
-        assert!(error.checked_paths.contains(&shim));
-        fs::remove_dir_all(root).expect("remove test root");
-    }
-
-    #[test]
     fn windows_command_extensions_exclude_non_native_script_types() {
         assert_eq!(
             windows_command_extensions_from(Some(".JS;.CMD;.cmd;.EXE;.PS1")),
@@ -691,55 +605,45 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
-    fn resolved_windows_cmd_launcher_can_be_spawned() {
-        let root = test_root("windows-cmd-spawn");
-        let launcher = root.join("codex.cmd");
-        fs::create_dir_all(&root).expect("create root");
-        fs::write(&launcher, b"@echo off\r\necho %1\r\n").expect("write cmd launcher");
-        let context = windows_context(&root, OsString::new());
+    fn desktop_internal_binary_is_rejected_from_process_path() {
+        let root = test_root("desktop-internal");
+        let desktop_bin = root.join("ChatGPT.app/Contents/Resources");
+        let desktop_codex = desktop_bin.join("codex");
+        executable(&desktop_codex);
 
-        let resolution = resolve_with_context(
-            Some(launcher.to_str().expect("utf-8 path")),
-            &context,
+        let result = resolve_with_context(
+            &context(&root, env::join_paths([&desktop_bin]).expect("join PATH")),
             false,
-        )
-        .expect("resolve cmd launcher");
-        let output = Command::new(&resolution.path)
-            .arg("app-server")
-            .output()
-            .expect("spawn cmd launcher");
+        );
 
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "app-server");
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("desktop binary must not resolve")
+            .checked_paths
+            .contains(&desktop_codex));
         fs::remove_dir_all(root).expect("remove test root");
     }
 
+    #[cfg(unix)]
     #[test]
-    fn rejects_non_absolute_advanced_override() {
-        let root = test_root("relative-override");
-        let error = resolve_with_context(Some("codex"), &context(&root, OsString::new()), false)
-            .expect_err("advanced override must be absolute");
+    fn official_location_symlink_to_desktop_internal_binary_is_rejected() {
+        use std::os::unix::fs::symlink;
 
-        assert!(error.reason.contains("absolute path"));
-        assert_eq!(error.requested.as_deref(), Some("codex"));
-    }
+        let root = test_root("desktop-internal-symlink");
+        let desktop_codex = root.join("ChatGPT.app/Contents/Resources/codex");
+        executable(&desktop_codex);
+        let official_link = root.join(".local/bin/codex");
+        fs::create_dir_all(official_link.parent().expect("parent")).expect("create parent");
+        symlink(&desktop_codex, &official_link).expect("create symlink");
 
-    #[test]
-    fn invalid_explicit_path_does_not_fall_back() {
-        let root = test_root("explicit-authoritative");
-        executable(&root.join(".local/bin/codex"));
-        let requested = root.join("missing/codex");
+        let result = resolve_with_context(&context(&root, OsString::new()), false);
 
-        let error = resolve_with_context(
-            Some(requested.to_str().expect("utf-8 path")),
-            &context(&root, OsString::new()),
-            false,
-        )
-        .expect_err("explicit path must be authoritative");
-
-        assert_eq!(error.checked_paths, vec![requested]);
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("desktop symlink must not resolve")
+            .checked_paths
+            .contains(&official_link));
         fs::remove_dir_all(root).expect("remove test root");
     }
 
@@ -752,7 +656,7 @@ mod tests {
         #[cfg(unix)]
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o644)).expect("chmod file");
 
-        let result = resolve_with_context(None, &context(&root, OsString::new()), false);
+        let result = resolve_with_context(&context(&root, OsString::new()), false);
 
         #[cfg(unix)]
         assert!(result.is_err());

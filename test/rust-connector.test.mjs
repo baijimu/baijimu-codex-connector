@@ -1,18 +1,31 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const root = resolve(__dirname, "..");
 const cli = join(root, "target", "debug", "baijimu-connector-codex");
 const fakeCodex = join(__dirname, "fake-codex-app-server.mjs");
+const originalHome = process.env.HOME;
+const fakeCodexHome = mkdtempSync(join(tmpdir(), "codex-rust-test-home-"));
+const fakeCodexBin = join(fakeCodexHome, ".local", "bin");
+mkdirSync(fakeCodexBin, { recursive: true });
+symlinkSync(process.execPath, join(fakeCodexBin, "codex"));
+if (originalHome) {
+  process.env.CARGO_HOME ||= join(originalHome, ".cargo");
+  process.env.RUSTUP_HOME ||= join(originalHome, ".rustup");
+}
+process.env.HOME = fakeCodexHome;
+process.env.PATH = `${fakeCodexBin}${delimiter}${process.env.PATH || ""}`;
+process.on("exit", () => rmSync(fakeCodexHome, { recursive: true, force: true }));
 
 async function freePort() {
   const { createServer } = await import("node:net");
@@ -113,8 +126,6 @@ test("host-managed foreground runtime records and safely stops its verified PID"
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
   ], {
     cwd: root,
     stdio: ["ignore", "pipe", "pipe"],
@@ -209,8 +220,6 @@ test("rust connector forwards Codex app-server calls", async () => {
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -339,7 +348,7 @@ test("rust connector finds the installer-managed Codex binary without a GUI PATH
     assert.equal(threads.data.result.data[0].id, "thr_listed");
 
     const status = await postJson(port, "/invoke/status");
-    assert.equal(status.data.appServer.requestedCodexBinary, null);
+    assert.equal(status.data.appServer.requestedCodexBinary, undefined);
     assert.equal(status.data.appServer.codexBinary, installedCodex);
     assert.equal(status.data.appServer.codexBinaryResolution.resolved, installedCodex);
     assert.equal(
@@ -354,49 +363,19 @@ test("rust connector finds the installer-managed Codex binary without a GUI PATH
   }
 });
 
-test("rust connector reports an actionable error for an invalid explicit Codex binary", async () => {
+test("rust connector rejects the removed Codex binary override option", () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
-  const port = await freePort();
-  const rootHome = await mkdtemp(join(tmpdir(), "codex-binary-error-"));
-  const connectorHome = join(rootHome, "connector-data");
-  const missingCodex = join(rootHome, "missing", "codex");
-  const proc = spawn(cli, [
+  const result = spawnSync(cli, [
     "start",
-    "--port",
-    String(port),
     "--codex-binary",
-    missingCodex,
+    join(tmpdir(), "removed-codex-override"),
   ], {
     cwd: root,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      HOME: rootHome,
-      BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
-      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
-    },
+    encoding: "utf8",
+    env: process.env,
   });
-
-  try {
-    await waitForHealth(port);
-    const response = await fetch(`http://127.0.0.1:${port}/invoke/listThreads`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ limit: 1 }),
-    });
-    const payload = await response.json();
-    assert.equal(response.status, 500);
-    assert.equal(payload.error.code, "CODEX_BINARY_NOT_FOUND");
-    assert.match(payload.error.message, /CODEX_CONNECTOR_CODEX_BINARY/);
-    assert.deepEqual(payload.error.data.checkedPaths, [missingCodex]);
-
-    const status = await postJson(port, "/invoke/status");
-    assert.equal(status.data.appServer.codexBinaryResolution.resolved, null);
-    assert.match(status.data.appServer.codexBinaryResolution.error, /not found/);
-  } finally {
-    await stopConnector(proc, port);
-    await rm(rootHome, { recursive: true, force: true });
-  }
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /no longer supported/);
 });
 
 test("rust connector lists Codex projects and falls back for turns", async () => {
@@ -422,8 +401,6 @@ test("rust connector lists Codex projects and falls back for turns", async () =>
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -491,8 +468,6 @@ test("rust connector resolves current Codex project IDs to their real roots", as
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -600,7 +575,7 @@ test("rust connector restores the original Codex environment after an isolated B
   }));
 
   const proc = spawn(cli, [
-    "start", "--port", String(port), "--codex-binary", process.execPath,
+    "start", "--port", String(port),
     "--codex-args", JSON.stringify([fakeCodex]),
   ], {
     cwd: root,
@@ -657,8 +632,6 @@ test("rust connector daemon mode writes pid file", async () => {
       "--daemon",
       "--port",
       String(port),
-      "--codex-binary",
-      process.execPath,
       "--codex-args",
       JSON.stringify([fakeCodex]),
     ], {

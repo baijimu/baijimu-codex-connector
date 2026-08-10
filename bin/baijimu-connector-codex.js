@@ -3,15 +3,14 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const VERSION = "0.4.1";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 18110;
-const DEFAULT_CODEX_BINARY = "codex";
 const DEFAULT_LISTEN = "stdio://";
 const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
 const MAX_EVENTS = 1000;
@@ -25,6 +24,68 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageRoot = resolve(__dirname, "..");
 
+function isDesktopInternalCodex(path) {
+  const matches = (value) => {
+    const normalized = value.replaceAll("\\", "/").toLowerCase();
+    return normalized.includes("/windowsapps/")
+      || normalized.endsWith("/app/resources/codex.exe")
+      || normalized.endsWith(".app/contents/resources/codex")
+      || normalized.includes("/baijimu-appserver-login/codex.exe");
+  };
+  if (matches(path)) return true;
+  try {
+    return matches(realpathSync(path));
+  } catch {
+    return false;
+  }
+}
+
+function isLaunchable(path) {
+  try {
+    if (!statSync(path).isFile() || isDesktopInternalCodex(path)) return false;
+    if (process.platform !== "win32") accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveCodexBinary() {
+  const userHome = process.env.HOME || process.env.USERPROFILE || homedir();
+  const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
+  const candidates = [[join(userHome, ".local", "bin", binaryName), "official user install"]];
+  if (process.platform === "darwin") {
+    candidates.push(["/opt/homebrew/bin/codex", "official system install"]);
+    candidates.push(["/usr/local/bin/codex", "official system install"]);
+  } else if (process.platform === "linux") {
+    candidates.push(["/usr/local/bin/codex", "official system install"]);
+    candidates.push(["/usr/bin/codex", "official system install"]);
+    candidates.push(["/snap/bin/codex", "official system install"]);
+  } else if (process.platform === "win32" && process.env.LOCALAPPDATA) {
+    const statePath = join(process.env.LOCALAPPDATA, "OpenAI", "Codex", "cli", "current.json");
+    try {
+      const managed = JSON.parse(readFileSync(statePath, "utf8").replace(/^\uFEFF/, ""));
+      if (isAbsolute(managed.binaryPath || "")) {
+        candidates.push([managed.binaryPath, "Connector-managed official install"]);
+      }
+    } catch {
+      // Continue with PATH discovery when the managed state does not exist.
+    }
+  }
+  const pathExtensions = process.platform === "win32"
+    ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";")
+    : [""];
+  for (const directory of (process.env.PATH || "").split(delimiter).filter(Boolean)) {
+    for (const extension of pathExtensions) {
+      candidates.push([join(directory, `codex${extension}`), "process PATH"]);
+    }
+  }
+  for (const [candidate] of candidates) {
+    if (isLaunchable(candidate)) return candidate;
+  }
+  throw new Error("Codex CLI was not found or is not executable. Install the official Codex CLI in a standard install location or the user login environment.");
+}
+
 class HttpError extends Error {
   constructor(statusCode, message) {
     super(message);
@@ -34,7 +95,7 @@ class HttpError extends Error {
 
 class CodexAppServerClient {
   constructor(options = {}) {
-    this.codexBinary = options.codexBinary || DEFAULT_CODEX_BINARY;
+    this.codexBinary = resolveCodexBinary();
     this.listen = options.listen || DEFAULT_LISTEN;
     this.extraArgs = options.extraArgs || [];
     this.requestTimeoutMs = options.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS;
@@ -302,6 +363,9 @@ function parseArgs(argv) {
       continue;
     }
     const [key, inlineValue] = arg.slice(2).split("=", 2);
+    if (key === "codex-binary") {
+      throw new HttpError(2, "--codex-binary is no longer supported; Codex CLI discovery is automatic");
+    }
     if (["daemon", "help", "version"].includes(key)) {
       options[key] = true;
       continue;
@@ -351,7 +415,6 @@ function serverOptions(options) {
   return {
     host: options.host || process.env.CODEX_CONNECTOR_HOST || DEFAULT_HOST,
     port: Number(options.port || process.env.CODEX_CONNECTOR_PORT || DEFAULT_PORT),
-    codexBinary: options.codexBinary || process.env.CODEX_CONNECTOR_CODEX_BINARY || DEFAULT_CODEX_BINARY,
     listen: options.listen || process.env.CODEX_CONNECTOR_LISTEN || DEFAULT_LISTEN,
     extraArgs: options.codexArgs
       ? JSON.parse(options.codexArgs)
@@ -416,8 +479,6 @@ async function daemonize(options) {
     options.host,
     "--port",
     String(options.port),
-    "--codex-binary",
-    options.codexBinary,
     "--listen",
     options.listen,
   ];
@@ -1172,14 +1233,13 @@ function printHelp() {
   console.log(`baijimu-connector-codex ${VERSION}
 
 Usage:
-  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--codex-binary codex] [--listen stdio://] [--daemon]
+  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--listen stdio://] [--daemon]
   baijimu-connector-codex status
   baijimu-connector-codex stop
   baijimu-connector-codex --version
 
 Environment:
   CODEX_CONNECTOR_PORT=18110
-  CODEX_CONNECTOR_CODEX_BINARY=codex
   CODEX_CONNECTOR_CODEX_ARGS='["app-server","--listen","stdio://"]'
 `);
 }

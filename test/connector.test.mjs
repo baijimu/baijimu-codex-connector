@@ -1,18 +1,31 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { execFileSync, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const root = resolve(__dirname, "..");
 const cli = join(root, "bin", "baijimu-connector-codex.js");
 const fakeCodex = join(__dirname, "fake-codex-app-server.mjs");
+const originalHome = process.env.HOME;
+const fakeCodexHome = mkdtempSync(join(tmpdir(), "codex-test-home-"));
+const fakeCodexBin = join(fakeCodexHome, ".local", "bin");
+mkdirSync(fakeCodexBin, { recursive: true });
+symlinkSync(process.execPath, join(fakeCodexBin, "codex"));
+if (originalHome) {
+  process.env.CARGO_HOME ||= join(originalHome, ".cargo");
+  process.env.RUSTUP_HOME ||= join(originalHome, ".rustup");
+}
+process.env.HOME = fakeCodexHome;
+process.env.PATH = `${fakeCodexBin}${delimiter}${process.env.PATH || ""}`;
+process.on("exit", () => rmSync(fakeCodexHome, { recursive: true, force: true }));
 
 async function freePort() {
   const { createServer } = await import("node:net");
@@ -60,8 +73,6 @@ test("forwards thread and turn calls to Codex app-server", async () => {
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -135,8 +146,6 @@ test("forwards thread and app list APIs to Codex app-server", async () => {
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -226,8 +235,6 @@ test("flattens wrapped Codex thread list items", async () => {
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -298,8 +305,6 @@ test("lists Codex projects separately from sessions", async () => {
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -376,8 +381,6 @@ test("resolves current Codex project IDs to their real roots", async () => {
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -429,8 +432,6 @@ test("falls back to readThread when paginated turn listing is unavailable", asyn
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -488,8 +489,6 @@ test("serializes first app-server initialization across concurrent requests", as
     "start",
     "--port",
     String(port),
-    "--codex-binary",
-    process.execPath,
     "--codex-args",
     JSON.stringify([fakeCodex]),
   ], {
@@ -541,8 +540,6 @@ test("daemon mode starts with file descriptor backed logs", async () => {
       "--daemon",
       "--port",
       String(port),
-      "--codex-binary",
-      process.execPath,
       "--codex-args",
       JSON.stringify([fakeCodex]),
     ], {

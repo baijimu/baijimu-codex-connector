@@ -59,8 +59,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
     minimumVersion: "0.2.40",
     capabilities: ["connector.process.host-managed.v1"],
   });
-  assert.equal(manifest.configSchema.properties.codexBinary.default, undefined);
-  assert.match(manifest.configSchema.properties.codexBinary.description, /Advanced override only/);
+  assert.equal(manifest.configSchema.properties.codexBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
   assert.match(html, /src="\.\/app\.js"/);
   assert.match(html, /href="\.\/styles\.css"/);

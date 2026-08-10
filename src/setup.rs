@@ -304,8 +304,7 @@ fn run_install(
     if !credential::codex_ready_for_workspace(workspace_id) {
         anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
     }
-    let requested = codex_cli.map(|path| path.to_string_lossy().into_owned());
-    let resolution = codex_binary::resolve(requested.as_deref())
+    let resolution = codex_binary::resolve()
         .map_err(|error| anyhow::anyhow!("安装脚本执行成功，但 Codex CLI 回查失败：{error}"))?;
     if verify_app_server_capability {
         let inspection = codex_binary::inspect(&resolution);
