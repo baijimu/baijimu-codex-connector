@@ -48,6 +48,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
     "listCodexTurns",
     "readCodexSession",
     "recentCodexEvents",
+    "setCodexThreadReadState",
     "setupRetry",
     "setupState",
     "startCodexSession",

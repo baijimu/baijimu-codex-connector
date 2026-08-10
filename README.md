@@ -73,6 +73,7 @@ businessId:
 - `listThreads`
 - `searchThreads`
 - `readThread`
+- `setThreadReadState`
 - `listApps`
 - `startThread`
 - `resumeThread`
@@ -97,6 +98,7 @@ The application exposes authenticated setup and status operations for Bridge Age
 The local management token is not a Baijimu workspace token or an LLM credential. It only authenticates the loopback call between Bridge Agent and this application.
 
 Thread list responses include the Codex `cwd`, source, git metadata, title, preview, and pagination cursors so callers can choose the right workspace before starting or resuming work.
+They also normalize `threadRuntimeStatus`, `activeFlags`, `isInProgress`, `latestTurnStatus`, and `hasUnreadTurn`. Unread state is seeded from the Codex desktop host state and advanced by Connector-observed thread updates; callers clear or restore it explicitly with `setThreadReadState`.
 
 The project checkout operation delegates to the managed `baijimu project checkout`
 command. It creates or validates a stable local checkout under

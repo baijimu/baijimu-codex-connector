@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.32",
+  "version": "1.2.33",
   "description": "Initialize and configure Codex, point the user-level CODEX_HOME at an isolated Baijimu workspace or restore its original value, and manage local Codex sessions.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.32"
+    "revision": "v1.2.33"
   },
   "runtime": {
     "type": "process",
@@ -73,6 +73,10 @@
         "method": "POST",
         "path": "/management/v1/codex/sessions/read"
       },
+      "setCodexThreadReadState": {
+        "method": "POST",
+        "path": "/management/v1/codex/sessions/read-state"
+      },
       "startCodexSession": {
         "method": "POST",
         "path": "/management/v1/codex/sessions/start"
@@ -108,9 +112,9 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "移除 codexBinary、--codex-binary 与 CODEX_CONNECTOR_CODEX_BINARY 覆盖接口，Codex CLI 统一由 Connector 自动发现。",
-    "每次 app-server 启动优先检查标准官方安装位置，再检查进程 PATH 与用户登录环境。",
-    "明确拒绝桌面应用包内置的 Codex CLI，避免继承 Bridge Agent PATH 后误选不可独立运行的副本。"
+    "会话列表统一返回 threadRuntimeStatus、activeFlags、isInProgress、latestTurnStatus 与 hasUnreadTurn。",
+    "会话未读状态由 Codex Desktop 状态和 Connector 观察到的 turn/completed 事件共同驱动。",
+    "新增 setThreadReadState，供平台应用在成功打开会话后显式确认已读。"
   ],
   "configSchema": {
     "type": "object",
@@ -146,6 +150,11 @@
       "name": "codex.thread.read",
       "risk": "medium",
       "description": "Read, list, and search local Codex thread metadata and streamed output."
+    },
+    {
+      "name": "codex.thread.read-state.write",
+      "risk": "medium",
+      "description": "Mark one local Codex thread read or unread for Connector session management."
     },
     {
       "name": "codex.app.read",
@@ -186,7 +195,7 @@
     },
     {
       "name": "listThreads",
-      "description": "List local Codex threads with cwd, source, git metadata, title, preview, and pagination.",
+      "description": "List local Codex threads with project metadata, runtime/turn status, unread state, and pagination.",
       "path": "/invoke/listThreads",
       "httpMethod": "POST",
       "timeoutSecs": 30,
@@ -330,7 +339,7 @@
     },
     {
       "name": "listSessions",
-      "description": "List local Codex sessions with cwd, source, git metadata, title, preview, and pagination.",
+      "description": "List local Codex sessions with project metadata, runtime/turn status, unread state, and pagination.",
       "path": "/invoke/listSessions",
       "httpMethod": "POST",
       "timeoutSecs": 30,
@@ -500,6 +509,37 @@
           "params": {
             "type": "object",
             "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "setThreadReadState",
+      "description": "Mark one local Codex thread read or unread and persist the observed thread revision.",
+      "path": "/invoke/setThreadReadState",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "threadId",
+          "hasUnreadTurn"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "hasUnreadTurn": {
+            "type": "boolean"
+          },
+          "observedUpdatedAt": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false

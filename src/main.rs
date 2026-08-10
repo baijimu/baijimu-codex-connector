@@ -4,6 +4,7 @@ mod desktop;
 mod json_compat;
 mod project_checkout;
 mod setup;
+mod thread_state;
 mod user_environment;
 
 use rand::{rngs::OsRng, RngCore};
@@ -577,6 +578,13 @@ impl CodexClient {
     }
 
     fn push_event(&mut self, method: &str, params: Value) {
+        if method == "turn/completed" {
+            if let Some(thread_id) = params.get("threadId").and_then(Value::as_str) {
+                if let Err(error) = thread_state::mark_thread_unread(&connector_home(), thread_id) {
+                    eprintln!("failed to persist unread Codex thread {thread_id}: {error}");
+                }
+            }
+        }
         self.event_sequence += 1;
         let event = ConnectorEvent {
             sequence: self.event_sequence,
@@ -1297,6 +1305,9 @@ fn handle_management(
         ("POST", "/management/v1/codex/sessions/read") => {
             handle_management_invoke("/invoke/readThread", body, state)
         }
+        ("POST", "/management/v1/codex/sessions/read-state") => {
+            handle_management_invoke("/invoke/setThreadReadState", body, state)
+        }
         ("POST", "/management/v1/codex/sessions/start") => {
             handle_management_invoke("/invoke/startThread", body, state)
         }
@@ -1502,6 +1513,40 @@ fn handle_invoke(path: &str, body: &Value, client: &mut CodexClient) -> Result<V
             params["threadId"] = Value::String(thread_id);
             Ok(json!({"result": client.request("thread/read", params, timeout_ms(body))?}))
         }
+        "/invoke/setThreadReadState" => {
+            let Some(thread_id) = string_param(body, "threadId") else {
+                return Err(HttpError::new(400, "threadId is required"));
+            };
+            let Some(has_unread_turn) = body
+                .get("hasUnreadTurn")
+                .or_else(|| body.pointer("/params/hasUnreadTurn"))
+                .and_then(Value::as_bool)
+            else {
+                return Err(HttpError::new(400, "hasUnreadTurn is required"));
+            };
+            let mut observed_updated_at = body
+                .get("observedUpdatedAt")
+                .or_else(|| body.pointer("/params/observedUpdatedAt"))
+                .cloned();
+            if observed_updated_at.is_none() {
+                let result = client.request(
+                    "thread/read",
+                    json!({"threadId": thread_id, "includeTurns": false}),
+                    timeout_ms(body),
+                )?;
+                observed_updated_at = result.pointer("/thread/updatedAt").cloned();
+            }
+            client.refresh_active_home();
+            let result = thread_state::set_thread_read_state(
+                &connector_home(),
+                &client.active_codex_home,
+                &thread_id,
+                has_unread_turn,
+                observed_updated_at,
+            )
+            .map_err(HttpError::internal)?;
+            Ok(json!({"result": result}))
+        }
         "/invoke/listThreadTurns" => list_thread_turns(body, client),
         "/invoke/listApps" => {
             let params = merge_params(body, &["cursor", "limit", "threadId", "forceRefetch"]);
@@ -1618,9 +1663,12 @@ fn list_threads(body: &Value, client: &mut CodexClient) -> Result<Value, HttpErr
     }
     let mut result = client.request("thread/list", params, timeout_ms(body))?;
     if let Some(data) = result.get_mut("data").and_then(Value::as_array_mut) {
-        for item in data {
+        for item in data.iter_mut() {
             *item = normalize_thread_list_item(item.clone());
         }
+        client.refresh_active_home();
+        thread_state::enrich_thread_list(&connector_home(), &client.active_codex_home, data)
+            .map_err(HttpError::internal)?;
     }
     Ok(json!({"result": result}))
 }
