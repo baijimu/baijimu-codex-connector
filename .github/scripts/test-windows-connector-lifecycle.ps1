@@ -121,7 +121,7 @@ function Stop-TestConnector {
   try {
     if (-not $Context.Process.HasExited) {
       & $BinaryPath stop --port "$($Context.Port)" | Out-Null
-      if (-not $Context.Process.WaitForExit(10_000)) {
+      if (-not $Context.Process.WaitForExit(10000)) {
         throw "Connector process did not stop within 10 seconds"
       }
     }
