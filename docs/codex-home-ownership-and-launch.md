@@ -3,7 +3,7 @@
 ## 状态
 
 - 设计状态：已确认
-- 实现状态：1.2.37 已实现首次初始化、所有权保护和显式启动主流程
+- 实现状态：1.2.38 已实现首次初始化、所有权保护、显式启动主流程和管理令牌启动前置契约
 - 适用组件：`baijimu-connector-codex`、Bridge Agent 本地应用启动与升级流程
 
 本文定义 Codex 状态目录的所有权、首次初始化、百积木内启动、外部 Codex 行为以及显式切换规则。实现不得仅依据目录是否存在做覆盖决定，也不得把 Windows 用户环境广播放入 Connector 启动或健康检查路径。
@@ -14,7 +14,7 @@
 2. 用户没有既有 Codex 状态时，外部 Codex 也可以自然使用百积木初始化的默认状态。
 3. 已有 Codex 用户的登录、配置、会话、MCP 和自定义目录不被覆盖。
 4. 百积木启动的 Codex 始终使用明确选定的状态目录，不依赖 Explorer、终端或全局环境刷新。
-5. Connector 启动、`/healthz` 和 `/readyz` 不依赖桌面应用、用户环境广播或其他 GUI 进程响应。
+5. Connector 必须在独占回环监听端口后同步创建并回读管理令牌，才能报告启动成功并开始提供 `/healthz`；后续初始化、`/readyz` 不依赖桌面应用、用户环境广播或其他 GUI 进程响应。
 
 ## 基本事实
 
@@ -92,12 +92,14 @@ Connector 必须分别管理以下三类状态，不得相互推断：
 用户点击 Bridge Agent 中的“启动应用”后：
 
 1. Bridge Agent 启动并托管 Connector 进程。
-2. Connector 绑定回环地址并提供 `/healthz`。
-3. Connector 加载管理令牌、所有权元数据和当前百积木工作区档案。
-4. Connector 根据上述状态判定选择本次使用的 Codex Home。
-5. Connector 达到核心可服务状态后，`/readyz` 返回成功。
-6. 当会话能力需要 `codex app-server` 时，Connector 以子进程环境显式传入选定的 `CODEX_HOME`。
-7. 子进程退出或工作区切换时，由 Connector 回收并按新档案重新启动。
+2. Connector 独占绑定回环地址，但尚不接收 HTTP 请求。
+3. Connector 在私有数据目录中加载或原子创建管理令牌，并回读确认文件内容与进程内值一致；失败时直接退出，不得报告启动成功。
+4. Connector 报告启动成功并开始提供 `/healthz`，此时 Bridge Agent 必须已经能够读取管理令牌。
+5. Connector 加载所有权元数据和当前百积木工作区档案。
+6. Connector 根据上述状态判定选择本次使用的 Codex Home。
+7. Connector 达到核心可服务状态后，`/readyz` 返回成功。
+8. 当会话能力需要 `codex app-server` 时，Connector 以子进程环境显式传入选定的 `CODEX_HOME`。
+9. 子进程退出或工作区切换时，由 Connector 回收并按新档案重新启动。
 
 启动流程禁止：
 
@@ -139,7 +141,7 @@ Connector 必须分别管理以下三类状态，不得相互推断：
 
 ## 健康检查契约
 
-- `/healthz`：进程已存活并能响应 HTTP，不依赖凭证初始化或桌面状态。
+- `/healthz`：进程已存活、管理令牌已落盘且能响应 HTTP，不依赖工作区凭证初始化或桌面状态。
 - `/readyz`：Connector 的管理令牌、元数据和核心请求处理已经可用。
 - 首次凭证安装、官方 Codex 安装和桌面启动属于可观察的 setup 状态，不得成为 Connector 进程存活的前置条件。
 - Windows 环境广播不属于 health 或 readiness。

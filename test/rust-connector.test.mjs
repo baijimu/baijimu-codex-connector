@@ -134,6 +134,11 @@ test("host-managed foreground runtime records and safely stops its verified PID"
 
   try {
     await waitForHealth(port);
+    const managementToken = (await readFile(
+      join(connectorHome, "management-token"),
+      "utf8",
+    )).trim();
+    assert.ok(managementToken.length >= 32);
     const liveness = await (await fetch(`http://127.0.0.1:${port}/healthz`)).json();
     assert.equal(liveness.ok, true);
     assert.equal(liveness.status.startup.status, "initializing");
@@ -176,6 +181,46 @@ test("host-managed foreground runtime records and safely stops its verified PID"
   }
 });
 
+test("a competing startup cannot rotate management state before acquiring the port", async () => {
+  execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
+  const port = await freePort();
+  const activeHome = await mkdtemp(join(tmpdir(), "codex-active-instance-"));
+  const competingHome = await mkdtemp(join(tmpdir(), "codex-competing-instance-"));
+  const env = {
+    ...process.env,
+    BAIJIMU_CONNECTOR_DATA_DIR: activeHome,
+    CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    CODEX_CONNECTOR_TEST_SKIP_RECONCILE: "1",
+  };
+  const proc = spawn(cli, ["start", "--port", String(port)], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env,
+  });
+
+  try {
+    await waitForHealth(port);
+    const result = spawnSync(cli, ["start", "--port", String(port)], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...env,
+        BAIJIMU_CONNECTOR_DATA_DIR: competingHome,
+      },
+    });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.stderr.trim().length > 0);
+    await assert.rejects(
+      readFile(join(competingHome, "management-token"), "utf8"),
+      { code: "ENOENT" },
+    );
+  } finally {
+    await stopConnector(proc, port);
+    await rm(activeHome, { recursive: true, force: true });
+    await rm(competingHome, { recursive: true, force: true });
+  }
+});
+
 test("startup failures keep liveness online and expose the readiness root cause", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
   const port = await freePort();
@@ -195,6 +240,11 @@ test("startup failures keep liveness online and expose the readiness root cause"
 
   try {
     await waitForHealth(port);
+    const managementToken = (await readFile(
+      join(connectorHome, "management-token"),
+      "utf8",
+    )).trim();
+    assert.ok(managementToken.length >= 32);
     const liveness = await fetch(`http://127.0.0.1:${port}/healthz`);
     assert.equal(liveness.status, 200);
 

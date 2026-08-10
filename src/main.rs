@@ -84,7 +84,7 @@ struct AppState {
     client: Mutex<CodexClient>,
     credential_management: Mutex<()>,
     setup: setup::SetupManager,
-    management_token: Mutex<Option<String>>,
+    management_token: String,
     startup: StartupReadiness,
 }
 
@@ -928,8 +928,8 @@ fn server_options(parsed: &ParsedArgs) -> Result<ServerOptions, String> {
 fn start_server(options: ServerOptions) -> Result<(), String> {
     let listener = TcpListener::bind((options.host.as_str(), options.port))
         .map_err(|error| error.to_string())?;
-    fs::create_dir_all(connector_home())
-        .map_err(|error| format!("failed to prepare connector data directory: {error}"))?;
+    let management_token = load_or_create_management_token()
+        .map_err(|error| format!("failed to initialize management token: {error}"))?;
     fs::write(pid_path(), format!("{}\n", std::process::id()))
         .map_err(|error| format!("failed to record connector process id: {error}"))?;
     println!(
@@ -941,11 +941,11 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         client: Mutex::new(CodexClient::new(options, EventPublisher::from_env())),
         credential_management: Mutex::new(()),
         setup,
-        management_token: Mutex::new(None),
+        management_token,
         startup: StartupReadiness::initializing(),
     });
     let initializing_state = Arc::clone(&state);
-    thread::spawn(move || match initialize_server(&initializing_state) {
+    thread::spawn(move || match initialize_server() {
         Ok(()) => initializing_state.startup.ready(),
         Err(error) => {
             eprintln!("Codex Connector initialization failed: {error}");
@@ -966,7 +966,7 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
     Ok(())
 }
 
-fn initialize_server(state: &AppState) -> Result<(), String> {
+fn initialize_server() -> Result<(), String> {
     if test_control_enabled() {
         if let Ok(delay_ms) = env::var("CODEX_CONNECTOR_TEST_STARTUP_DELAY_MS") {
             let delay_ms = delay_ms
@@ -989,12 +989,6 @@ fn initialize_server(state: &AppState) -> Result<(), String> {
         credential::reconcile_active_user_codex_home()
             .map_err(|error| format!("同步用户级 CODEX_HOME 失败: {error}"))?;
     }
-    let management_token = load_or_create_management_token()?;
-    let mut token = state
-        .management_token
-        .lock()
-        .map_err(|_| "management token lock poisoned".to_string())?;
-    *token = Some(management_token);
     Ok(())
 }
 
@@ -1102,13 +1096,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             if let Some(response) = startup_not_ready_response(&state.startup) {
                 return write_json(&mut stream, 503, &response);
             }
-            let management_token = state
-                .management_token
-                .lock()
-                .map_err(|_| "management token lock poisoned".to_string())?
-                .clone()
-                .ok_or_else(|| "management token unavailable after initialization".to_string())?;
-            if !management_authorized(request.authorization.as_deref(), &management_token) {
+            if !management_authorized(request.authorization.as_deref(), &state.management_token) {
                 (
                     401,
                     json!({"ok": false, "error": {"message": "management authorization required"}}),
@@ -2581,6 +2569,10 @@ fn load_or_create_management_token() -> Result<String, String> {
     #[cfg(unix)]
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
         .map_err(|error| error.to_string())?;
+    let persisted = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    if persisted.trim() != token {
+        return Err("management token read-back did not match the generated value".to_string());
+    }
     Ok(token)
 }
 
