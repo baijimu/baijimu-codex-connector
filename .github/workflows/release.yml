@@ -162,6 +162,14 @@ jobs:
             "$(read_rust_constant WINDOWS_SCRIPT_URL)" \
             "$(read_rust_constant WINDOWS_SCRIPT_SHA256)"
 
+      - name: Upload validated installer scripts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: validated-installer-scripts
+          path: ${{ runner.temp }}/*-installer
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     if: needs.validate.outputs.verify != 'true'
     needs: validate
@@ -184,6 +192,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.sha }}
+
+      - name: Download validated installer scripts
+        if: runner.os == 'Windows'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: validated-installer-scripts
+          path: ${{ runner.temp }}/validated-installer-scripts
 
       - name: Set up Rust
         shell: bash
@@ -292,7 +307,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         timeout-minutes: 5
-        run: .github/scripts/test-windows-installer-atomic-write.ps1
+        run: >
+          .github/scripts/test-windows-installer-atomic-write.ps1
+          -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
 
       - name: Download and run Windows signing tool
         if: runner.os == 'Windows' && needs.validate.outputs.publish == 'true'

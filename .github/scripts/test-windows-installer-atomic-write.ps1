@@ -1,35 +1,23 @@
+param(
+  [Parameter(Mandatory = $true)]
+  [string]$ScriptPath
+)
+
 $ErrorActionPreference = "Stop"
 
 $setupSource = Get-Content -LiteralPath "src/setup.rs" -Raw
-$urlMatch = [regex]::Match(
-  $setupSource,
-  'const WINDOWS_SCRIPT_URL: &str =\s*\r?\n\s*"([^"]+)";'
-)
 $shaMatch = [regex]::Match(
   $setupSource,
   'const WINDOWS_SCRIPT_SHA256: &str =\s*\r?\n\s*"([0-9a-f]{64})";'
 )
-if (-not $urlMatch.Success -or -not $shaMatch.Success) {
-  throw "Unable to read the pinned Windows installer identity from src/setup.rs"
+if (-not $shaMatch.Success) {
+  throw "Unable to read the pinned Windows installer checksum from src/setup.rs"
 }
 
-$scriptPath = Join-Path $env:RUNNER_TEMP "windows-configure-terminal-and-login.ps1"
-& curl.exe `
-  --fail `
-  --location `
-  --silent `
-  --show-error `
-  --retry 6 `
-  --retry-all-errors `
-  --retry-delay 3 `
-  --connect-timeout 15 `
-  --max-time 120 `
-  --output $scriptPath `
-  $urlMatch.Groups[1].Value
-if ($LASTEXITCODE -ne 0) {
-  throw "Unable to download the pinned Windows installer: curl.exe exit $LASTEXITCODE"
+if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+  throw "Validated Windows installer artifact is missing: $ScriptPath"
 }
-$actualSha256 = (Get-FileHash -LiteralPath $scriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$actualSha256 = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualSha256 -ne $shaMatch.Groups[1].Value) {
   throw "Pinned Windows installer SHA-256 mismatch: $actualSha256"
 }
@@ -37,7 +25,7 @@ if ($actualSha256 -ne $shaMatch.Groups[1].Value) {
 $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
-  $scriptPath,
+  $ScriptPath,
   [ref]$tokens,
   [ref]$parseErrors
 )
