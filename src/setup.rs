@@ -26,10 +26,10 @@ const MACOS_SCRIPT_SHA256: &str =
     "0a60334e37593fa95df92b5cf0787b64a9e491ab552b2502d9a195d59a0fe7be";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_URL: &str =
-    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYDA_buIq_8ZIiAzYzcxNmIzYjM0NjY0ODkwYjgyNzUyYzQ1MGRiY2I4OA--";
+    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYDAss.Zq_8ZIiBmY2M2Mjg4ZWMxY2M0ZTM2ODI5Y2JiMzNkNWE1ODE2ZQ--";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_SHA256: &str =
-    "5202dd69f75241199b6a0ae7a064493d522cebbe7d262cba97b03e3933a2666f";
+    "cae52c33802213d48fc7be70a9ee6e9ccc76bda997885f90662ebcada79999e1";
 const SETUP_STATUS_FILE: &str = "setup-status.json";
 #[cfg(target_os = "windows")]
 const WINDOWS_INSTALL_SCRIPT_ENV: &str = "CODEX_CONNECTOR_INSTALL_SCRIPT_PATH";
