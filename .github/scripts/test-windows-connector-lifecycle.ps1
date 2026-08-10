@@ -118,9 +118,17 @@ function Start-TestConnector {
 
 function Stop-TestConnector {
   param([Parameter(Mandatory = $true)]$Context)
+  $stoppedByCommand = $false
   try {
     if (-not $Context.Process.HasExited) {
-      & $BinaryPath stop --port "$($Context.Port)" | Out-Null
+      $stopOutput = & $BinaryPath stop --port "$($Context.Port)" | Out-String
+      if ($LASTEXITCODE -ne 0) {
+        throw "Connector stop command exited with ${LASTEXITCODE}: $stopOutput"
+      }
+      if ($stopOutput -notmatch '"stopped":true') {
+        throw "Connector stop command did not confirm the verified process: $stopOutput"
+      }
+      $stoppedByCommand = $true
       if (-not $Context.Process.WaitForExit(10000)) {
         throw "Connector process did not stop within 10 seconds"
       }
@@ -130,7 +138,7 @@ function Stop-TestConnector {
       $Context.Process.Kill($true)
       $Context.Process.WaitForExit()
     }
-    if ($Context.Process.ExitCode -ne 0) {
+    if (-not $stoppedByCommand -and $Context.Process.ExitCode -ne 0) {
       $stderr = if (Test-Path -LiteralPath $Context.Stderr) {
         Get-Content -LiteralPath $Context.Stderr -Raw
       } else { "" }
