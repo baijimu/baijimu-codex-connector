@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Codex 远程开发</title>
+    <title>Codex 工作区管理</title>
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./app.js"></script>
   </head>
@@ -14,16 +14,11 @@
         <div class="brand-mark" aria-hidden="true">C</div>
         <div class="hero-copy">
           <p class="eyebrow">Codex Local App</p>
-          <h1>Codex 远程开发</h1>
-          <p>在原有 Codex 环境与各个百积木工作区之间安全切换；CODEX_HOME 始终指向当前活动状态目录。</p>
+          <h1>Codex 工作区管理</h1>
+          <p>选择个人环境或百积木工作区并启动 Codex；首次安装自动完成，所有状态目录彼此隔离。</p>
         </div>
-        <button id="refresh-button" class="button secondary" type="button">刷新</button>
+        <button id="refresh-button" class="button secondary" type="button">刷新状态</button>
       </header>
-
-      <nav class="view-tabs" aria-label="Codex 功能">
-        <button class="view-tab active" type="button" data-view="sessions">开发会话</button>
-        <button class="view-tab" type="button" data-view="account">账户与工作区</button>
-      </nav>
 
       <div id="message" class="message" role="status" aria-live="polite" hidden></div>
       <div id="error" class="message error" role="alert" hidden></div>
@@ -32,141 +27,102 @@
       <div id="auth-switch-modal" class="modal-backdrop" hidden>
         <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-switch-modal-title">
           <div class="modal-heading">
-            <div>
-              <p class="eyebrow">确认切换</p>
-              <h2 id="auth-switch-modal-title">切换账号与工作区</h2>
-            </div>
+            <p class="eyebrow">确认启动</p>
+            <h2 id="auth-switch-modal-title">启动 Codex</h2>
           </div>
           <p id="auth-switch-modal-message" class="modal-message"></p>
           <div class="modal-actions">
             <button id="auth-switch-cancel" class="button secondary" type="button">取消</button>
-            <button id="auth-switch-confirm" class="button primary" type="button">确认切换</button>
+            <button id="auth-switch-confirm" class="button primary" type="button">确认启动</button>
           </div>
         </section>
       </div>
 
-      <section id="sessions-view" class="view-panel">
-        <div class="session-toolbar panel">
+      <section class="panel active-panel" aria-labelledby="active-title">
+        <div class="section-heading active-heading">
           <div>
-            <p class="eyebrow">本机 Codex</p>
-            <h2>开发会话</h2>
-            <p>最近活动的会话优先显示；新会话会绑定明确的项目目录。</p>
+            <p class="eyebrow">当前生效</p>
+            <h2 id="active-title">Codex 环境</h2>
           </div>
-          <button id="new-session-button" class="button primary" type="button">新建会话</button>
+          <div class="active-actions">
+            <span id="credential-badge" class="status-badge neutral">读取中</span>
+            <button id="open-codex-button" class="button primary" type="button">打开 Codex</button>
+          </div>
         </div>
+        <dl class="status-grid">
+          <div><dt>授权模式</dt><dd id="auth-mode">—</dd></div>
+          <div><dt>当前身份</dt><dd id="active-workspace">—</dd></div>
+          <div class="path-status"><dt>状态目录</dt><dd id="active-codex-home">—</dd></div>
+          <div><dt>模型</dt><dd id="active-model">—</dd></div>
+          <div><dt>Codex 配置</dt><dd id="codex-configured">—</dd></div>
+          <div><dt>初始化状态</dt><dd id="setup-status">—</dd></div>
+        </dl>
+      </section>
 
-        <div class="session-workbench">
-          <aside class="session-sidebar panel">
-            <label class="field">
-              <span>项目</span>
-              <select id="session-project-filter">
-                <option value="">全部项目</option>
-              </select>
-            </label>
-            <div id="session-list" class="session-list">
-              <div class="empty-state">正在读取会话…</div>
-            </div>
-            <button id="load-more-sessions" class="button secondary" type="button" hidden>加载更多</button>
-          </aside>
+      <section id="switch-progress" class="panel operation-panel" aria-live="polite" hidden>
+        <div class="operation-heading">
+          <span class="operation-spinner" aria-hidden="true"></span>
+          <div>
+            <strong>正在准备并启动 Codex</strong>
+            <p id="switch-progress-message">停止当前进程、选择工作区状态目录，并重新启动验证。</p>
+          </div>
+        </div>
+        <ol class="operation-steps" aria-label="Codex 启动步骤">
+          <li>停止当前 Codex</li>
+          <li>选择工作区状态目录</li>
+          <li>重新启动并验证</li>
+        </ol>
+      </section>
 
-          <section class="session-main panel">
-            <div class="session-heading">
-              <div>
-                <p id="session-path" class="eyebrow">请选择或新建会话</p>
-                <h2 id="session-title">Codex 会话</h2>
-              </div>
-              <span id="session-status" class="status-badge neutral">就绪</span>
-            </div>
-            <div id="conversation" class="conversation">
-              <div class="empty-state">从左侧选择历史会话，或点击“新建会话”。</div>
-            </div>
-            <form id="prompt-form" class="prompt-form">
-              <div class="prompt-settings">
-                <label class="field">
-                  <span>项目目录</span>
-                  <input id="session-cwd" list="session-project-options" placeholder="/path/to/project" required />
-                  <datalist id="session-project-options"></datalist>
-                </label>
-                <label class="field model-field">
-                  <span>模型</span>
-                  <input id="session-model" value="gpt-5.6-sol" required />
-                </label>
-              </div>
-              <label class="field">
-                <span>开发指令</span>
-                <textarea id="prompt-input" rows="4" placeholder="描述要完成的开发工作…" required></textarea>
-              </label>
-              <div class="prompt-actions">
-                <span id="prompt-hint">发送首条指令时会创建会话并立即开始执行。</span>
-                <div>
-                  <button id="interrupt-button" class="button secondary" type="button" hidden>停止</button>
-                  <button id="send-button" class="button primary" type="submit">发送</button>
-                </div>
-              </div>
-            </form>
-          </section>
+      <section class="panel workspace-panel" aria-labelledby="profiles-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">工作区</p>
+            <h2 id="profiles-title">选择工作区并启动 Codex</h2>
+          </div>
+          <p class="section-note">当前环境优先显示。启动会保留所有状态目录，不会删除其他工作区或原有 Codex 数据。</p>
+        </div>
+        <div id="auth-profile-list" class="profile-list">
+          <div class="empty-state">正在读取可用工作区…</div>
         </div>
       </section>
 
-      <section id="account-view" class="view-panel" hidden>
-        <section class="panel active-panel" aria-labelledby="active-title">
-          <div class="section-heading">
-            <div><p class="eyebrow">当前生效</p><h2 id="active-title">Codex 模型凭证</h2></div>
-            <span id="credential-badge" class="status-badge neutral">读取中</span>
+      <section class="panel" aria-labelledby="setup-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">安装与修复</p>
+            <h2 id="setup-title">本机 Codex</h2>
           </div>
-          <dl class="status-grid">
-            <div><dt>授权模式</dt><dd id="auth-mode">—</dd></div>
-            <div><dt>当前身份</dt><dd id="active-workspace">—</dd></div>
-            <div><dt>模型</dt><dd id="active-model">—</dd></div>
-            <div><dt>Codex 配置</dt><dd id="codex-configured">—</dd></div>
-            <div><dt>初始化状态</dt><dd id="setup-status">—</dd></div>
-          </dl>
-        </section>
-
-        <section class="panel" aria-labelledby="profiles-title">
-          <div class="section-heading">
-            <div><p class="eyebrow">授权档案</p><h2 id="profiles-title">切换账号与工作区</h2></div>
-            <p class="section-note">原有 CODEX_HOME 只用于退出企业模式和失败回滚；每个百积木工作区分别保存凭证、配置与会话。</p>
+          <p class="section-note">首次使用会自动安装并配置 Codex；失败时可查看准确步骤并重新修复。</p>
+        </div>
+        <p id="setup-message" class="section-note setup-message">正在读取初始化状态…</p>
+        <div id="setup-progress" class="setup-progress" hidden>
+          <div class="setup-progress-heading">
+            <strong id="setup-progress-label">等待初始化</strong>
+            <span id="setup-progress-percent">0%</span>
           </div>
-          <div id="auth-profile-list" class="profile-list">
-            <div class="empty-state">正在读取授权档案…</div>
+          <div
+            id="setup-progress-track"
+            class="setup-progress-track"
+            role="progressbar"
+            aria-label="Codex 初始化进度"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <span id="setup-progress-bar" class="setup-progress-bar" style="width: 0%"></span>
           </div>
-        </section>
-
-        <section class="panel" aria-labelledby="setup-title">
-          <div class="section-heading">
-            <div><p class="eyebrow">应用初始化</p><h2 id="setup-title">本机 Codex</h2></div>
-            <p class="section-note">首次使用会自动下载安装并配置 Codex；失败时可在这里查看步骤并修复，且不会删除或覆盖原有状态目录。</p>
-          </div>
-          <p id="setup-message" class="section-note">正在读取初始化状态…</p>
-          <div id="setup-progress" class="setup-progress" hidden>
-            <div class="setup-progress-heading">
-              <strong id="setup-progress-label">等待初始化</strong>
-              <span id="setup-progress-percent">0%</span>
-            </div>
-            <div
-              id="setup-progress-track"
-              class="setup-progress-track"
-              role="progressbar"
-              aria-label="Codex 初始化进度"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow="0"
-            >
-              <span id="setup-progress-bar" class="setup-progress-bar" style="width: 0%"></span>
-            </div>
-            <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
-          </div>
-          <div class="form-actions">
-            <p>连接器会自动下载安装官方 Codex 客户端和命令行，把模型凭证写入独立工作区档案，并完成归属验证。</p>
-            <button id="setup-retry-button" class="button primary" type="button" hidden>重新安装并修复</button>
-          </div>
-        </section>
+          <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
+        </div>
+        <div class="form-actions">
+          <p>全新用户会直接初始化默认 .codex；检测到既有用户状态时才创建隔离档案，并完成 CLI、配置和桌面应用验证。</p>
+          <button id="setup-retry-button" class="button primary" type="button" hidden>重新安装并修复</button>
+        </div>
       </section>
 
       <footer class="privacy-note">
         <strong>安全边界</strong>
-        <span>此页面只能调用 Connector 清单声明并由本机 token 保护的操作；网页远程访问需经过工作区设备权限和 relay 审计。</span>
+        <span>工作区选择、安装修复和桌面启动只通过本机管理令牌调用；Connector 的远程会话能力不会在此页面中重复展示。</span>
       </footer>
     </main>
   </body>

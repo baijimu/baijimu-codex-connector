@@ -2,7 +2,7 @@ use anyhow::Result;
 
 #[derive(Clone, Debug, Default)]
 pub struct DesktopSwitch {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     was_running: bool,
     #[cfg(windows)]
     app_id: Option<String>,
@@ -212,11 +212,40 @@ mod platform {
     const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
-        Ok(DesktopSwitch::default())
+        let Some(app_path) = installed_application_path() else {
+            return Ok(DesktopSwitch::default());
+        };
+        let bundle_id = application_bundle_id(&app_path)?;
+        let info = application_info(&bundle_id)?;
+        if !has_running_process(&info) {
+            return Ok(DesktopSwitch::default());
+        }
+
+        let script = format!("tell application id \"{bundle_id}\" to quit");
+        run_checked(
+            {
+                let mut command = Command::new("/usr/bin/osascript");
+                command.args(["-e", &script]);
+                command
+            },
+            "退出 ChatGPT/Codex 桌面应用失败",
+        )?;
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            thread::sleep(POLL_INTERVAL);
+            if !has_running_process(&application_info(&bundle_id)?) {
+                return Ok(DesktopSwitch { was_running: true });
+            }
+        }
+        anyhow::bail!("ChatGPT/Codex 桌面应用未在 15 秒内退出")
     }
 
-    pub fn restart_and_verify(_state: &DesktopSwitch) -> Result<bool> {
-        Ok(false)
+    pub fn restart_and_verify(state: &DesktopSwitch) -> Result<bool> {
+        if !state.was_running {
+            return Ok(false);
+        }
+        launch_and_verify()?;
+        Ok(true)
     }
 
     pub fn launch_and_verify() -> Result<()> {
@@ -236,6 +265,7 @@ mod platform {
             thread::sleep(POLL_INTERVAL);
             last_info = application_info(&bundle_id)?;
             if has_visible_window(&last_info) {
+                verify_application_codex_home(&last_info)?;
                 return Ok(());
             }
             if !project_reopened && started.elapsed() >= PROJECT_REOPEN_DELAY {
@@ -305,6 +335,43 @@ mod platform {
         application_visible && window_present
     }
 
+    fn application_pid(info: &str) -> Option<u32> {
+        info.lines().find_map(|line| {
+            let line = line.trim();
+            let value = line.strip_prefix("\"pid\"=")?.trim();
+            value.parse().ok()
+        })
+    }
+
+    fn verify_application_codex_home(info: &str) -> Result<()> {
+        let pid = application_pid(info).context("无法读取 ChatGPT/Codex 桌面进程 PID")?;
+        let output = Command::new("/bin/ps")
+            .args(["eww", "-p", &pid.to_string()])
+            .output()
+            .context("读取 ChatGPT/Codex 桌面进程环境失败")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "读取 ChatGPT/Codex 桌面进程环境失败：{}",
+                command_error(&output)
+            );
+        }
+        let process = String::from_utf8_lossy(&output.stdout);
+        match env::var_os("CODEX_HOME") {
+            Some(expected) => {
+                let expected = format!("CODEX_HOME={}", expected.to_string_lossy());
+                if !process.contains(&expected) {
+                    anyhow::bail!("ChatGPT/Codex 已启动，但没有使用所选工作区状态目录");
+                }
+            }
+            None => {
+                if process.contains("CODEX_HOME=") {
+                    anyhow::bail!("ChatGPT/Codex 已启动，但仍继承了非预期的 CODEX_HOME");
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn reopen_with_project(app_path: &Path) -> Result<()> {
         let home = env::var_os("HOME").context("HOME 未设置，无法创建 Codex 默认项目目录")?;
         let project = PathBuf::from(home)
@@ -369,6 +436,7 @@ mod platform {
             let visible = "\"pid\"=682\n\"visible\"=true\n\"windows\"=( { \"windowID\"=123 } )\n";
             assert!(has_running_process(visible));
             assert!(has_visible_window(visible));
+            assert_eq!(application_pid(visible), Some(682));
 
             let missing = "Application not found\n";
             assert!(!has_running_process(missing));
