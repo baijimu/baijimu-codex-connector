@@ -1033,18 +1033,14 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         management_token,
         startup: StartupReadiness::initializing(),
     });
-    if test_control_enabled() {
-        let initializing_state = Arc::clone(&state);
-        thread::spawn(move || match initialize_server() {
-            Ok(()) => initializing_state.startup.ready(),
-            Err(error) => {
-                eprintln!("Codex Connector initialization failed: {error}");
-                initializing_state.startup.fail(error);
-            }
-        });
-    } else {
-        state.startup.ready();
-    }
+    let initializing_state = Arc::clone(&state);
+    thread::spawn(move || match initialize_server() {
+        Ok(()) => initializing_state.startup.ready(),
+        Err(error) => {
+            eprintln!("Codex Connector initialization failed: {error}");
+            initializing_state.startup.fail(error);
+        }
+    });
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -1073,7 +1069,42 @@ fn initialize_server() -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    let Some(migration) = credential::pending_profile_home_migration()
+        .map_err(|error| format!("检查旧版 Codex 档案迁移状态失败: {error}"))?
+    else {
+        return Ok(());
+    };
+    let desktop_switch = if migration.active_home_before.is_some() {
+        desktop::stop_for_codex_home_switch()
+            .map_err(|error| format!("迁移旧版 Codex 档案前停止桌面应用失败: {error}"))?
+    } else {
+        desktop::DesktopSwitch::default()
+    };
+    match credential::state() {
+        Ok(state) => desktop_switch
+            .restart_and_verify(Path::new(&state.active_codex_home))
+            .map(|_| ())
+            .map_err(|error| format!("旧版 Codex 档案迁移完成，但桌面应用重启失败: {error}")),
+        Err(error) => {
+            let recovery_home = migration
+                .active_home_before
+                .as_deref()
+                .filter(|path| path.exists())
+                .or_else(|| {
+                    migration
+                        .active_home_after
+                        .as_deref()
+                        .filter(|path| path.exists())
+                });
+            let restart_error =
+                recovery_home.and_then(|path| desktop_switch.restart_and_verify(path).err());
+            let mut message = format!("迁移旧版 Codex 档案失败: {error}");
+            if let Some(restart_error) = restart_error {
+                message.push_str(&format!("；恢复桌面应用失败: {restart_error}"));
+            }
+            Err(message)
+        }
+    }
 }
 
 fn test_control_enabled() -> bool {

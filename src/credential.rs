@@ -105,6 +105,12 @@ pub struct ActiveHomeSnapshot {
     pub codex_home: PathBuf,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingProfileHomeMigration {
+    pub active_home_before: Option<PathBuf>,
+    pub active_home_after: Option<PathBuf>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CredentialMetadata {
@@ -1021,6 +1027,67 @@ fn load_metadata() -> Result<CredentialMetadata> {
     Ok(metadata)
 }
 
+pub fn pending_profile_home_migration() -> Result<Option<PendingProfileHomeMigration>> {
+    let path = metadata_path();
+    let source = if path.exists() {
+        Some(path)
+    } else if legacy_metadata_path().exists() {
+        Some(legacy_metadata_path())
+    } else {
+        None
+    };
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let content = fs::read(&source)
+        .with_context(|| format!("读取 Codex 凭证元数据失败: {}", source.display()))?;
+    let mut metadata = crate::json_compat::from_slice::<CredentialMetadata>(&content)
+        .with_context(|| format!("解析 Codex 凭证元数据失败: {}", source.display()))?;
+    for profile in &mut metadata.profiles {
+        normalize_profile(profile);
+    }
+    if !metadata
+        .profiles
+        .iter()
+        .any(|profile| Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root()))
+    {
+        return Ok(None);
+    }
+
+    let legacy_workspace_selection = metadata.version < 2
+        && metadata.active_profile_id.is_none()
+        && metadata.active_workspace_id.is_some();
+    let active_profile = if metadata.active_mode == AuthMode::Baijimu || legacy_workspace_selection
+    {
+        metadata
+            .active_profile_id
+            .as_deref()
+            .and_then(|profile_id| {
+                metadata
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.profile_id == profile_id)
+            })
+            .or_else(|| {
+                metadata.active_workspace_id.and_then(|workspace_id| {
+                    metadata
+                        .profiles
+                        .iter()
+                        .find(|profile| profile.workspace_id == workspace_id)
+                })
+            })
+    } else {
+        None
+    };
+    let active_profile = active_profile.filter(|profile| {
+        Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root())
+    });
+    Ok(Some(PendingProfileHomeMigration {
+        active_home_before: active_profile.map(|profile| PathBuf::from(&profile.codex_home)),
+        active_home_after: active_profile.map(|profile| profile_home_for_id(&profile.profile_id)),
+    }))
+}
+
 fn capture_original_codex_home(metadata: &mut CredentialMetadata) -> Result<bool> {
     if metadata.original_codex_home_state.captured {
         return Ok(false);
@@ -1707,6 +1774,9 @@ mod tests {
             serde_json::to_vec_pretty(&CredentialMetadata {
                 version: 4,
                 profiles: vec![profile],
+                active_mode: AuthMode::Baijimu,
+                active_profile_id: Some(profile_id.to_string()),
+                active_workspace_id: Some(1390),
                 original_codex_home_state: OriginalCodexHomeState {
                     captured: true,
                     value: None,
@@ -1718,8 +1788,17 @@ mod tests {
         )
         .unwrap();
 
-        let metadata = load_metadata().unwrap();
         let migrated_home = profile_home_for_id(profile_id);
+        let pending = pending_profile_home_migration().unwrap().unwrap();
+        assert_eq!(
+            pending.active_home_before.as_deref(),
+            Some(legacy_home.as_path())
+        );
+        assert_eq!(
+            pending.active_home_after.as_deref(),
+            Some(migrated_home.as_path())
+        );
+        let metadata = load_metadata().unwrap();
         assert_eq!(metadata.version, 5);
         assert_eq!(
             metadata.profiles[0].codex_home,
@@ -1734,6 +1813,7 @@ mod tests {
             fs::read(migrated_home.join("sessions/2026/08/11/thread.jsonl")).unwrap(),
             b"thread-state"
         );
+        assert!(pending_profile_home_migration().unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1765,6 +1845,9 @@ mod tests {
             serde_json::to_vec_pretty(&CredentialMetadata {
                 version: 4,
                 profiles: vec![profile],
+                active_mode: AuthMode::Baijimu,
+                active_profile_id: Some(profile_id.to_string()),
+                active_workspace_id: Some(1390),
                 original_codex_home_state: OriginalCodexHomeState {
                     captured: true,
                     value: None,
@@ -1776,6 +1859,15 @@ mod tests {
         )
         .unwrap();
 
+        let pending = pending_profile_home_migration().unwrap().unwrap();
+        assert_eq!(
+            pending.active_home_before.as_deref(),
+            Some(legacy_home.as_path())
+        );
+        assert_eq!(
+            pending.active_home_after.as_deref(),
+            Some(migrated_home.as_path())
+        );
         let metadata = load_metadata().unwrap();
         assert_eq!(
             metadata.profiles[0].codex_home,
@@ -1785,6 +1877,7 @@ mod tests {
             fs::read(migrated_home.join("state_5.sqlite")).unwrap(),
             b"recovered"
         );
+        assert!(pending_profile_home_migration().unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

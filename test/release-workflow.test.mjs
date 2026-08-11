@@ -306,6 +306,7 @@ test("desktop launch is explicit, process-scoped, and independent from user CODE
 
 test("workspace profile homes are short, isolated, and safely migratable", async () => {
   const credential = await readFile(join(root, "src", "credential.rs"), "utf8");
+  const main = await readFile(join(root, "src", "main.rs"), "utf8");
   assert.match(credential, /home_dir\(\)\.join\("\.baijimu"\)\.join\("codex"\)\.join\("p"\)/);
   assert.match(credential, /Sha256::digest\(profile_id\.as_bytes\(\)\)/);
   assert.match(credential, /digest\[\.\.24\]\.to_string\(\)/);
@@ -316,6 +317,13 @@ test("workspace profile homes are short, isolated, and safely migratable", async
   assert.match(credential, /v4_legacy_profile_directory_is_atomically_migrated_to_the_short_home/);
   assert.match(credential, /legacy_profile_migration_recovers_after_rename_before_metadata_save/);
   assert.match(credential, /legacy_profile_migration_preserves_both_directories_on_collision/);
+  const migrationDetection = main.indexOf("credential::pending_profile_home_migration()");
+  const desktopStop = main.indexOf("desktop::stop_for_codex_home_switch()", migrationDetection);
+  const metadataMigration = main.indexOf("match credential::state()", desktopStop);
+  assert.ok(migrationDetection >= 0);
+  assert.ok(desktopStop > migrationDetection);
+  assert.ok(metadataMigration > desktopStop);
+  assert.match(main, /thread::spawn\(move \|\| match initialize_server\(\)/);
   assert.doesNotMatch(credential, /default_home_can_be_initialized/);
   assert.match(credential, /OWNERSHIP_MARKER_FILE: &str = "\.baijimu-owner\.json"/);
   assert.match(credential, /OWNERSHIP_OWNER: &str = "baijimu-connector-codex"/);
