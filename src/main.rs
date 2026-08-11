@@ -1329,6 +1329,7 @@ fn handle_management(
                 return Err(HttpError::new(409, error.to_string()));
             }
             client.switch_to_active_profile();
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             let selected_home = credential::active_codex_home();
             let verification = client
                 .ensure_started()

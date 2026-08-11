@@ -304,17 +304,27 @@ test("desktop launch is explicit, process-scoped, and independent from user CODE
   assert.doesNotMatch(desktop, /pkill/);
 });
 
-test("new-user ownership is explicit and never captures business identifiers", async () => {
+test("workspace profile homes are short, isolated, and safely migratable", async () => {
   const credential = await readFile(join(root, "src", "credential.rs"), "utf8");
+  assert.match(credential, /home_dir\(\)\.join\("\.baijimu"\)\.join\("codex"\)\.join\("p"\)/);
+  assert.match(credential, /Sha256::digest\(profile_id\.as_bytes\(\)\)/);
+  assert.match(credential, /digest\[\.\.24\]\.to_string\(\)/);
+  assert.match(credential, /migrate_legacy_profile_homes/);
+  assert.match(credential, /fs::rename\(&source, &target\)/);
+  assert.match(credential, /源目录和目标目录同时存在/);
+  assert.match(credential, /a_new_profile_never_adopts_the_default_codex_home/);
+  assert.match(credential, /v4_legacy_profile_directory_is_atomically_migrated_to_the_short_home/);
+  assert.match(credential, /legacy_profile_migration_recovers_after_rename_before_metadata_save/);
+  assert.match(credential, /legacy_profile_migration_preserves_both_directories_on_collision/);
+  assert.doesNotMatch(credential, /default_home_can_be_initialized/);
   assert.match(credential, /OWNERSHIP_MARKER_FILE: &str = "\.baijimu-owner\.json"/);
   assert.match(credential, /OWNERSHIP_OWNER: &str = "baijimu-connector-codex"/);
-  assert.match(credential, /default_home_can_be_initialized/);
   assert.match(credential, /read_valid_ownership/);
   assert.match(credential, /commit_default_home_ownership/);
   assert.match(credential, /managed_files: vec!\[OWNED_AUTH_FILE\.to_string\(\), OWNED_CONFIG_FILE\.to_string\(\)\]/);
   assert.match(credential, /assert!\(!marker_content\.contains\("642"\)\)/);
   assert.match(credential, /assert!\(!marker_content\.contains\("workspace-token"\)\)/);
-  assert.match(credential, /existing_or_ambiguously_marked_default_home_is_never_adopted/);
+  assert.match(credential, /legacy_default_home_ownership_marker_contains_no_business_identifiers/);
 });
 
 test("all package identities agree with the GitHub source tag", async () => {
