@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,7 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::user_environment;
 
-const METADATA_VERSION: u32 = 4;
+const METADATA_VERSION: u32 = 5;
 const METADATA_FILE: &str = "codex-credentials.json";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
 const OWNERSHIP_SCHEMA_VERSION: u32 = 1;
@@ -991,6 +992,7 @@ fn load_metadata() -> Result<CredentialMetadata> {
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }
+    let profile_homes_migrated = migrate_legacy_profile_homes(&mut metadata)?;
     if previous_version < 2 && metadata.active_profile_id.is_none() {
         metadata.active_profile_id = metadata.active_workspace_id.and_then(|id| {
             metadata
@@ -1005,7 +1007,11 @@ fn load_metadata() -> Result<CredentialMetadata> {
     }
     let baseline_captured = capture_original_codex_home(&mut metadata)?;
     metadata.version = METADATA_VERSION;
-    if source.as_ref() != Some(&path) || needs_version_migration || baseline_captured {
+    if source.as_ref() != Some(&path)
+        || needs_version_migration
+        || baseline_captured
+        || profile_homes_migrated
+    {
         save_metadata(&metadata)?;
     }
     if let Some(source) = source.filter(|source| source != &path) {
@@ -1020,9 +1026,9 @@ fn capture_original_codex_home(metadata: &mut CredentialMetadata) -> Result<bool
         return Ok(false);
     }
     let current = user_environment::read_codex_home()?;
-    let managed_root = connector_data_dir().join("codex-profiles");
     let managed_pointer = current.as_ref().is_some_and(|path| {
-        path.starts_with(&managed_root)
+        path.starts_with(legacy_managed_profile_root())
+            || path.starts_with(managed_profile_root())
             || metadata
                 .profiles
                 .iter()
@@ -1075,8 +1081,8 @@ fn default_original_codex_home() -> PathBuf {
 }
 
 fn is_managed_codex_home(metadata: &CredentialMetadata, path: &Path) -> bool {
-    let managed_root = connector_data_dir().join("codex-profiles");
-    path.starts_with(&managed_root)
+    path.starts_with(legacy_managed_profile_root())
+        || path.starts_with(managed_profile_root())
         || metadata
             .profiles
             .iter()
@@ -1126,6 +1132,53 @@ fn normalize_profile(profile: &mut CredentialProfile) {
     }
 }
 
+fn migrate_legacy_profile_homes(metadata: &mut CredentialMetadata) -> Result<bool> {
+    let legacy_root = legacy_managed_profile_root();
+    let mut changed = false;
+    for profile in &mut metadata.profiles {
+        let source = PathBuf::from(&profile.codex_home);
+        if !source.starts_with(&legacy_root) {
+            continue;
+        }
+        let target = profile_home_for_id(&profile.profile_id);
+        if source == target {
+            continue;
+        }
+
+        match (source.exists(), target.exists()) {
+            (true, true) => anyhow::bail!(
+                "Codex 档案迁移发现源目录和目标目录同时存在；为避免覆盖状态，已保留两者，请先确认数据归属：source={}, target={}",
+                source.display(),
+                target.display()
+            ),
+            (true, false) => {
+                if !source.is_dir() {
+                    anyhow::bail!("旧版 Codex 档案路径不是目录: {}", source.display());
+                }
+                let parent = target.parent().context("新的 Codex 档案路径没有父目录")?;
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("创建新的 Codex 档案根目录失败: {}", parent.display()))?;
+                set_private_directory(parent)?;
+                fs::rename(&source, &target).with_context(|| {
+                    format!(
+                        "迁移 Codex 档案目录失败；迁移要求旧目录和新目录位于同一文件系统，并且没有进程阻止目录重命名: source={}, target={}",
+                        source.display(),
+                        target.display()
+                    )
+                })?;
+                set_private_directory(&target)?;
+            }
+            // Recovery after the directory rename succeeded but metadata persistence was interrupted.
+            (false, true) => {}
+            // The profile has not created any state yet; future writes should use the short path.
+            (false, false) => {}
+        }
+        profile.codex_home = target.display().to_string();
+        changed = true;
+    }
+    Ok(changed)
+}
+
 fn sort_profiles(profiles: &mut [CredentialProfile]) {
     profiles.sort_by(|left, right| {
         (&left.workspace_name, &left.profile_id).cmp(&(&right.workspace_name, &right.profile_id))
@@ -1168,53 +1221,39 @@ fn workspace_profile_home(
     client_id: Option<&str>,
     workspace_id: u64,
 ) -> PathBuf {
-    connector_data_dir()
-        .join("codex-profiles")
-        .join("baijimu")
-        .join(sanitize_path_segment(environment))
-        .join(format!("user-{}", user_id.unwrap_or_default()))
-        .join(format!(
-            "client-{}",
-            sanitize_path_segment(client_id.unwrap_or("local"))
-        ))
-        .join(format!("workspace-{workspace_id}"))
+    profile_home_for_id(&profile_id(environment, user_id, client_id, workspace_id))
+}
+
+fn profile_home_for_id(profile_id: &str) -> PathBuf {
+    managed_profile_root().join(profile_short_key(profile_id))
+}
+
+fn profile_short_key(profile_id: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(profile_id.as_bytes()));
+    digest[..24].to_string()
+}
+
+fn managed_profile_root() -> PathBuf {
+    home_dir().join(".baijimu").join("codex").join("p")
+}
+
+fn legacy_managed_profile_root() -> PathBuf {
+    connector_data_dir().join("codex-profiles")
 }
 
 fn select_new_profile_home(
-    metadata: &CredentialMetadata,
+    _metadata: &CredentialMetadata,
     environment: &str,
     user_id: Option<u64>,
     client_id: Option<&str>,
     workspace_id: u64,
 ) -> Result<PathBuf> {
-    let private_home = workspace_profile_home(environment, user_id, client_id, workspace_id);
-    if !metadata.profiles.is_empty() || user_environment::read_codex_home()?.is_some() {
-        return Ok(private_home);
-    }
-
-    let default_home = default_original_codex_home();
-    if default_home_can_be_initialized(&default_home)? {
-        Ok(default_home)
-    } else {
-        Ok(private_home)
-    }
-}
-
-fn default_home_can_be_initialized(path: &Path) -> Result<bool> {
-    if !path.exists() {
-        return Ok(true);
-    }
-    if !path.is_dir() {
-        anyhow::bail!("Codex 默认状态路径不是目录: {}", path.display());
-    }
-    match read_valid_ownership(path) {
-        Ok(Some(_)) => return Ok(true),
-        Ok(None) => {}
-        Err(_) => return Ok(false),
-    }
-    let mut entries = fs::read_dir(path)
-        .with_context(|| format!("读取 Codex 默认状态目录失败: {}", path.display()))?;
-    Ok(entries.next().transpose()?.is_none())
+    Ok(workspace_profile_home(
+        environment,
+        user_id,
+        client_id,
+        workspace_id,
+    ))
 }
 
 fn commit_default_home_ownership(profile: &CredentialProfile) -> Result<()> {
@@ -1563,6 +1602,239 @@ mod tests {
     }
 
     #[test]
+    fn workspace_profile_home_is_short_stable_and_contains_no_business_identifiers() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-short-profile-home-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+
+        let first = workspace_profile_home("prod", Some(25), Some("device-a"), 1390);
+        let second = workspace_profile_home("prod", Some(25), Some("device-a"), 1390);
+        let different = workspace_profile_home("prod", Some(25), Some("device-b"), 1390);
+
+        assert_eq!(first, second);
+        assert_ne!(first, different);
+        assert_eq!(first.parent().unwrap(), managed_profile_root());
+        let key = first.file_name().unwrap().to_string_lossy();
+        assert_eq!(key.len(), 24);
+        assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        let rendered = first.display().to_string();
+        assert!(!rendered.contains("workspace-1390"));
+        assert!(!rendered.contains("device-a"));
+        assert!(!rendered.contains("user-25"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_new_profile_never_adopts_the_default_codex_home() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-private-profile-home-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        fs::create_dir_all(user_home.join(".codex")).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+
+        let selected = select_new_profile_home(
+            &CredentialMetadata::default(),
+            "prod",
+            Some(25),
+            Some("device-a"),
+            1390,
+        )
+        .unwrap();
+
+        assert_eq!(selected.parent().unwrap(), managed_profile_root());
+        assert_ne!(selected, user_home.join(".codex"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn v4_legacy_profile_directory_is_atomically_migrated_to_the_short_home() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-profile-migration-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        let legacy_home = data_dir
+            .join("codex-profiles")
+            .join("baijimu")
+            .join("prod")
+            .join("user-25")
+            .join("client-device-a")
+            .join("workspace-1390");
+        fs::create_dir_all(legacy_home.join("sessions/2026/08/11")).unwrap();
+        fs::write(legacy_home.join("state_5.sqlite"), b"sqlite-state").unwrap();
+        fs::write(
+            legacy_home.join("sessions/2026/08/11/thread.jsonl"),
+            b"thread-state",
+        )
+        .unwrap();
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let profile_id = "prod:user-25:client-device-a:workspace-1390";
+        let profile = CredentialProfile {
+            profile_id: profile_id.to_string(),
+            environment: "prod".to_string(),
+            user_id: Some(25),
+            client_id: Some("device-a".to_string()),
+            workspace_id: 1390,
+            workspace_name: "迁移工作区".to_string(),
+            model: DEFAULT_MODEL.to_string(),
+            activated_at_epoch_seconds: 1,
+            codex_home: legacy_home.display().to_string(),
+            credential_status: "verified".to_string(),
+        };
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(
+            metadata_path(),
+            serde_json::to_vec_pretty(&CredentialMetadata {
+                version: 4,
+                profiles: vec![profile],
+                original_codex_home_state: OriginalCodexHomeState {
+                    captured: true,
+                    value: None,
+                    capture_source: "test".to_string(),
+                },
+                ..CredentialMetadata::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let metadata = load_metadata().unwrap();
+        let migrated_home = profile_home_for_id(profile_id);
+        assert_eq!(metadata.version, 5);
+        assert_eq!(
+            metadata.profiles[0].codex_home,
+            migrated_home.display().to_string()
+        );
+        assert!(!legacy_home.exists());
+        assert_eq!(
+            fs::read(migrated_home.join("state_5.sqlite")).unwrap(),
+            b"sqlite-state"
+        );
+        assert_eq!(
+            fs::read(migrated_home.join("sessions/2026/08/11/thread.jsonl")).unwrap(),
+            b"thread-state"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_profile_migration_recovers_after_rename_before_metadata_save() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-profile-migration-recovery-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        let legacy_home = data_dir.join("codex-profiles/workspace-1390");
+        let profile_id = "prod:user-25:client-device-a:workspace-1390";
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let migrated_home = profile_home_for_id(profile_id);
+        fs::create_dir_all(&migrated_home).unwrap();
+        fs::write(migrated_home.join("state_5.sqlite"), b"recovered").unwrap();
+        fs::create_dir_all(&data_dir).unwrap();
+        let mut profile = test_workspace_profile(&data_dir, 1390);
+        profile.codex_home = legacy_home.display().to_string();
+        fs::write(
+            metadata_path(),
+            serde_json::to_vec_pretty(&CredentialMetadata {
+                version: 4,
+                profiles: vec![profile],
+                original_codex_home_state: OriginalCodexHomeState {
+                    captured: true,
+                    value: None,
+                    capture_source: "test".to_string(),
+                },
+                ..CredentialMetadata::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let metadata = load_metadata().unwrap();
+        assert_eq!(
+            metadata.profiles[0].codex_home,
+            migrated_home.display().to_string()
+        );
+        assert_eq!(
+            fs::read(migrated_home.join("state_5.sqlite")).unwrap(),
+            b"recovered"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_profile_migration_preserves_both_directories_on_collision() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-profile-migration-collision-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        let legacy_home = data_dir.join("codex-profiles/workspace-1390");
+        fs::create_dir_all(&legacy_home).unwrap();
+        fs::write(legacy_home.join("source"), b"source").unwrap();
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let mut profile = test_workspace_profile(&data_dir, 1390);
+        profile.codex_home = legacy_home.display().to_string();
+        let migrated_home = profile_home_for_id(&profile.profile_id);
+        fs::create_dir_all(&migrated_home).unwrap();
+        fs::write(migrated_home.join("target"), b"target").unwrap();
+        fs::write(
+            metadata_path(),
+            serde_json::to_vec_pretty(&CredentialMetadata {
+                version: 4,
+                profiles: vec![profile],
+                original_codex_home_state: OriginalCodexHomeState {
+                    captured: true,
+                    value: None,
+                    capture_source: "test".to_string(),
+                },
+                ..CredentialMetadata::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = load_metadata().unwrap_err();
+        assert!(error.to_string().contains("源目录和目标目录同时存在"));
+        assert_eq!(fs::read(legacy_home.join("source")).unwrap(), b"source");
+        assert_eq!(fs::read(migrated_home.join("target")).unwrap(), b"target");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn v2_managed_pointer_migrates_to_an_unset_original_value() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
@@ -1833,7 +2105,7 @@ mod tests {
     }
 
     #[test]
-    fn pristine_default_home_is_initialized_and_marked_without_business_identifiers() {
+    fn legacy_default_home_ownership_marker_contains_no_business_identifiers() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "baijimu-codex-default-home-{}-{}",
@@ -1849,7 +2121,6 @@ mod tests {
         let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
         let default_home = user_home.join(".codex");
 
-        assert!(default_home_can_be_initialized(&default_home).unwrap());
         write_workspace_auth(&default_home.join("auth.json"), "workspace-token").unwrap();
         write_workspace_config(&default_home.join("config.toml")).unwrap();
         let mut profile = test_workspace_profile(&data_dir, 642);
@@ -1868,29 +2139,9 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn existing_or_ambiguously_marked_default_home_is_never_adopted() {
-        let root = std::env::temp_dir().join(format!(
-            "baijimu-codex-owned-home-{}-{}",
-            std::process::id(),
-            now_epoch_seconds()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("state.db"), b"user-state").unwrap();
-        assert!(!default_home_can_be_initialized(&root).unwrap());
-
-        fs::remove_file(root.join("state.db")).unwrap();
-        fs::write(
-            root.join(OWNERSHIP_MARKER_FILE),
-            br#"{"schemaVersion":999,"owner":"baijimu-connector-codex","initializedAtEpochSeconds":1,"managedFiles":[]}"#,
-        )
-        .unwrap();
-        assert!(!default_home_can_be_initialized(&root).unwrap());
-        fs::remove_dir_all(root).unwrap();
-    }
-
     fn test_workspace_profile(data_dir: &Path, workspace_id: u64) -> CredentialProfile {
         let profile_id = format!("prod:user-25:client-device-a:workspace-{workspace_id}");
+        let profile_key = profile_short_key(&profile_id);
         CredentialProfile {
             profile_id,
             environment: "prod".to_string(),
@@ -1901,8 +2152,8 @@ mod tests {
             model: DEFAULT_MODEL.to_string(),
             activated_at_epoch_seconds: 0,
             codex_home: data_dir
-                .join("codex-profiles")
-                .join(format!("workspace-{workspace_id}"))
+                .join("profile-homes")
+                .join(profile_key)
                 .display()
                 .to_string(),
             credential_status: "verified".to_string(),

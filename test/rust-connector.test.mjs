@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -418,7 +419,7 @@ test("rust connector forwards Codex app-server calls", async () => {
       occurredAt: domainAttempts[1].occurredAt,
       source: "codex-app-server",
       sourceMethod: "turn/completed",
-      connectorVersion: "1.2.41",
+      connectorVersion: "1.2.42",
     });
     assert.ok(emittedEvents.some((event) => event.event === "codexNotification"));
   } finally {
@@ -648,24 +649,27 @@ test("rust connector launches an isolated Baijimu workspace and can launch the p
   const personalHome = join(rootHome, "personal-codex");
   const connectorHome = join(rootHome, "connector-data");
   const configHome = join(rootHome, "config");
-  const workspaceHome = join(connectorHome, "codex-profiles", "baijimu", "test", "user-25", "client-device-test", "workspace-1390");
+  const profileId = "test:user-25:client-device-test:workspace-1390";
+  const legacyWorkspaceHome = join(connectorHome, "codex-profiles", "baijimu", "test", "user-25", "client-device-test", "workspace-1390");
+  const profileKey = createHash("sha256").update(profileId).digest("hex").slice(0, 24);
+  const workspaceHome = join(fakeCodexHome, ".baijimu", "codex", "p", profileKey);
   await mkdir(personalHome, { recursive: true });
-  await mkdir(workspaceHome, { recursive: true });
+  await mkdir(legacyWorkspaceHome, { recursive: true });
   await mkdir(join(configHome, "baijimu"), { recursive: true });
   await writeFile(join(personalHome, "auth.json"), JSON.stringify({
     auth_mode: "chatgpt",
     tokens: { access_token: "chatgpt-test-access", account_id: "acct-test" },
   }));
   await writeFile(join(personalHome, "config.toml"), 'model = "gpt-test"\nmodel_provider = "openai"\n');
-  await writeFile(join(workspaceHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "workspace-key", auth_mode: "apikey" }));
-  await writeFile(join(workspaceHome, "config.toml"), `model_provider = "baijimu-router"\n[model_providers.baijimu-router]\nbase_url = "https://router.baijimu.com/api/claudecode/v1"\n`);
+  await writeFile(join(legacyWorkspaceHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: "workspace-key", auth_mode: "apikey" }));
+  await writeFile(join(legacyWorkspaceHome, "config.toml"), `model_provider = "baijimu-router"\n[model_providers.baijimu-router]\nbase_url = "https://router.baijimu.com/api/claudecode/v1"\n`);
   await writeFile(join(connectorHome, "codex-credentials.json"), JSON.stringify({
     version: 2,
     activeMode: "chatgpt",
     activeProfileId: null,
     activeWorkspaceId: null,
     profiles: [{
-      profileId: "test:user-25:client-device-test:workspace-1390",
+      profileId,
       environment: "test",
       userId: 25,
       clientId: "device-test",
@@ -673,7 +677,7 @@ test("rust connector launches an isolated Baijimu workspace and can launch the p
       workspaceName: "研发工作区",
       model: "gpt-5.6-sol",
       activatedAtEpochSeconds: 0,
-      codexHome: workspaceHome,
+      codexHome: legacyWorkspaceHome,
     }],
   }));
   await writeFile(join(connectorHome, "setup-status.json"), JSON.stringify({
@@ -724,6 +728,7 @@ test("rust connector launches an isolated Baijimu workspace and can launch the p
     assert.equal(workspaceState.activeMode, "baijimu");
     assert.equal(workspaceState.activeWorkspaceId, 1390);
     assert.equal(workspaceState.activeCodexHome, workspaceHome);
+    await assert.rejects(readFile(join(legacyWorkspaceHome, "auth.json")), { code: "ENOENT" });
     assert.equal(workspaceState.externalCodexHome, personalHome);
     assert.equal(workspaceState.legacyGlobalCodexHome.restoreRequired, false);
     const workspaceStatus = await postJson(port, "/invoke/status");
