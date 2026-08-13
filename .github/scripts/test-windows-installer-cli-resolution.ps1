@@ -65,7 +65,7 @@ try {
   if ($script:result.cliInstallMethod -ne "already-installed") {
     throw "System resolver did not record the validated installation method"
   }
-  if (-not ($script:Warnings -match "codex --version failed")) {
+  if ($script:Warnings.Count -ne 1 -or $script:Warnings[0] -notmatch "codex --version") {
     throw "System resolver did not report why the broken Codex command was skipped"
   }
 

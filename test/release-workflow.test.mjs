@@ -123,7 +123,10 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.doesNotMatch(windowsPackageTest, /Invoke-WebRequest|curl\.exe|https?:\/\//);
   assert.match(windowsPackageTest, /Resolve-CodexPackageContents/);
   assert.match(windowsPackageTest, /codex-command-runner\.exe/);
+  assert.match(windowsPackageTest, /incompleteError -notmatch "codex-command-runner/);
   assert.match(windowsPackageTest, /Legacy flat Windows Codex cache was not removed/);
+  assert.match(windowsCliResolutionTest, /Warnings\[0\] -notmatch "codex --version"/);
+  assert.doesNotMatch(windowsCliResolutionTest, /codex --version failed/);
   assert.doesNotMatch(windowsInstallerTest, /Get-FileHash -LiteralPath \$ScriptPath/);
   assert.match(workflow, /Verify embedded installer scripts/);
   assert.match(workflow, /installers\/macos-configure-terminal-and-login\.sh/);

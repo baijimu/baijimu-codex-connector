@@ -71,7 +71,10 @@ try {
   Remove-Item -LiteralPath $runner -Force
   $incompleteError = $null
   try { [void](Resolve-CodexPackageContents $packageRoot $target) } catch { $incompleteError = $_.Exception.Message }
-  if ($incompleteError -notmatch "incomplete") {
+  if (
+    -not $incompleteError -or
+    $incompleteError -notmatch "codex-command-runner\.exe"
+  ) {
     throw "Package resolver accepted a package without the command runner"
   }
 
