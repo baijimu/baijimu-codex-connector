@@ -289,7 +289,7 @@ fn run_install(
     let script_path = install_script_path(&setup_dir, &unique)?;
     let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
 
-    let install_result = (|| -> Result<()> {
+    let install_result = (|| -> Result<Option<PathBuf>> {
         let prepared = credential::prepare_workspace_profile(workspace_id)?;
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
@@ -308,7 +308,6 @@ fn run_install(
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
             .env("CODEX_HOME", &profile_home)
-            .env("CODEX_INSTALL_SKIP_DESKTOP_RESTART", "1")
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
@@ -354,11 +353,16 @@ fn run_install(
             anyhow::bail!("官方安装脚本执行失败: {}", compact_error(&errors));
         }
         credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
-        Ok(())
+        let credential_state = credential::state()?;
+        let workspace_profile_is_active = credential_state.active_mode
+            == credential::AuthMode::Baijimu
+            && credential_state.active_workspace_id == Some(workspace_id)
+            && Path::new(&credential_state.active_codex_home) == profile_home;
+        Ok(workspace_profile_is_active.then_some(profile_home))
     })();
     let _ = fs::remove_file(&secret_path);
     let _ = fs::remove_file(&script_path);
-    install_result?;
+    let activated_profile_home = install_result?;
 
     if !credential::codex_ready_for_workspace(workspace_id) {
         anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
@@ -376,7 +380,23 @@ fn run_install(
             );
         }
     }
+    if let Some(profile_home) = activated_profile_home {
+        launch_desktop_after_setup(&profile_home)?;
+    }
     Ok(())
+}
+
+fn launch_desktop_after_setup(profile_home: &Path) -> Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        crate::desktop::launch_and_verify(profile_home)
+            .context("安装配置已完成，但自动打开 ChatGPT/Codex 桌面应用失败")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = profile_home;
+        Ok(())
+    }
 }
 
 fn install_script_path(setup_dir: &Path, unique: &str) -> Result<PathBuf> {

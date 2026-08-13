@@ -300,15 +300,25 @@ test("market publisher uses explicit immutable version creation and review submi
   assert.doesNotMatch(script, /codex-local-app-v|gitee\.com|zxflimit_admin/);
 });
 
-test("desktop launch is explicit, process-scoped, and independent from user CODEX_HOME", async () => {
+test("setup launches desktop after profile finalization without an installer control variable", async () => {
   const setup = await readFile(join(root, "src", "setup.rs"), "utf8");
   const desktop = await readFile(join(root, "src", "desktop.rs"), "utf8");
   const main = await readFile(join(root, "src", "main.rs"), "utf8");
+  const installers = await Promise.all([
+    readFile(join(root, "installers", "macos-configure-terminal-and-login.sh"), "utf8"),
+    readFile(join(root, "installers", "windows-configure-terminal-and-login.ps1"), "utf8"),
+  ]);
   const userEnvironment = await readFile(join(root, "src", "user_environment.rs"), "utf8");
-  const deferIndex = setup.indexOf('env("CODEX_INSTALL_SKIP_DESKTOP_RESTART", "1")');
+  const activationIndex = setup.indexOf("credential::finalize_workspace_setup");
+  const launchIndex = setup.indexOf("crate::desktop::launch_and_verify(profile_home)");
 
-  assert.ok(deferIndex >= 0, "setup must suppress installer-owned desktop launch");
-  assert.doesNotMatch(setup, /desktop::launch_and_verify/);
+  assert.ok(activationIndex >= 0, "setup must finalize the selected profile");
+  assert.ok(launchIndex > activationIndex, "desktop launch must follow profile finalization");
+  assert.match(setup, /active_workspace_id == Some\(workspace_id\)/);
+  assert.match(setup, /workspace_profile_is_active\.then_some\(profile_home\)/);
+  assert.match(setup, /if let Some\(profile_home\) = activated_profile_home/);
+  assert.doesNotMatch([setup, ...installers].join("\n"), /CODEX_INSTALL_[A-Z_]*DESKTOP/);
+  assert.doesNotMatch(installers.join("\n"), /Test-VisibleWindow|verify_codex_window/);
   assert.doesNotMatch(main, /reconcile_active_user_codex_home/);
   assert.match(main, /desktop::launch_and_verify\(&selected_home\)/);
   assert.match(main, /restart_and_verify\(&previous_home\)/);

@@ -389,7 +389,7 @@ async function monitorSetup() {
       renderSetupState();
       if (setupState?.status === "succeeded") {
         await loadState({ ensureReady: false, monitor: false });
-        setMessage("message", "本机 Codex 已完成安装配置，可以切换工作区或直接打开 Codex。");
+        setMessage("message", "本机 Codex 已完成安装配置；全新工作区配置已自动打开，既有个人配置保持不变。");
         return;
       }
       if (setupState?.status === "failed") {

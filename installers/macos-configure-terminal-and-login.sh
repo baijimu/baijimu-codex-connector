@@ -35,15 +35,13 @@ cli_install_method=""
 cli_version=""
 cli_smoke=false
 router_status=""
-process_count=0
-visible_window=false
 config_written=false
 auth_written=false
 shared_cli_token_read=false
 llm_credential_created=false
 
 current_step=0
-step_count=11
+step_count=9
 step1_name="检查 ChatGPT 桌面应用"; step1_state="pending"; step1_detail=""; step1_downloaded=""; step1_total=""
 step2_name="读取应用安装包清单"; step2_state="pending"; step2_detail=""; step2_downloaded=""; step2_total=""
 step3_name="下载 ChatGPT 桌面应用"; step3_state="pending"; step3_detail=""; step3_downloaded=""; step3_total=""
@@ -52,9 +50,7 @@ step5_name="安装 Codex CLI"; step5_state="pending"; step5_detail=""; step5_dow
 step6_name="创建百积木 LLM 凭证和配置"; step6_state="pending"; step6_detail=""; step6_downloaded=""; step6_total=""
 step7_name="验证百积木路由"; step7_state="pending"; step7_detail=""; step7_downloaded=""; step7_total=""
 step8_name="验证 Codex CLI"; step8_state="pending"; step8_detail=""; step8_downloaded=""; step8_total=""
-step9_name="重新启动 ChatGPT 桌面应用"; step9_state="pending"; step9_detail=""; step9_downloaded=""; step9_total=""
-step10_name="验证应用进程"; step10_state="pending"; step10_detail=""; step10_downloaded=""; step10_total=""
-step11_name="验证可见窗口"; step11_state="pending"; step11_detail=""; step11_downloaded=""; step11_total=""
+step9_name="完成安装配置"; step9_state="pending"; step9_detail=""; step9_downloaded=""; step9_total=""
 
 json_escape() {
   printf '%s' "${1:-}" | awk 'BEGIN { ORS = ""; first = 1 } {
@@ -94,7 +90,7 @@ write_status() {
     printf '  "statusPath": '; json_string "$status_path"; printf ',\n'
     printf '  "resultPath": '; json_string "$result_path"; printf ',\n'
     printf '  "steps": [\n'
-    for index in 1 2 3 4 5 6 7 8 9 10 11; do
+    for index in 1 2 3 4 5 6 7 8 9; do
       eval "name=\${step${index}_name}"
       eval "state=\${step${index}_state}"
       eval "detail=\${step${index}_detail}"
@@ -140,7 +136,7 @@ set_step() {
 complete_pending_steps() {
   state="$1"
   detail="$2"
-  for index in 1 2 3 4 5 6 7 8 9 10 11; do
+  for index in 1 2 3 4 5 6 7 8 9; do
     eval "step_state=\${step${index}_state}"
     if [ "$step_state" = "pending" ]; then
       eval "step${index}_state=\$state"
@@ -177,9 +173,6 @@ finish_result() {
     printf '  "routerHttpStatus": '; [ -n "$router_status" ] && printf '%s' "$router_status" || printf 'null'; printf ',\n'
     printf '  "cliVersion": '; json_string "$cli_version"; printf ',\n'
     printf '  "cliSmoke": %s,\n' "$cli_smoke"
-    printf '  "appStarted": %s,\n' "$( [ "$process_count" -gt 0 ] 2>/dev/null && printf true || printf false )"
-    printf '  "visibleWindow": %s,\n' "$visible_window"
-    printf '  "processCount": %s,\n' "$process_count"
     printf '  "model": '; json_string "$CODEX_MODEL"; printf ',\n'
     printf '  "elapsedMs": %s,\n' "$elapsed_ms"
     if [ -n "$error_message" ]; then
@@ -681,55 +674,6 @@ verify_codex_cli() {
   set_step 8 "completed" "Codex CLI 验证通过"
 }
 
-verify_codex_window() {
-  if [ "${CODEX_INSTALL_SKIP_DESKTOP_RESTART:-}" = "1" ]; then
-    set_step 9 "skipped" "已保留现有 ChatGPT 桌面会话"
-    set_step 10 "skipped" "本次未要求重启桌面应用进程"
-    set_step 11 "skipped" "已通过 CLI 验证隔离的 Codex 档案"
-    return
-  fi
-  set_step 9 "running" "正在重新启动 ChatGPT 桌面应用"
-  if [ -z "$app_path" ] || [ ! -d "$app_path" ]; then
-    fail_install "尚未安装 ChatGPT 桌面应用"
-  fi
-  refresh_app_metadata
-  if [ -z "$app_bundle_id" ] || [ "$app_bundle_id" = "(null)" ]; then
-    fail_install "ChatGPT 桌面应用包标识校验失败"
-  fi
-  pkill -f "$app_path/Contents/MacOS" 2>/dev/null || true
-  pkill -f "$app_path/Contents/Resources/codex app-server" 2>/dev/null || true
-  pkill -f "$app_path/Contents/Frameworks" 2>/dev/null || true
-  sleep 3
-  open "$app_path"
-  sleep 6
-  set_step 9 "completed" "ChatGPT 桌面应用已打开"
-
-  set_step 10 "running" "正在检查 ChatGPT 桌面应用进程"
-  process_output="$(pgrep -fl "$app_path/Contents/MacOS|codex app-server" || true)"
-  process_count="$(printf '%s\n' "$process_output" | awk 'NF { count++ } END { print count + 0 }')"
-  if [ "$process_count" -lt 1 ]; then
-    fail_install "未找到 ChatGPT 桌面应用进程"
-  fi
-  set_step 10 "completed" "ChatGPT 桌面应用进程正在运行"
-
-  set_step 11 "running" "正在检查可见的 ChatGPT Codex 窗口"
-  info="$(/usr/bin/lsappinfo info -only pid,front,visible,windows "$app_bundle_id" 2>&1 || true)"
-  if [[ "$info" == *'windows=[ NULL ]'* ]]; then
-    project="$HOME/Documents/Codex/$(date +%F)/default"
-    mkdir -p "$project"
-    open -a "$app_path" "$project" || true
-    osascript -e "tell application id \"$app_bundle_id\" to activate" \
-              -e "tell application id \"$app_bundle_id\" to reopen" 2>/dev/null || true
-    sleep 5
-    info="$(/usr/bin/lsappinfo info -only pid,front,visible,windows "$app_bundle_id" 2>&1 || true)"
-  fi
-  if [[ "$info" == *'windows=[ NULL ]'* ]]; then
-    fail_install "ChatGPT 桌面应用已启动，但未检测到可见窗口"
-  fi
-  visible_window=true
-  set_step 11 "completed" "ChatGPT Codex 窗口可见"
-}
-
 write_install_console ""
 write_install_console "百积木正在安装 ChatGPT 桌面应用和 Codex"
 write_install_console "请保持此窗口打开。"
@@ -742,7 +686,7 @@ configure_codex_terminal
 verify_router
 unset local_api_key
 verify_codex_cli
-verify_codex_window
+set_step 9 "completed" "安装配置已完成，桌面启动由 Connector 按档案状态处理"
 
 trap - ERR
 complete_pending_steps "skipped" "安装已完成"
