@@ -67,7 +67,7 @@ $script:InstallSteps = @(
   [pscustomobject]@{ index = 7; name = "验证百积木路由"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
   [pscustomobject]@{ index = 8; name = "验证隔离的 Codex 档案"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
   [pscustomobject]@{ index = 9; name = "验证 Codex CLI"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 10; name = "启动并验证应用窗口"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null }
+  [pscustomobject]@{ index = 10; name = "完成安装配置"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null }
 )
 
 $result = [ordered]@{
@@ -97,9 +97,6 @@ $result = [ordered]@{
   appServerAuthModeUpdated = $false
   cliVersion = $null
   cliSmoke = $false
-  appStarted = $false
-  visibleWindow = $false
-  processCount = 0
   elapsedMs = 0
   model = $CodexModel
   warnings = @()
@@ -578,69 +575,6 @@ function Test-Router {
   Set-InstallStep 7 "completed" "百积木路由验证通过"
 }
 
-function Start-CodexDesktop {
-  if (-not $script:result.appId) {
-    $app = Get-CodexStartApp
-    if ($app) { $script:result.appId = $app.AppID }
-  }
-  if ($script:result.appId) {
-    Start-Process explorer.exe "shell:AppsFolder\$($script:result.appId)"
-    $script:result.appStarted = $true
-  }
-}
-
-function Get-CodexProcesses {
-  Get-Process -ErrorAction SilentlyContinue |
-    Where-Object {
-      $_.ProcessName -like "Codex*" -or
-      $_.ProcessName -eq "codex" -or
-      $_.ProcessName -eq "ChatGPT"
-    }
-}
-
-function Get-CodexVisibleWindows {
-  Add-Type @"
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public class BaijimuCodexWindowEnum {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-}
-"@ -ErrorAction SilentlyContinue
-
-  $windows = New-Object System.Collections.Generic.List[object]
-  $callback = [BaijimuCodexWindowEnum+EnumWindowsProc]{
-    param([IntPtr]$hWnd, [IntPtr]$lParam)
-    if ([BaijimuCodexWindowEnum]::IsWindowVisible($hWnd)) {
-      $titleBuilder = New-Object System.Text.StringBuilder 512
-      [void][BaijimuCodexWindowEnum]::GetWindowText($hWnd, $titleBuilder, $titleBuilder.Capacity)
-      $title = $titleBuilder.ToString()
-      [uint32]$windowProcessId = 0
-      [void][BaijimuCodexWindowEnum]::GetWindowThreadProcessId($hWnd, [ref]$windowProcessId)
-      $process = Get-Process -Id $windowProcessId -ErrorAction SilentlyContinue
-      if ($process -and (
-        $process.ProcessName -like "Codex*" -or
-        $process.ProcessName -eq "codex" -or
-        $process.ProcessName -eq "ChatGPT" -or
-        ($process.ProcessName -eq "ApplicationFrameHost" -and $title -match '(Codex|ChatGPT)')
-      )) {
-        $windows.Add([pscustomobject]@{
-          handle = $hWnd.ToInt64()
-          processName = $process.ProcessName
-          title = $title
-        }) | Out-Null
-      }
-    }
-    return $true
-  }
-  [void][BaijimuCodexWindowEnum]::EnumWindows($callback, [IntPtr]::Zero)
-  return $windows
-}
-
 function Get-CodexCliAssetName {
   $arch = (Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture
   if ($arch -eq 12 -or $env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
@@ -1059,7 +993,7 @@ function Invoke-AppServerLogin([string]$codexExe) {
         if ($rpcError) { throw "Codex app-server API 密钥登录请求失败：$rpcError" }
         $loginType = if ($message.result -and $message.result.PSObject.Properties["type"]) { [string]$message.result.type } else { "" }
         if ($loginType -ne "apiKey") {
-          throw "Codex app-server API 密钥登录返回了非预期类型“$loginType”"
+          throw "Codex app-server API 密钥登录返回了非预期类型 '$loginType'"
         }
         $loginResponse = $true
         $script:result.appServerLoginResponse = $true
@@ -1094,7 +1028,7 @@ function Invoke-AppServerLogin([string]$codexExe) {
       $accountType = if ($message.result -and $message.result.account -and $message.result.account.PSObject.Properties["type"]) { [string]$message.result.account.type } else { "" }
       $script:result.appServerAccountType = if ($accountType) { $accountType } else { $null }
       if ($accountType -ne "apiKey") {
-        throw "Codex app-server 账号读取返回了非预期类型“$accountType”"
+        throw "Codex app-server 账号读取返回了非预期类型 '$accountType'"
       }
       break
     }
@@ -1137,31 +1071,6 @@ function Test-CodexCli([string]$codexExe) {
   Set-InstallStep 9 "completed" "Codex CLI 验证通过"
 }
 
-function Test-VisibleWindow {
-  if ($env:CODEX_INSTALL_SKIP_DESKTOP_RESTART -eq "1") {
-    Set-InstallStep 10 "skipped" "已保留现有 ChatGPT 桌面会话"
-    return
-  }
-  Set-InstallStep 10 "running" "正在启动并验证 ChatGPT Codex 窗口"
-  Get-CodexProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
-  Start-Sleep -Seconds 1
-  Start-CodexDesktop
-  $processes = @()
-  $visibleWindows = @()
-  $deadline = (Get-Date).AddSeconds(45)
-  do {
-    Start-Sleep -Seconds 3
-    $processes = @(Get-CodexProcesses)
-    $visibleWindows = @(Get-CodexVisibleWindows)
-  } while ($visibleWindows.Count -eq 0 -and (Get-Date) -lt $deadline)
-  $script:result.processCount = $processes.Count
-  $script:result.visibleWindow = $visibleWindows.Count -gt 0
-  if (-not $script:result.visibleWindow) {
-    throw "ChatGPT 桌面应用已启动，但未检测到可见窗口句柄"
-  }
-  Set-InstallStep 10 "completed" "ChatGPT Codex 窗口可见"
-}
-
 try {
   Ensure-CodexApp
   Write-CodexConfig
@@ -1169,7 +1078,7 @@ try {
   $codexExe = Resolve-CodexCli
   Invoke-AppServerLogin $codexExe
   Test-CodexCli $codexExe
-  Test-VisibleWindow
+  Set-InstallStep 10 "completed" "安装配置已完成，桌面启动由 Connector 按档案状态处理"
 } catch {
   Add-Error $_.Exception.Message
   if ($script:CurrentStepIndex -gt 0) {

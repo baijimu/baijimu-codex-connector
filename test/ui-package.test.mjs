@@ -117,12 +117,13 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /auth-switch-modal/);
   assert.match(html, /error-retry-button/);
   assert.match(html, /restore-external-home-button/);
-  assert.match(html, /全新用户会直接初始化默认 \.codex/);
+  assert.match(html, /全新初始化会在验证完成后自动打开隔离的工作区 Codex/);
   assert.match(html, /id="management-active-panel"[^>]*hidden/);
   assert.match(html, /id="management-workspace-panel"[^>]*hidden/);
   assert.match(html, /id="setup-panel"/);
   const app = await readFile(join(root, "ui", "app.js"), "utf8");
   assert.match(app, /启动个人 Codex/);
+  assert.match(app, /全新工作区配置已自动打开，既有个人配置保持不变/);
   assert.match(app, /不会删除任何工作区目录/);
   assert.doesNotMatch(app, /window\.confirm/);
   assert.match(app, /openAuthSwitchModal/);
@@ -215,6 +216,7 @@ test("packaged installers emit zh-CN user-facing progress", async () => {
   for (const installer of installers) {
     assert.match(installer, /(?:"locale": "zh-CN"|locale = "zh-CN")/);
     assert.match(installer, /检查 ChatGPT 桌面应用/);
+    assert.doesNotMatch(installer, /[“”]/);
     for (const pattern of leakedEnglishProgress) assert.doesNotMatch(installer, pattern);
   }
 });
