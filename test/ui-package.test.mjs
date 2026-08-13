@@ -15,12 +15,24 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
+function collectDescriptions(value, descriptions = []) {
+  if (!value || typeof value !== "object") return descriptions;
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "description" && typeof child === "string") descriptions.push(child);
+    else collectDescriptions(child, descriptions);
+  }
+  return descriptions;
+}
+
 test("connector manifest declares the packaged embedded UI", async () => {
   const manifest = JSON.parse(await readFile(join(root, "connector.json"), "utf8"));
   const packageManifest = JSON.parse(
     await readFile(join(root, "package.json"), "utf8"),
   );
   assert.equal(manifest.schemaVersion, "2.0");
+  for (const description of collectDescriptions(manifest)) {
+    assert.match(description, /[\u3400-\u9fff]/, `连接器描述必须面向中文用户：${description}`);
+  }
   assert.equal(manifest.version, packageManifest.version);
   assert.equal(manifest.source.type, "github");
   assert.equal(manifest.source.repo, "momoplan/baijimu-connector-codex");
@@ -188,6 +200,23 @@ test("UI derives Codex initialization progress from installer steps and download
   assert.equal(shouldShowSetupProgress({ status: "running", installerStatus: { steps: [{ state: "running" }] } }), true);
   assert.equal(shouldShowSetupProgress({ status: "succeeded", installerStatus: { steps: [{ state: "completed" }] } }), false);
   assert.equal(shouldShowSetupProgress({ status: "needs_retry", installerStatus: { steps: [{ state: "failed" }] } }), false);
+});
+
+test("packaged installers emit zh-CN user-facing progress", async () => {
+  const installers = await Promise.all([
+    readFile(join(root, "installers", "macos-configure-terminal-and-login.sh"), "utf8"),
+    readFile(join(root, "installers", "windows-configure-terminal-and-login.ps1"), "utf8"),
+  ]);
+  const leakedEnglishProgress = [
+    /name\s*=\s*["'](?:Check|Read|Download|Verify|Install|Create|Restart|Start)\b/,
+    /(?:Set-InstallStep|set_step)\s+[^\n]*["'](?:Checking|Reading|Downloading|Verifying|Installing|Creating|Restarting|Starting)\b/,
+    /["'](?:Install completed|Install stopped|Please keep this window open\.)["']/,
+  ];
+  for (const installer of installers) {
+    assert.match(installer, /(?:"locale": "zh-CN"|locale = "zh-CN")/);
+    assert.match(installer, /检查 ChatGPT 桌面应用/);
+    for (const pattern of leakedEnglishProgress) assert.doesNotMatch(installer, pattern);
+  }
 });
 
 test("UI distinguishes retryable setup states from current failures", () => {

@@ -3,7 +3,7 @@ $ProgressPreference = "SilentlyContinue"
 
 $CodexModel = if ($env:CODEX_MODEL) { $env:CODEX_MODEL } else { "gpt-5.6-sol" }
 if ($CodexModel -notmatch '^[A-Za-z0-9._-]+$') {
-  throw "invalid CODEX_MODEL: $CodexModel"
+  throw "CODEX_MODEL 无效：$CodexModel"
 }
 $WorkspaceId = if ($env:CODEX_WORKSPACE_ID) { $env:CODEX_WORKSPACE_ID } elseif ($env:BAIJIMU_WORKSPACE_ID) { $env:BAIJIMU_WORKSPACE_ID } else { $env:WORKSPACE_ID }
 $ProjectId = if ($env:CODEX_PROJECT_ID) { $env:CODEX_PROJECT_ID } elseif ($env:BAIJIMU_PROJECT_ID) { $env:BAIJIMU_PROJECT_ID } else { $env:PROJECT_ID }
@@ -12,10 +12,10 @@ $AgentSessionId = if ($env:CODEX_AGENT_SESSION_ID) { $env:CODEX_AGENT_SESSION_ID
 $SessionId = if ($env:CODEX_SESSION_ID) { $env:CODEX_SESSION_ID } elseif ($env:BAIJIMU_SESSION_ID) { $env:BAIJIMU_SESSION_ID } else { $env:SESSION_ID }
 $RouterBaseUrl = if ($env:CODEX_ROUTER_BASE_URL) { $env:CODEX_ROUTER_BASE_URL.TrimEnd("/") } else { "https://router.baijimu.com/api/claudecode/v1" }
 if (-not $WorkspaceId -or $WorkspaceId -notmatch '^\d+$') {
-  throw "CODEX_WORKSPACE_ID or BAIJIMU_WORKSPACE_ID is required"
+  throw "必须提供 CODEX_WORKSPACE_ID 或 BAIJIMU_WORKSPACE_ID"
 }
 if ($ProjectId -and $ProjectId -notmatch '^\d+$') {
-  throw "invalid CODEX_PROJECT_ID or BAIJIMU_PROJECT_ID"
+  throw "CODEX_PROJECT_ID 或 BAIJIMU_PROJECT_ID 无效"
 }
 
 $startedAt = Get-Date
@@ -58,16 +58,16 @@ function Write-Utf8NoBomFile([string]$path, [AllowEmptyString()][string]$content
 
 $script:CurrentStepIndex = 0
 $script:InstallSteps = @(
-  [pscustomobject]@{ index = 1; name = "Check ChatGPT desktop app"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 2; name = "Read package manifest"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 3; name = "Download ChatGPT package"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 4; name = "Verify package"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 5; name = "Install ChatGPT desktop app"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 6; name = "Create Baijimu LLM credential and config"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 7; name = "Verify Baijimu router"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 8; name = "Verify isolated Codex profile"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 9; name = "Verify Codex CLI"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 10; name = "Start and verify window"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null }
+  [pscustomobject]@{ index = 1; name = "检查 ChatGPT 桌面应用"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 2; name = "读取安装包清单"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 3; name = "下载 ChatGPT 安装包"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 4; name = "校验安装包"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 5; name = "安装 ChatGPT 桌面应用"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 6; name = "创建百积木 LLM 凭证和配置"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 7; name = "验证百积木路由"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 8; name = "验证隔离的 Codex 档案"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 9; name = "验证 Codex CLI"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 10; name = "启动并验证应用窗口"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null }
 )
 
 $result = [ordered]@{
@@ -121,7 +121,8 @@ function Write-InstallConsole([string]$message) {
 
 function Write-InstallStatus {
   $status = [ordered]@{
-    title = "Baijimu is installing ChatGPT desktop app"
+    title = "百积木正在安装 ChatGPT 桌面应用"
+    locale = "zh-CN"
     platform = "windows"
     startedAt = $startedAt.ToString("o")
     updatedAt = (Get-Date).ToString("o")
@@ -200,8 +201,8 @@ function Save-WebFileWithProgress([string]$uri, [string]$outFile, [int]$stepInde
 }
 
 Write-InstallConsole ""
-Write-InstallConsole "Baijimu is installing ChatGPT desktop app"
-Write-InstallConsole "Please keep this window open."
+Write-InstallConsole "百积木正在安装 ChatGPT 桌面应用"
+Write-InstallConsole "请保持此窗口打开。"
 Write-InstallConsole ""
 Write-InstallStatus
 
@@ -254,19 +255,19 @@ function Wait-CodexStartApp([int]$timeoutSeconds) {
 }
 
 function Get-CodexCacheAsset([string]$assetName) {
-  Set-InstallStep 2 "running" "Reading Baijimu package manifest"
+  Set-InstallStep 2 "running" "正在读取百积木安装包清单"
   $manifestUrl = "https://download.baijimu.com/codex-artifacts/latest.json"
   $manifestPath = Join-Path $env:TEMP "codex-artifacts-latest.json"
-  Save-WebFileWithProgress $manifestUrl $manifestPath 2 "Reading Baijimu package manifest"
+  Save-WebFileWithProgress $manifestUrl $manifestPath 2 "正在读取百积木安装包清单"
   $manifest = Get-Content -Raw -Path $manifestPath | ConvertFrom-Json
   $asset = @($manifest.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1)
   if (-not $asset) {
-    throw "baijimu cache missing asset: $assetName"
+    throw "百积木缓存缺少制品：$assetName"
   }
   if (-not $asset.mirror_url -or -not $asset.sha256) {
-    throw "baijimu cache asset is incomplete: $assetName"
+    throw "百积木缓存中的制品不完整：$assetName"
   }
-  Set-InstallStep 2 "completed" "Found $assetName"
+  Set-InstallStep 2 "completed" "已找到制品 $assetName"
   return $asset
 }
 
@@ -278,33 +279,33 @@ function Install-CodexAppFromBaijimuCache {
   if ($asset.size_bytes) { $assetSize = [Int64]$asset.size_bytes }
   elseif ($asset.size) { $assetSize = [Int64]$asset.size }
   elseif ($asset.file_size) { $assetSize = [Int64]$asset.file_size }
-  Save-WebFileWithProgress $asset.mirror_url $packagePath 3 "Downloading official ChatGPT desktop app package" $assetSize
-  Set-InstallStep 4 "running" "Verifying package SHA256"
+  Save-WebFileWithProgress $asset.mirror_url $packagePath 3 "正在下载官方 ChatGPT 桌面应用安装包" $assetSize
+  Set-InstallStep 4 "running" "正在校验安装包 SHA256"
   $actual = (Get-FileHash -Algorithm SHA256 -Path $packagePath).Hash.ToLowerInvariant()
   $expected = [string]$asset.sha256
   if ($actual -ne $expected.ToLowerInvariant()) {
-    throw "SHA256 mismatch for $assetName"
+    throw "制品 SHA256 不匹配：$assetName"
   }
-  Set-InstallStep 4 "completed" "Package SHA256 verified"
+  Set-InstallStep 4 "completed" "安装包 SHA256 校验通过"
   Unblock-File -Path $packagePath -ErrorAction SilentlyContinue
   $script:result.appInstallMethod = "baijimu-cache-msix"
-  Set-InstallStep 5 "running" "Installing ChatGPT desktop app"
+  Set-InstallStep 5 "running" "正在安装 ChatGPT 桌面应用"
   Add-AppxPackage -Path $packagePath
-  Set-InstallStep 5 "completed" "ChatGPT desktop app installed"
+  Set-InstallStep 5 "completed" "ChatGPT 桌面应用已安装"
 }
 
 function Ensure-CodexApp {
-  Set-InstallStep 1 "running" "Checking whether ChatGPT desktop app is installed"
+  Set-InstallStep 1 "running" "正在检查是否已安装 ChatGPT 桌面应用"
   $app = Get-CodexStartApp
   if ($app) {
     $script:result.appInstalled = $true
     $script:result.appInstallMethod = "already-installed"
     $script:result.appId = $app.AppID
-    Set-InstallStep 1 "completed" "ChatGPT desktop app is already installed"
-    Set-InstallStep 2 "skipped" "Package download is not needed"
-    Set-InstallStep 3 "skipped" "Package download is not needed"
-    Set-InstallStep 4 "skipped" "Package verification is not needed"
-    Set-InstallStep 5 "skipped" "Reinstall is not needed"
+    Set-InstallStep 1 "completed" "ChatGPT 桌面应用已安装"
+    Set-InstallStep 2 "skipped" "无需读取安装包清单"
+    Set-InstallStep 3 "skipped" "无需下载安装包"
+    Set-InstallStep 4 "skipped" "无需校验安装包"
+    Set-InstallStep 5 "skipped" "无需重新安装"
     return
   }
 
@@ -314,35 +315,35 @@ function Ensure-CodexApp {
     $script:result.appInstallMethod = "already-installed"
     $app = Wait-CodexStartApp 20
     if ($app) { $script:result.appId = $app.AppID }
-    Set-InstallStep 1 "completed" "ChatGPT desktop app package is already installed"
-    Set-InstallStep 2 "skipped" "Package download is not needed"
-    Set-InstallStep 3 "skipped" "Package download is not needed"
-    Set-InstallStep 4 "skipped" "Package verification is not needed"
-    Set-InstallStep 5 "skipped" "Reinstall is not needed"
+    Set-InstallStep 1 "completed" "ChatGPT 桌面应用安装包已安装"
+    Set-InstallStep 2 "skipped" "无需读取安装包清单"
+    Set-InstallStep 3 "skipped" "无需下载安装包"
+    Set-InstallStep 4 "skipped" "无需校验安装包"
+    Set-InstallStep 5 "skipped" "无需重新安装"
     return
   }
-  Set-InstallStep 1 "completed" "ChatGPT desktop app is not installed; preparing install"
+  Set-InstallStep 1 "completed" "未安装 ChatGPT 桌面应用，正在准备安装"
 
   try {
     Install-CodexAppFromBaijimuCache
   } catch {
-    Add-Warning "baijimu cache install failed: $($_.Exception.Message)"
+    Add-Warning "使用百积木缓存安装失败：$($_.Exception.Message)"
     if ($env:CODEX_ALLOW_OFFICIAL_WINDOWS_INSTALLER_FALLBACK -eq "1") {
       $script:result.appInstallMethod = "official-installer"
       $installer = Join-Path $env:TEMP "ChatGPT Installer.exe"
-      Save-WebFileWithProgress "https://get.microsoft.com/installer/download/9PLM9XGG6VKS?cid=website_cta_psi" $installer 3 "Downloading official installer"
-      Set-InstallStep 5 "running" "Running official installer"
+      Save-WebFileWithProgress "https://get.microsoft.com/installer/download/9PLM9XGG6VKS?cid=website_cta_psi" $installer 3 "正在下载官方安装器"
+      Set-InstallStep 5 "running" "正在运行官方安装器"
       Start-Process -FilePath $installer -Wait
-      Set-InstallStep 5 "completed" "Official installer completed"
+      Set-InstallStep 5 "completed" "官方安装器已运行完成"
     } elseif ($env:CODEX_ALLOW_WINGET_FALLBACK -eq "1") {
       $winget = Get-Command winget -ErrorAction SilentlyContinue
       if (-not $winget) {
-        throw "baijimu cache install failed and winget is unavailable"
+        throw "使用百积木缓存安装失败，并且 winget 不可用"
       }
       $script:result.appInstallMethod = "winget-msstore"
-      Set-InstallStep 5 "running" "Installing through Microsoft Store"
+      Set-InstallStep 5 "running" "正在通过 Microsoft Store 安装"
       & winget install --id 9PLM9XGG6VKS -s msstore --accept-package-agreements --accept-source-agreements | Out-Null
-      Set-InstallStep 5 "completed" "Microsoft Store install completed"
+      Set-InstallStep 5 "completed" "Microsoft Store 安装已完成"
     } else {
       throw
     }
@@ -352,23 +353,23 @@ function Ensure-CodexApp {
   if (-not $app) {
     $package = Get-CodexInstalledPackage
     if ($package) {
-      throw "ChatGPT desktop app package was installed but no Start menu entry was found after installation"
+      throw "ChatGPT 桌面应用安装包已安装，但安装后未找到开始菜单入口"
     }
-    throw "ChatGPT desktop app package and Start menu entry were not found after installation"
+    throw "安装后未找到 ChatGPT 桌面应用安装包和开始菜单入口"
   }
 
   $script:result.appInstalled = $true
   $script:result.appId = $app.AppID
-  Set-InstallStep 5 "completed" "ChatGPT desktop app can start"
+  Set-InstallStep 5 "completed" "ChatGPT 桌面应用可以启动"
 }
 
 function Get-CodexRouterApiKey {
   if (-not (Test-Path $authPath)) {
-    throw "Codex auth file was not written"
+    throw "未写入 Codex 授权文件"
   }
   $auth = Get-Content -Raw -Path $authPath | ConvertFrom-Json
   if (-not $auth.OPENAI_API_KEY) {
-    throw "Codex auth file does not contain OPENAI_API_KEY"
+    throw "Codex 授权文件中不包含 OPENAI_API_KEY"
   }
   return [string]($auth.OPENAI_API_KEY)
 }
@@ -396,17 +397,17 @@ function Resolve-BaijimuCli {
       return $candidate
     }
   }
-  throw "baijimu CLI was not found; please update or restart Baijimu Bridge Agent"
+  throw "未找到百积木 CLI；请更新或重新启动百积木 Bridge Agent"
 }
 
 function New-BaijimuLlmCredential {
   if ($env:CODEX_LLM_CREDENTIAL_FILE) {
     if (-not (Test-Path -LiteralPath $env:CODEX_LLM_CREDENTIAL_FILE -PathType Leaf)) {
-      throw "CODEX_LLM_CREDENTIAL_FILE does not exist"
+      throw "CODEX_LLM_CREDENTIAL_FILE 不存在"
     }
     $credential = (Get-Content -Raw -LiteralPath $env:CODEX_LLM_CREDENTIAL_FILE).Trim()
     if (-not $credential) {
-      throw "CODEX_LLM_CREDENTIAL_FILE is empty"
+      throw "CODEX_LLM_CREDENTIAL_FILE 为空"
     }
     $script:result.llmCredentialCreated = $true
     return [string]$credential
@@ -440,17 +441,17 @@ function New-BaijimuLlmCredential {
   $process = Start-Process -FilePath $baijimu -ArgumentList $args -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outputPath -RedirectStandardError $errorPath
   if ($process.ExitCode -ne 0) {
     $errorText = if (Test-Path $errorPath) { (Get-Content -Raw -Path $errorPath).Trim() } else { "" }
-    throw "baijimu llm-credential create failed: $errorText"
+    throw "创建百积木 LLM 凭证失败：$errorText"
   }
   if (-not (Test-Path $outputPath)) {
-    throw "baijimu llm-credential create did not produce output"
+    throw "创建百积木 LLM 凭证时未产生输出"
   }
   $payload = Get-Content -Raw -Path $outputPath | ConvertFrom-Json
   Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
   $data = if ($payload.data) { $payload.data } else { $payload }
   $credential = if ($data.llmCredential) { $data.llmCredential } elseif ($data.credential) { $data.credential } else { $data.apiKey }
   if (-not $credential) {
-    throw "baijimu llm-credential create did not return an LLM credential"
+    throw "创建百积木 LLM 凭证时未返回凭证"
   }
   return [string]$credential
 }
@@ -530,7 +531,7 @@ function Backup-IfExists([string]$path) {
 }
 
 function Write-CodexConfig {
-  Set-InstallStep 6 "running" "Creating Baijimu LLM credential and writing Codex config"
+  Set-InstallStep 6 "running" "正在创建百积木 LLM 凭证并写入 Codex 配置"
   New-Item -ItemType Directory -Force -Path $codexDir | Out-Null
   $cliToken = New-BaijimuLlmCredential
   $script:result.sharedCliTokenRead = $true
@@ -550,11 +551,11 @@ function Write-CodexConfig {
 
   [void](Get-CodexRouterApiKey)
   $script:result.authWritten = $true
-  Set-InstallStep 6 "completed" "Codex config written from Baijimu LLM credential"
+  Set-InstallStep 6 "completed" "已使用百积木 LLM 凭证写入 Codex 配置"
 }
 
 function Test-Router {
-  Set-InstallStep 7 "running" "Verifying Baijimu router"
+  Set-InstallStep 7 "running" "正在验证百积木路由"
   $apiKey = Get-CodexRouterApiKey
   $responsePath = Join-Path $env:TEMP "codex-router-responses.json"
   $headers = @{
@@ -572,9 +573,9 @@ function Test-Router {
     Remove-Item $responsePath -Force -ErrorAction SilentlyContinue
   }
   if ($script:result.routerHttpStatus -ne 200) {
-    throw "router /responses health check failed: HTTP $($script:result.routerHttpStatus)"
+    throw "路由 /responses 健康检查失败：HTTP $($script:result.routerHttpStatus)"
   }
-  Set-InstallStep 7 "completed" "Baijimu router verified"
+  Set-InstallStep 7 "completed" "百积木路由验证通过"
 }
 
 function Start-CodexDesktop {
@@ -659,17 +660,17 @@ function Get-CodexCliTarget {
 function Get-ConfiguredCodexCli {
   if (-not $env:CODEX_CLI_BIN) { return $null }
   if (-not [System.IO.Path]::IsPathRooted($env:CODEX_CLI_BIN)) {
-    throw "CODEX_CLI_BIN must be an absolute path"
+    throw "CODEX_CLI_BIN 必须是绝对路径"
   }
   if (-not (Test-Path -LiteralPath $env:CODEX_CLI_BIN -PathType Leaf)) {
-    throw "CODEX_CLI_BIN does not exist: $($env:CODEX_CLI_BIN)"
+    throw "CODEX_CLI_BIN 不存在：$($env:CODEX_CLI_BIN)"
   }
   $extension = [System.IO.Path]::GetExtension($env:CODEX_CLI_BIN)
   if ($extension -notin @(".exe", ".com", ".cmd", ".bat")) {
-    throw "CODEX_CLI_BIN must point to a Windows executable or command launcher"
+    throw "CODEX_CLI_BIN 必须指向 Windows 可执行文件或命令启动器"
   }
   if (-not (Test-CodexCliCandidate $env:CODEX_CLI_BIN "CODEX_CLI_BIN")) {
-    throw "CODEX_CLI_BIN does not point to a working Codex CLI with app-server support: $($env:CODEX_CLI_BIN)"
+    throw "CODEX_CLI_BIN 指向的 Codex CLI 不可用或不支持 app-server：$($env:CODEX_CLI_BIN)"
   }
   $script:result.cliInstallMethod = "advanced-absolute-path"
   return $env:CODEX_CLI_BIN
@@ -678,12 +679,12 @@ function Get-ConfiguredCodexCli {
 function Test-CodexCliCandidate([string]$codexExe, [string]$label) {
   $versionProbe = Invoke-CodexProcess $codexExe "--version" 20
   if ($versionProbe.timedOut -or $versionProbe.exitCode -ne 0) {
-    Add-Warning "ignored unusable $label Codex CLI ($codexExe): codex --version failed: $($versionProbe.stderr)"
+    Add-Warning "已忽略不可用的$label Codex CLI（$codexExe）：codex --version 执行失败：$($versionProbe.stderr)"
     return $false
   }
   $appServerProbe = Invoke-CodexProcess $codexExe "app-server --help" 20
   if ($appServerProbe.timedOut -or $appServerProbe.exitCode -ne 0) {
-    Add-Warning "ignored unusable $label Codex CLI ($codexExe): codex app-server --help failed: $($appServerProbe.stderr)"
+    Add-Warning "已忽略不可用的$label Codex CLI（$codexExe）：codex app-server --help 执行失败：$($appServerProbe.stderr)"
     return $false
   }
   return $true
@@ -702,7 +703,7 @@ function Get-SystemCodexCli {
     $candidate = [System.IO.Path]::GetFullPath([string]$command.Source)
     if ($seen.ContainsKey($candidate)) { continue }
     $seen[$candidate] = $true
-    if (Test-CodexCliCandidate $candidate "system") {
+    if (Test-CodexCliCandidate $candidate "系统级") {
       $script:result.cliInstallMethod = "already-installed"
       return $candidate
     }
@@ -718,7 +719,7 @@ function Read-ManagedCodexCli([string]$statePath) {
       return $state
     }
   } catch {
-    Add-Warning "ignored invalid managed Codex CLI state: $($_.Exception.Message)"
+    Add-Warning "已忽略无效的托管 Codex CLI 状态：$($_.Exception.Message)"
   }
   return $null
 }
@@ -727,21 +728,21 @@ function Resolve-CodexPackageContents([string]$packageDir, [string]$expectedTarg
   $packageRoot = [System.IO.Path]::GetFullPath($packageDir)
   $metadataPath = Join-Path $packageRoot "codex-package.json"
   if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
-    throw "official Codex package metadata is missing: codex-package.json"
+    throw "缺少官方 Codex 安装包元数据：codex-package.json"
   }
   try {
     $metadata = Get-Content -Raw -LiteralPath $metadataPath | ConvertFrom-Json -ErrorAction Stop
   } catch {
-    throw "official Codex package metadata is invalid: $($_.Exception.Message)"
+    throw "官方 Codex 安装包元数据无效：$($_.Exception.Message)"
   }
   if ($metadata.variant -ne "codex" -or $metadata.target -ne $expectedTarget) {
-    throw "official Codex package identity mismatch: variant=$($metadata.variant), target=$($metadata.target)"
+    throw "官方 Codex 安装包标识不匹配：variant=$($metadata.variant)，target=$($metadata.target)"
   }
   if ($metadata.entrypoint -ne "bin/codex.exe" -and $metadata.entrypoint -ne "bin\codex.exe") {
-    throw "official Codex package entrypoint is unexpected: $($metadata.entrypoint)"
+    throw "官方 Codex 安装包入口不符合预期：$($metadata.entrypoint)"
   }
   if ($metadata.resourcesDir -ne "codex-resources" -or $metadata.pathDir -ne "codex-path") {
-    throw "official Codex package resource layout is unexpected"
+    throw "官方 Codex 安装包资源布局不符合预期"
   }
 
   $requiredFiles = @(
@@ -756,10 +757,10 @@ function Resolve-CodexPackageContents([string]$packageDir, [string]$expectedTarg
   foreach ($relativePath in $requiredFiles) {
     $candidate = [System.IO.Path]::GetFullPath((Join-Path $packageRoot $relativePath))
     if (-not $candidate.StartsWith($packagePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-      throw "official Codex package contains an unsafe path: $relativePath"
+      throw "官方 Codex 安装包包含不安全路径：$relativePath"
     }
     if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-      throw "official Codex package is incomplete: $relativePath"
+      throw "官方 Codex 安装包不完整，缺少：$relativePath"
     }
     $resolvedFiles[$relativePath] = $candidate
   }
@@ -779,7 +780,7 @@ function Remove-LegacyManagedCodexCli([object]$state, [string]$cliRoot, [string]
   $legacyVersionDir = [System.IO.Path]::GetDirectoryName($legacyBinary)
   $versionsRoot = [System.IO.Path]::GetFullPath((Join-Path $cliRoot "versions"))
   if ([System.IO.Path]::GetDirectoryName($legacyVersionDir) -ne $versionsRoot) {
-    Add-Warning "ignored legacy Codex CLI outside the managed versions directory: $legacyBinary"
+    Add-Warning "已忽略托管版本目录之外的旧版 Codex CLI：$legacyBinary"
     return
   }
   if ($legacyVersionDir -eq [System.IO.Path]::GetFullPath($activePackageRoot)) { return }
@@ -787,18 +788,18 @@ function Remove-LegacyManagedCodexCli([object]$state, [string]$cliRoot, [string]
 }
 
 function Install-CodexCliFromBaijimuCache {
-  Set-InstallStep 8 "running" "Resolving the current official Codex CLI artifact"
+  Set-InstallStep 8 "running" "正在解析当前官方 Codex CLI 制品"
   $assetName = Get-CodexCliAssetName
   $manifestUrl = "https://download.baijimu.com/codex-artifacts/latest.json"
   $manifest = Invoke-RestMethod -UseBasicParsing -TimeoutSec 120 -Uri $manifestUrl
   $asset = @($manifest.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1)
   if (-not $asset -or -not $asset.mirror_url -or -not $asset.sha256) {
-    throw "baijimu cache missing complete Codex CLI asset: $assetName"
+    throw "百积木缓存缺少完整的 Codex CLI 制品：$assetName"
   }
 
   $expected = ([string]$asset.sha256).ToLowerInvariant()
   if ($asset.install_layout -ne "codex_package_v1") {
-    throw "baijimu cache returned an unsupported Codex CLI install layout: $($asset.install_layout)"
+    throw "百积木缓存返回了不受支持的 Codex CLI 安装布局：$($asset.install_layout)"
   }
   $expectedTarget = Get-CodexCliTarget
   $cliRoot = Join-Path $env:LOCALAPPDATA "OpenAI\Codex\cli"
@@ -808,17 +809,17 @@ function Install-CodexCliFromBaijimuCache {
     try {
       $installedPackage = Resolve-CodexPackageContents ([string]$current.packageRoot) $expectedTarget
       if ($installedPackage.binaryPath -ne [System.IO.Path]::GetFullPath([string]$current.binaryPath)) {
-        throw "managed Codex CLI entrypoint does not match package metadata"
+        throw "托管 Codex CLI 入口与安装包元数据不匹配"
       }
       if (-not (Test-CodexCliCandidate $installedPackage.binaryPath "managed")) {
-        throw "managed Codex CLI failed executable verification"
+        throw "托管 Codex CLI 可执行性校验失败"
       }
       $script:result.cliInstallMethod = "managed-current"
       $script:result.cliArtifact = $assetName
       $script:result.cliArtifactSha256 = $expected
       return $installedPackage.binaryPath
     } catch {
-      Add-Warning "managed Codex CLI package is incomplete and will be reinstalled: $($_.Exception.Message)"
+      Add-Warning "托管 Codex CLI 安装包不完整，将重新安装：$($_.Exception.Message)"
     }
   }
 
@@ -828,11 +829,11 @@ function Install-CodexCliFromBaijimuCache {
   $stagingDir = $null
   New-Item -ItemType Directory -Force -Path $temporaryRoot | Out-Null
   try {
-    Save-WebFileWithProgress $asset.mirror_url $downloadPath 8 "Downloading official Codex CLI"
-    Set-InstallStep 8 "running" "Verifying official Codex CLI SHA256"
+    Save-WebFileWithProgress $asset.mirror_url $downloadPath 8 "正在下载官方 Codex CLI"
+    Set-InstallStep 8 "running" "正在校验官方 Codex CLI 的 SHA256"
     $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $downloadPath).Hash.ToLowerInvariant()
     if ($actual -ne $expected) {
-      throw "SHA256 mismatch for $assetName"
+      throw "制品 SHA256 不匹配：$assetName"
     }
 
     $versionsRoot = Join-Path $cliRoot "versions"
@@ -840,25 +841,25 @@ function Install-CodexCliFromBaijimuCache {
     $stagingDir = Join-Path $versionsRoot ".staging-$expected-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
     $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
-    if (-not $tar) { throw "Windows tar.exe is required to install the official Codex package" }
+    if (-not $tar) { throw "安装官方 Codex 安装包需要 Windows tar.exe" }
     & $tar.Source -xzf $downloadPath -C $stagingDir
-    if ($LASTEXITCODE -ne 0) { throw "failed to extract official Codex package: exit code $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "解压官方 Codex 安装包失败，退出码：$LASTEXITCODE" }
     $stagedPackage = Resolve-CodexPackageContents $stagingDir $expectedTarget
 
     $versionProbe = Invoke-CodexProcess $stagedPackage.binaryPath "--version" 20
     if ($versionProbe.timedOut -or $versionProbe.exitCode -ne 0) {
-      throw "official Codex package failed version verification: $($versionProbe.stderr)"
+      throw "官方 Codex 安装包版本校验失败：$($versionProbe.stderr)"
     }
     $appServerProbe = Invoke-CodexProcess $stagedPackage.binaryPath "app-server --help" 20
     if ($appServerProbe.timedOut -or $appServerProbe.exitCode -ne 0) {
-      throw "official Codex package failed app-server verification: $($appServerProbe.stderr)"
+      throw "官方 Codex 安装包 app-server 校验失败：$($appServerProbe.stderr)"
     }
 
     if (Test-Path -LiteralPath $versionDir) {
       try {
         $existingPackage = Resolve-CodexPackageContents $versionDir $expectedTarget
         if (-not (Test-CodexCliCandidate $existingPackage.binaryPath "managed")) {
-          throw "existing managed Codex CLI failed executable verification"
+          throw "现有托管 Codex CLI 可执行性校验失败"
         }
         Remove-Item -LiteralPath $stagingDir -Recurse -Force
       } catch {
@@ -945,7 +946,7 @@ function Invoke-CodexProcess([string]$codexExe, [string]$arguments, [int]$timeou
       timedOut = $true
       exitCode = $null
       stdout = ""
-      stderr = "timed out after $timeoutSeconds seconds"
+      stderr = "执行超过 $timeoutSeconds 秒后超时"
     }
   }
   return @{
@@ -957,7 +958,7 @@ function Invoke-CodexProcess([string]$codexExe, [string]$arguments, [int]$timeou
 }
 
 function Invoke-AppServerLogin([string]$codexExe) {
-  Set-InstallStep 8 "running" "Verifying isolated Codex profile with the official CLI"
+  Set-InstallStep 8 "running" "正在使用官方 CLI 验证隔离的 Codex 档案"
   $apiKey = Get-CodexRouterApiKey
   $script:result.codexExe = $codexExe
   $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -979,11 +980,11 @@ function Invoke-AppServerLogin([string]$codexExe) {
   $appServerInput.AutoFlush = $true
   $stderrTask = $proc.StandardError.ReadToEndAsync()
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
-  $protocolStage = "initialize response"
+  $protocolStage = "初始化响应"
 
   function Send-JsonRpcLine([string]$json) {
     if ($proc.HasExited) {
-      throw "Codex app-server exited before sending $protocolStage (exit code $($proc.ExitCode))"
+      throw "Codex app-server 在发送 $protocolStage 前退出（退出码 $($proc.ExitCode)）"
     }
     $appServerInput.WriteLine($json)
   }
@@ -997,17 +998,17 @@ function Invoke-AppServerLogin([string]$codexExe) {
     while ($true) {
       $remainingMs = [int][Math]::Ceiling(($deadline - [DateTime]::UtcNow).TotalMilliseconds)
       if ($remainingMs -le 0) {
-        throw "Timed out waiting for Codex app-server $protocolStage"
+        throw "等待 Codex app-server $protocolStage 超时"
       }
 
       $readTask = $proc.StandardOutput.ReadLineAsync()
       if (-not $readTask.Wait($remainingMs)) {
-        throw "Timed out waiting for Codex app-server $protocolStage"
+        throw "等待 Codex app-server $protocolStage 超时"
       }
       $line = $readTask.Result
       if ($null -eq $line) {
-        $exitDetail = if ($proc.HasExited) { "exit code $($proc.ExitCode)" } else { "stdout closed" }
-        throw "Codex app-server ended before $protocolStage ($exitDetail)"
+        $exitDetail = if ($proc.HasExited) { "退出码 $($proc.ExitCode)" } else { "标准输出已关闭" }
+        throw "Codex app-server 在 $protocolStage 前结束（$exitDetail）"
       }
 
       try {
@@ -1015,16 +1016,16 @@ function Invoke-AppServerLogin([string]$codexExe) {
       } catch {
         $maskedLine = Mask-AppServerText $line
         if ($maskedLine.Length -gt 240) { $maskedLine = $maskedLine.Substring(0, 240) }
-        Add-Warning "ignored non-JSON Codex app-server stdout while waiting for ${protocolStage}: $maskedLine"
+        Add-Warning "等待 ${protocolStage} 时已忽略 Codex app-server 的非 JSON 标准输出：$maskedLine"
       }
     }
   }
 
   function Get-AppServerError([object]$message) {
     if (-not $message.PSObject.Properties["error"] -or $null -eq $message.error) { return $null }
-    $code = if ($message.error.PSObject.Properties["code"]) { [string]$message.error.code } else { "unknown" }
+    $code = if ($message.error.PSObject.Properties["code"]) { [string]$message.error.code } else { "未知" }
     $detail = if ($message.error.PSObject.Properties["message"]) { [string]$message.error.message } else { ($message.error | ConvertTo-Json -Compress -Depth 6) }
-    return "JSON-RPC error ${code}: $(Mask-AppServerText $detail)"
+    return "JSON-RPC 错误 ${code}：$(Mask-AppServerText $detail)"
   }
 
   $protocolError = $null
@@ -1034,12 +1035,12 @@ function Invoke-AppServerLogin([string]$codexExe) {
       $message = Read-AppServerMessage
       if ([string]$message.id -ne "0") { continue }
       $rpcError = Get-AppServerError $message
-      if ($rpcError) { throw "Codex app-server initialize failed: $rpcError" }
+      if ($rpcError) { throw "Codex app-server 初始化失败：$rpcError" }
       break
     }
 
     Send-JsonRpcLine '{"method":"initialized","params":{}}'
-    $protocolStage = "API-key login completion"
+    $protocolStage = "API 密钥登录完成事件"
     $loginRequest = [ordered]@{
       method = "account/login/start"
       id = 2
@@ -1055,10 +1056,10 @@ function Invoke-AppServerLogin([string]$codexExe) {
       $message = Read-AppServerMessage
       if ([string]$message.id -eq "2") {
         $rpcError = Get-AppServerError $message
-        if ($rpcError) { throw "Codex app-server API-key login request failed: $rpcError" }
+        if ($rpcError) { throw "Codex app-server API 密钥登录请求失败：$rpcError" }
         $loginType = if ($message.result -and $message.result.PSObject.Properties["type"]) { [string]$message.result.type } else { "" }
         if ($loginType -ne "apiKey") {
-          throw "Codex app-server API-key login returned unexpected type '$loginType'"
+          throw "Codex app-server API 密钥登录返回了非预期类型“$loginType”"
         }
         $loginResponse = $true
         $script:result.appServerLoginResponse = $true
@@ -1067,8 +1068,8 @@ function Invoke-AppServerLogin([string]$codexExe) {
       if ([string]$message.method -eq "account/login/completed") {
         $success = $message.params -and $message.params.success -eq $true
         if (-not $success) {
-          $detail = if ($message.params -and $message.params.PSObject.Properties["error"] -and $message.params.error) { [string]$message.params.error } else { "unknown error" }
-          throw "Codex app-server API-key login was rejected: $(Mask-AppServerText $detail)"
+          $detail = if ($message.params -and $message.params.PSObject.Properties["error"] -and $message.params.error) { [string]$message.params.error } else { "未知错误" }
+          throw "Codex app-server API 密钥登录被拒绝：$(Mask-AppServerText $detail)"
         }
         $loginCompleted = $true
         $script:result.appServerLogin = $true
@@ -1083,17 +1084,17 @@ function Invoke-AppServerLogin([string]$codexExe) {
       }
     }
 
-    $protocolStage = "account/read API-key state"
+    $protocolStage = "account/read API 密钥状态"
     Send-JsonRpcLine '{"method":"account/read","id":3,"params":{"refreshToken":false}}'
     while ($true) {
       $message = Read-AppServerMessage
       if ([string]$message.id -ne "3") { continue }
       $rpcError = Get-AppServerError $message
-      if ($rpcError) { throw "Codex app-server account read failed: $rpcError" }
+      if ($rpcError) { throw "Codex app-server 账号读取失败：$rpcError" }
       $accountType = if ($message.result -and $message.result.account -and $message.result.account.PSObject.Properties["type"]) { [string]$message.result.account.type } else { "" }
       $script:result.appServerAccountType = if ($accountType) { $accountType } else { $null }
       if ($accountType -ne "apiKey") {
-        throw "Codex app-server account read returned unexpected type '$accountType'"
+        throw "Codex app-server 账号读取返回了非预期类型“$accountType”"
       }
       break
     }
@@ -1104,7 +1105,7 @@ function Invoke-AppServerLogin([string]$codexExe) {
     if (-not $proc.HasExited) { Stop-CodexProcess $proc }
     try { [void]$stderrTask.Wait(2000) } catch {
       if (-not $protocolError) {
-        $protocolError = "Failed to read Codex app-server diagnostics: $($_.Exception.Message)"
+        $protocolError = "读取 Codex app-server 诊断信息失败：$($_.Exception.Message)"
       }
     }
   }
@@ -1113,35 +1114,35 @@ function Invoke-AppServerLogin([string]$codexExe) {
     $stderr = if ($stderrTask.IsCompleted) { Mask-AppServerText $stderrTask.Result } else { "" }
     $stderr = ($stderr -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join " | "
     if ($stderr.Length -gt 400) { $stderr = $stderr.Substring(0, 400) }
-    if ($stderr) { throw "$protocolError; stderr: $stderr" }
+    if ($stderr) { throw "$protocolError；标准错误：$stderr" }
     throw $protocolError
   }
-  Set-InstallStep 8 "completed" "Isolated Codex profile verified with Baijimu account"
+  Set-InstallStep 8 "completed" "已使用百积木账号验证隔离的 Codex 档案"
 }
 
 function Test-CodexCli([string]$codexExe) {
-  Set-InstallStep 9 "running" "Checking Codex CLI version"
+  Set-InstallStep 9 "running" "正在检查 Codex CLI 版本"
   $versionResult = Invoke-CodexProcess $codexExe "--version" 20
   if ($versionResult.timedOut -or $versionResult.exitCode -ne 0) {
-    throw "codex --version failed: $($versionResult.stderr)"
+    throw "codex --version 执行失败：$($versionResult.stderr)"
   }
   $script:result.cliVersion = ($versionResult.stdout + $versionResult.stderr).Trim()
 
   $smokeResult = Invoke-CodexProcess $codexExe 'exec --skip-git-repo-check "Reply exactly OK"' 90
   $smokeText = ($smokeResult.stdout + "`n" + $smokeResult.stderr).Trim()
   if ($smokeResult.timedOut -or $smokeResult.exitCode -ne 0 -or $smokeText -notmatch '\bOK\b') {
-    throw "codex exec smoke test failed: $($smokeResult.stderr)"
+    throw "codex exec 冒烟测试失败：$($smokeResult.stderr)"
   }
   $script:result.cliSmoke = $true
-  Set-InstallStep 9 "completed" "Codex CLI verified"
+  Set-InstallStep 9 "completed" "Codex CLI 验证通过"
 }
 
 function Test-VisibleWindow {
   if ($env:CODEX_INSTALL_SKIP_DESKTOP_RESTART -eq "1") {
-    Set-InstallStep 10 "skipped" "Existing ChatGPT desktop session was preserved"
+    Set-InstallStep 10 "skipped" "已保留现有 ChatGPT 桌面会话"
     return
   }
-  Set-InstallStep 10 "running" "Starting and verifying ChatGPT Codex window"
+  Set-InstallStep 10 "running" "正在启动并验证 ChatGPT Codex 窗口"
   Get-CodexProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 1
   Start-CodexDesktop
@@ -1156,9 +1157,9 @@ function Test-VisibleWindow {
   $script:result.processCount = $processes.Count
   $script:result.visibleWindow = $visibleWindows.Count -gt 0
   if (-not $script:result.visibleWindow) {
-    throw "ChatGPT desktop app started but no visible window handle was detected"
+    throw "ChatGPT 桌面应用已启动，但未检测到可见窗口句柄"
   }
-  Set-InstallStep 10 "completed" "ChatGPT Codex window is visible"
+  Set-InstallStep 10 "completed" "ChatGPT Codex 窗口可见"
 }
 
 try {
@@ -1182,13 +1183,13 @@ $result.ok = ($result.errors.Count -eq 0)
 $resultJson = $result | ConvertTo-Json -Depth 6
 Write-Utf8NoBomFile $resultPath ($resultJson + "`n")
 if ($result.ok) {
-  Complete-PendingInstallSteps "skipped" "Install completed"
+  Complete-PendingInstallSteps "skipped" "安装已完成"
   Write-InstallConsole ""
-  Write-InstallConsole "ChatGPT desktop app and Codex setup completed. You can close this window."
+  Write-InstallConsole "ChatGPT 桌面应用和 Codex 配置已完成，可以关闭此窗口。"
 } else {
-  Complete-PendingInstallSteps "skipped" "Install stopped"
+  Complete-PendingInstallSteps "skipped" "安装已停止"
   Write-InstallConsole ""
-  Write-InstallConsole "ChatGPT desktop app and Codex setup failed. Please send the error to Baijimu."
+  Write-InstallConsole "ChatGPT 桌面应用和 Codex 配置失败，请将错误信息发送给百积木。"
 }
 $resultJson
 

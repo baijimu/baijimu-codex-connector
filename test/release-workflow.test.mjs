@@ -116,7 +116,7 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /Write-Utf8NoBomFile \$configPath/);
   assert.match(workflow, /Write-Utf8NoBomFile \$statePath/);
   assert.match(workflow, /ReadLineAsync\(\)/);
-  assert.match(workflow, /account\/read API-key state/);
+  assert.match(workflow, /account\/read API 密钥状态/);
   assert.match(workflow, /ConvertFrom-Json -ErrorAction Stop/);
   assert.match(workflow, /Set-Content\[\^\[:cntrl:\]\]\*\-Encoding/);
   assert.match(workflow, /dumpbin\.exe/);
@@ -305,11 +305,11 @@ test("desktop launch is explicit, process-scoped, and independent from user CODE
   assert.match(setup, /\[Console\]::OutputEncoding/);
   assert.match(desktop, /Start-Process -FilePath \$entry\[0\]\.executable/);
   assert.doesNotMatch(desktop, /shell:AppsFolder/);
-  assert.match(desktop, /Explicit CODEX_HOME is required for isolated desktop launch/);
+  assert.match(desktop, /隔离启动桌面应用时必须显式提供 CODEX_HOME/);
   assert.match(desktop, /isolate_from_connector_environment/);
   assert.match(userEnvironment, /pub fn restore_codex_home/);
   assert.doesNotMatch(userEnvironment, /pub fn activate_codex_home/);
-  assert.match(desktop, /if \(\$running\.Count -eq 0\) \{ throw 'ChatGPT\/Codex desktop did not start within 45 seconds' \}/);
+  assert.match(desktop, /if \(\$running\.Count -eq 0\) \{ throw 'ChatGPT\/Codex 桌面应用未在 45 秒内启动' \}/);
   assert.doesNotMatch(desktop, /MainWindowHandle/);
   assert.doesNotMatch(desktop, /visibleWindowCount|visible window/);
   assert.match(desktop, /\/Applications\/ChatGPT\.app/);

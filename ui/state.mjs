@@ -189,6 +189,7 @@ export function normalizeSetupProgress(value) {
   const percent = setupStatus === "succeeded" ? 100 : Math.max(0, Math.min(99, calculated));
   return {
     status: setupStatus,
+    locale: String(installer.locale || ""),
     percent,
     currentStep: Math.max(0, Number(installer.currentStep) || current?.index || 0),
     startedAt: String(installer.startedAt || ""),

@@ -126,7 +126,7 @@ impl SetupManager {
         verify_app_server_capability: bool,
     ) -> Result<SetupStatus> {
         if workspace_id == 0 {
-            anyhow::bail!("workspaceId must be a positive integer");
+            anyhow::bail!("workspaceId 必须是正整数");
         }
         let automatic_retry_count = {
             let current = self
@@ -405,16 +405,23 @@ fn write_embedded_install_script(path: &Path) -> Result<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        return atomic_write_private(
-            path,
-            include_bytes!("../installers/windows-configure-terminal-and-login.ps1"),
-        );
+        return atomic_write_private(path, &windows_install_script_bytes());
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = path;
         anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_install_script_bytes() -> Vec<u8> {
+    const UTF8_BOM: &[u8] = &[0xef, 0xbb, 0xbf];
+    let source = include_bytes!("../installers/windows-configure-terminal-and-login.ps1");
+    let mut script = Vec::with_capacity(UTF8_BOM.len() + source.len());
+    script.extend_from_slice(UTF8_BOM);
+    script.extend_from_slice(source);
+    script
 }
 
 fn install_command(script_path: &Path) -> Result<Command> {
@@ -443,7 +450,7 @@ fn install_command(script_path: &Path) -> Result<Command> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = script_path;
-        anyhow::bail!("unsupported platform")
+        anyhow::bail!("不支持当前平台")
     }
 }
 
@@ -619,6 +626,15 @@ mod tests {
         assert!(decoded.contains("[Console]::OutputEncoding"));
         assert!(decoded.contains("$OutputEncoding = [Console]::OutputEncoding"));
         assert!(decoded.contains("& $env:CODEX_CONNECTOR_INSTALL_SCRIPT_PATH"));
+    }
+
+    #[test]
+    fn windows_installer_is_written_as_utf8_with_bom_for_powershell_5() {
+        let script = windows_install_script_bytes();
+        assert!(script.starts_with(&[0xef, 0xbb, 0xbf]));
+        let source = std::str::from_utf8(&script[3..]).unwrap();
+        assert!(source.starts_with("$ErrorActionPreference"));
+        assert!(source.contains("检查 ChatGPT 桌面应用"));
     }
 
     #[cfg(target_os = "windows")]

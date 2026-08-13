@@ -57,7 +57,7 @@ if ($wasRunning) {
     $remaining = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $targets.Id -contains $_.Id })
     if ($remaining.Count -gt 0) { Start-Sleep -Milliseconds 250 }
   } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
-  if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex desktop processes did not stop within 15 seconds' }
+  if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex 桌面应用进程未在 15 秒内停止' }
 }
 [pscustomobject]@{ wasRunning = $wasRunning } | ConvertTo-Json -Compress
 "#;
@@ -65,12 +65,12 @@ if ($wasRunning) {
     const LAUNCH_AND_VERIFY_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 $codexHome = $env:CODEX_HOME
-if (-not $codexHome) { throw 'Explicit CODEX_HOME is required for isolated desktop launch' }
+if (-not $codexHome) { throw '隔离启动桌面应用时必须显式提供 CODEX_HOME' }
 $packages = @('OpenAI.Codex', 'OpenAI.ChatGPT') | ForEach-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue } | Where-Object { $_ }
 if (-not $packages) {
   $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
 }
-if (-not $packages) { throw 'ChatGPT/Codex desktop package is not installed for the current user' }
+if (-not $packages) { throw '当前用户尚未安装 ChatGPT/Codex 桌面应用包' }
 $roots = @($packages | ForEach-Object { $_.InstallLocation } | Where-Object { $_ })
 $entry = @($packages | ForEach-Object {
   $package = $_
@@ -79,7 +79,7 @@ $entry = @($packages | ForEach-Object {
     [pscustomobject]@{ package = $package; executable = (Join-Path $package.InstallLocation ([string]$_.Executable)) }
   }
 } | Select-Object -First 1)
-if (-not $entry -or -not (Test-Path -LiteralPath $entry[0].executable)) { throw 'ChatGPT/Codex packaged desktop executable is unavailable' }
+if (-not $entry -or -not (Test-Path -LiteralPath $entry[0].executable)) { throw 'ChatGPT/Codex 桌面应用包中的可执行文件不可用' }
 $existing = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
   try {
     $path = $_.Path
@@ -94,7 +94,7 @@ if ($existing.Count -gt 0) {
     $remaining = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $existing.Id -contains $_.Id })
     if ($remaining.Count -gt 0) { Start-Sleep -Milliseconds 250 }
   } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
-  if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex desktop processes did not stop within 15 seconds' }
+  if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex 桌面应用进程未在 15 秒内停止' }
 }
 Start-Process -FilePath $entry[0].executable -ErrorAction Stop
 $deadline = (Get-Date).AddSeconds(45)
@@ -108,7 +108,7 @@ do {
   })
   if ($running.Count -eq 0) { Start-Sleep -Milliseconds 500 }
 } while ($running.Count -eq 0 -and (Get-Date) -lt $deadline)
-if ($running.Count -eq 0) { throw 'ChatGPT/Codex desktop did not start within 45 seconds' }
+if ($running.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用未在 45 秒内启动' }
 [pscustomobject]@{ running = $true; processCount = $running.Count; executable = $entry[0].executable; codexHome = $codexHome } | ConvertTo-Json -Compress
 "#;
 

@@ -1256,17 +1256,17 @@ fn handle_management(
             let _credential_guard = state
                 .credential_management
                 .lock()
-                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             let workspace_id = body
                 .get("workspaceId")
                 .and_then(Value::as_u64)
                 .filter(|value| *value > 0)
-                .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?;
+                .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
             let (codex_cli, verify_app_server_capability) = {
                 let mut client = state
                     .client
                     .lock()
-                    .map_err(|_| HttpError::internal("client lock poisoned"))?;
+                    .map_err(|_| HttpError::internal("Codex 客户端状态锁异常"))?;
                 client.shutdown();
                 let codex_cli = usable_codex_cli_for_setup(&mut client)?;
                 (codex_cli, client.options.extra_args.is_empty())
@@ -1283,7 +1283,7 @@ fn handle_management(
             let _credential_guard = state
                 .credential_management
                 .lock()
-                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             serde_json::to_value(
                 credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
             )
@@ -1293,7 +1293,7 @@ fn handle_management(
             let _credential_guard = state
                 .credential_management
                 .lock()
-                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             serde_json::to_value(
                 credential::restore_legacy_global_codex_home()
                     .map_err(|error| HttpError::new(409, error.to_string()))?,
@@ -1304,7 +1304,7 @@ fn handle_management(
             let _credential_guard = state
                 .credential_management
                 .lock()
-                .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
             if state.setup.state().status == "running" {
                 return Err(HttpError::new(
                     409,
@@ -1314,16 +1314,16 @@ fn handle_management(
             let mode = body
                 .get("mode")
                 .and_then(Value::as_str)
-                .ok_or_else(|| HttpError::new(400, "mode is required"))?;
+                .ok_or_else(|| HttpError::new(400, "必须提供 mode"))?;
             let workspace_id = match mode {
                 "chatgpt" => None,
                 "baijimu" => Some(
                     body.get("workspaceId")
                         .and_then(Value::as_u64)
                         .filter(|value| *value > 0)
-                        .ok_or_else(|| HttpError::new(400, "workspaceId is required"))?,
+                        .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?,
                 ),
-                _ => return Err(HttpError::new(400, "mode must be chatgpt or baijimu")),
+                _ => return Err(HttpError::new(400, "mode 必须是 chatgpt 或 baijimu")),
             };
             let prepared_workspace = workspace_id
                 .map(credential::prepare_workspace_profile)
@@ -1335,7 +1335,7 @@ fn handle_management(
             let mut client = state
                 .client
                 .lock()
-                .map_err(|_| HttpError::internal("client lock poisoned"))?;
+                .map_err(|_| HttpError::internal("Codex 客户端状态锁异常"))?;
             client.shutdown();
             let desktop_switch = if test_control_enabled() {
                 desktop::DesktopSwitch::default()
@@ -1410,11 +1410,10 @@ fn handle_management(
             let _project_guard = state
                 .credential_management
                 .lock()
-                .map_err(|_| HttpError::internal("project checkout lock poisoned"))?;
-            let request: project_checkout::CheckoutRequest = serde_json::from_value(body.clone())
-                .map_err(|error| {
-                HttpError::new(400, format!("invalid checkout request: {error}"))
-            })?;
+                .map_err(|_| HttpError::internal("项目检出状态锁异常"))?;
+            let request: project_checkout::CheckoutRequest =
+                serde_json::from_value(body.clone())
+                    .map_err(|error| HttpError::new(400, format!("项目检出请求无效：{error}")))?;
             let result = project_checkout::prepare(request)
                 .map_err(|error| HttpError::internal(error.to_string()))?;
             serde_json::to_value(result).map_err(|error| HttpError::internal(error.to_string()))
@@ -1446,10 +1445,7 @@ fn handle_management(
         ("POST", "/management/v1/codex/events") => {
             handle_management_invoke("/invoke/recentEvents", body, state)
         }
-        _ => Err(HttpError::new(
-            404,
-            format!("unknown management path: {path}"),
-        )),
+        _ => Err(HttpError::new(404, format!("未知的管理接口路径：{path}"))),
     }
 }
 
@@ -1493,7 +1489,7 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
     let _credential_guard = state
         .credential_management
         .lock()
-        .map_err(|_| HttpError::internal("credential management lock poisoned"))?;
+        .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
     let credential_state = credential::state()
         .map_err(|error| HttpError::new(409, format!("读取当前工作区授权失败：{error}")))?;
     let current_workspace_id = credential_state.current_workspace_id;
@@ -1507,7 +1503,7 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
     let mut client = state
         .client
         .lock()
-        .map_err(|_| HttpError::internal("client lock poisoned"))?;
+        .map_err(|_| HttpError::internal("Codex 客户端状态锁异常"))?;
     let codex_cli = usable_codex_cli_for_setup(&mut client)?;
     let verify_app_server_capability = client.options.extra_args.is_empty();
     let workspace_ready = current_workspace_id.is_some_and(credential::codex_ready_for_workspace);
@@ -1574,7 +1570,7 @@ fn handle_management_invoke(
     let mut client = state
         .client
         .lock()
-        .map_err(|_| HttpError::internal("client lock poisoned"))?;
+        .map_err(|_| HttpError::internal("Codex 客户端状态锁异常"))?;
     handle_invoke(invoke_path, body, &mut client)
 }
 

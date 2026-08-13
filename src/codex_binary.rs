@@ -70,7 +70,7 @@ impl fmt::Display for ResolutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "Codex CLI was not found or is not executable ({}). Install the official Codex CLI and ensure it is available from a standard install location or the user login environment",
+            "未找到可执行的 Codex CLI（{}）。请安装官方 Codex CLI，并确保它位于标准安装位置或用户登录环境中",
             self.reason
         )
     }
@@ -123,13 +123,13 @@ pub fn inspect(resolution: &Resolution) -> CliInspection {
         }
         Ok(output) => {
             return CliInspection {
-                error: Some(format!("codex --version exited with {}", output.status)),
+                error: Some(format!("codex --version 退出状态为 {}", output.status)),
                 ..CliInspection::default()
             };
         }
         Err(error) => {
             return CliInspection {
-                error: Some(format!("failed to run codex --version: {error}")),
+                error: Some(format!("执行 codex --version 失败：{error}")),
                 ..CliInspection::default()
             };
         }
@@ -147,14 +147,14 @@ pub fn inspect(resolution: &Resolution) -> CliInspection {
             version,
             app_server_supported: false,
             error: Some(format!(
-                "codex app-server --help exited with {}",
+                "codex app-server --help 退出状态为 {}",
                 output.status
             )),
         },
         Err(error) => CliInspection {
             version,
             app_server_supported: false,
-            error: Some(format!("failed to verify codex app-server: {error}")),
+            error: Some(format!("验证 codex app-server 失败：{error}")),
         },
     }
 }
@@ -197,7 +197,7 @@ fn resolve_with_context(
 
     Err(ResolutionError {
         checked_paths,
-        reason: "it was absent from the process PATH, official CLI install locations, and the user login environment".to_string(),
+        reason: "进程 PATH、官方 CLI 安装位置和用户登录环境中均不存在该程序".to_string(),
     })
 }
 

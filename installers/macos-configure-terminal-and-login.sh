@@ -4,7 +4,7 @@ export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/
 
 CODEX_MODEL="${CODEX_MODEL:-gpt-5.6-sol}"
 case "$CODEX_MODEL" in
-  *[!A-Za-z0-9._-]*|"") echo "invalid CODEX_MODEL: $CODEX_MODEL" >&2; exit 1 ;;
+  *[!A-Za-z0-9._-]*|"") echo "CODEX_MODEL 无效：$CODEX_MODEL" >&2; exit 1 ;;
 esac
 BAIJIMU_WORKSPACE_ID="${CODEX_WORKSPACE_ID:-${BAIJIMU_WORKSPACE_ID:-${WORKSPACE_ID:-}}}"
 BAIJIMU_PROJECT_ID="${CODEX_PROJECT_ID:-${BAIJIMU_PROJECT_ID:-${PROJECT_ID:-}}}"
@@ -12,8 +12,8 @@ BAIJIMU_AGENT_CONFIG_ID="${CODEX_AGENT_CONFIG_ID:-${BAIJIMU_AGENT_CONFIG_ID:-}}"
 BAIJIMU_AGENT_SESSION_ID="${CODEX_AGENT_SESSION_ID:-${BAIJIMU_AGENT_SESSION_ID:-}}"
 BAIJIMU_SESSION_ID="${CODEX_SESSION_ID:-${BAIJIMU_SESSION_ID:-${SESSION_ID:-}}}"
 ROUTER_BASE_URL="${CODEX_ROUTER_BASE_URL:-https://router.baijimu.com/api/claudecode/v1}"
-case "$BAIJIMU_WORKSPACE_ID" in *[!0-9]*|"") echo "CODEX_WORKSPACE_ID or BAIJIMU_WORKSPACE_ID is required" >&2; exit 1 ;; esac
-case "$BAIJIMU_PROJECT_ID" in *[!0-9]*) echo "invalid CODEX_PROJECT_ID or BAIJIMU_PROJECT_ID" >&2; exit 1 ;; esac
+case "$BAIJIMU_WORKSPACE_ID" in *[!0-9]*|"") echo "必须提供 CODEX_WORKSPACE_ID 或 BAIJIMU_WORKSPACE_ID" >&2; exit 1 ;; esac
+case "$BAIJIMU_PROJECT_ID" in *[!0-9]*) echo "CODEX_PROJECT_ID 或 BAIJIMU_PROJECT_ID 无效" >&2; exit 1 ;; esac
 
 started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 start_epoch="$(date +%s)"
@@ -44,17 +44,17 @@ llm_credential_created=false
 
 current_step=0
 step_count=11
-step1_name="Check ChatGPT desktop app"; step1_state="pending"; step1_detail=""; step1_downloaded=""; step1_total=""
-step2_name="Read App package manifest"; step2_state="pending"; step2_detail=""; step2_downloaded=""; step2_total=""
-step3_name="Download ChatGPT desktop app"; step3_state="pending"; step3_detail=""; step3_downloaded=""; step3_total=""
-step4_name="Verify and install App"; step4_state="pending"; step4_detail=""; step4_downloaded=""; step4_total=""
-step5_name="Install Codex CLI"; step5_state="pending"; step5_detail=""; step5_downloaded=""; step5_total=""
-step6_name="Create Baijimu LLM credential and config"; step6_state="pending"; step6_detail=""; step6_downloaded=""; step6_total=""
-step7_name="Verify Baijimu router"; step7_state="pending"; step7_detail=""; step7_downloaded=""; step7_total=""
-step8_name="Verify Codex CLI"; step8_state="pending"; step8_detail=""; step8_downloaded=""; step8_total=""
-step9_name="Restart ChatGPT desktop app"; step9_state="pending"; step9_detail=""; step9_downloaded=""; step9_total=""
-step10_name="Verify process"; step10_state="pending"; step10_detail=""; step10_downloaded=""; step10_total=""
-step11_name="Verify visible window"; step11_state="pending"; step11_detail=""; step11_downloaded=""; step11_total=""
+step1_name="检查 ChatGPT 桌面应用"; step1_state="pending"; step1_detail=""; step1_downloaded=""; step1_total=""
+step2_name="读取应用安装包清单"; step2_state="pending"; step2_detail=""; step2_downloaded=""; step2_total=""
+step3_name="下载 ChatGPT 桌面应用"; step3_state="pending"; step3_detail=""; step3_downloaded=""; step3_total=""
+step4_name="校验并安装应用"; step4_state="pending"; step4_detail=""; step4_downloaded=""; step4_total=""
+step5_name="安装 Codex CLI"; step5_state="pending"; step5_detail=""; step5_downloaded=""; step5_total=""
+step6_name="创建百积木 LLM 凭证和配置"; step6_state="pending"; step6_detail=""; step6_downloaded=""; step6_total=""
+step7_name="验证百积木路由"; step7_state="pending"; step7_detail=""; step7_downloaded=""; step7_total=""
+step8_name="验证 Codex CLI"; step8_state="pending"; step8_detail=""; step8_downloaded=""; step8_total=""
+step9_name="重新启动 ChatGPT 桌面应用"; step9_state="pending"; step9_detail=""; step9_downloaded=""; step9_total=""
+step10_name="验证应用进程"; step10_state="pending"; step10_detail=""; step10_downloaded=""; step10_total=""
+step11_name="验证可见窗口"; step11_state="pending"; step11_detail=""; step11_downloaded=""; step11_total=""
 
 json_escape() {
   printf '%s' "${1:-}" | awk 'BEGIN { ORS = ""; first = 1 } {
@@ -85,7 +85,8 @@ write_install_console() {
 write_status() {
   {
     printf '{\n'
-    printf '  "title": "Baijimu is installing ChatGPT desktop app and Codex",\n'
+    printf '  "title": "百积木正在安装 ChatGPT 桌面应用和 Codex",\n'
+    printf '  "locale": "zh-CN",\n'
     printf '  "platform": "macos",\n'
     printf '  "startedAt": '; json_string "$started_at"; printf ',\n'
     printf '  "updatedAt": '; json_string "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"; printf ',\n'
@@ -199,14 +200,14 @@ fail_install() {
   if [ "$current_step" -gt 0 ]; then
     set_step "$current_step" "failed" "$message" || true
   fi
-  complete_pending_steps "skipped" "Install stopped" || true
+  complete_pending_steps "skipped" "安装已停止" || true
   write_install_console ""
-  write_install_console "ChatGPT desktop app and Codex setup failed. Please send the error to Baijimu."
+  write_install_console "ChatGPT 桌面应用和 Codex 配置失败，请将错误信息发送给百积木。"
   finish_result false "$message"
   exit 1
 }
 
-trap 'fail_install "unexpected error at line $LINENO"' ERR
+trap 'fail_install "第 $LINENO 行发生意外错误"' ERR
 
 download_with_progress() {
   url="$1"
@@ -234,8 +235,8 @@ download_with_progress() {
   if [ "$curl_status" -ne 0 ]; then
     error_detail="$(tail -n 5 "$error_file" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
     rm -f "$error_file"
-    [ -n "$error_detail" ] || error_detail="curl returned no diagnostic output"
-    fail_install "$label failed from $url (curl exit $curl_status): $error_detail"
+    [ -n "$error_detail" ] || error_detail="curl 未返回诊断信息"
+    fail_install "$label失败，下载地址：$url（curl 退出码 $curl_status）：$error_detail"
   fi
   rm -f "$error_file"
   size="$(stat -f '%z' "$output" 2>/dev/null || printf '0')"
@@ -284,47 +285,47 @@ asset_fields() {
 }
 
 ensure_codex_app() {
-  set_step 1 "running" "Checking ChatGPT desktop app"
+  set_step 1 "running" "正在检查 ChatGPT 桌面应用"
   existing_app_path="$(installed_app_path)"
   if [ -n "$existing_app_path" ]; then
     app_path="$existing_app_path"
     app_install_method="already-installed"
     refresh_app_metadata
-    set_step 1 "completed" "ChatGPT desktop app is already installed"
-    set_step 2 "skipped" "App package download is not needed"
-    set_step 3 "skipped" "App package download is not needed"
-    set_step 4 "skipped" "App reinstall is not needed"
+    set_step 1 "completed" "ChatGPT 桌面应用已安装"
+    set_step 2 "skipped" "无需读取应用安装包清单"
+    set_step 3 "skipped" "无需下载应用安装包"
+    set_step 4 "skipped" "无需重新安装应用"
     return
   fi
 
-  set_step 1 "completed" "ChatGPT desktop app is not installed; preparing install"
+  set_step 1 "completed" "未安装 ChatGPT 桌面应用，正在准备安装"
   arch="$(uname -m)"
   case "$arch" in
     arm64) app_asset="codex-app-aarch64-apple-darwin.dmg" ;;
     x86_64) app_asset="codex-app-x86_64-apple-darwin.dmg" ;;
-    *) fail_install "Baijimu cache does not include this macOS architecture: $arch" ;;
+    *) fail_install "百积木缓存不包含当前 macOS 架构：$arch" ;;
   esac
 
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-app.XXXXXX")"
   mount_dir=""
   manifest="$work_dir/latest.json"
   dmg="$work_dir/$app_asset"
-  download_with_progress "$manifest_url" "$manifest" 2 "Reading Baijimu package manifest" ""
+  download_with_progress "$manifest_url" "$manifest" 2 "正在读取百积木安装包清单" ""
   if ! asset_fields "$manifest" "$app_asset"; then
     rm -rf "$work_dir"
-    fail_install "Baijimu cache asset is missing or incomplete: $app_asset"
+    fail_install "百积木缓存中的制品缺失或不完整：$app_asset"
   fi
-  set_step 2 "completed" "Found $app_asset"
-  download_with_progress "$mirror_url" "$dmg" 3 "Downloading official ChatGPT desktop app package" "$size_bytes"
+  set_step 2 "completed" "已找到制品 $app_asset"
+  download_with_progress "$mirror_url" "$dmg" 3 "正在下载官方 ChatGPT 桌面应用安装包" "$size_bytes"
 
-  set_step 4 "running" "Verifying App package SHA256"
+  set_step 4 "running" "正在校验应用安装包 SHA256"
   actual="$(shasum -a 256 "$dmg" | awk '{print $1}')"
   if [ "$actual" != "$sha256" ]; then
     rm -rf "$work_dir"
-    fail_install "SHA256 mismatch for $app_asset"
+    fail_install "制品 SHA256 不匹配：$app_asset"
   fi
 
-  set_step 4 "running" "Mounting and installing ChatGPT desktop app"
+  set_step 4 "running" "正在挂载并安装 ChatGPT 桌面应用"
   mount_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-dmg.XXXXXX")"
   hdiutil attach "$dmg" -mountpoint "$mount_dir" -nobrowse -quiet
   if [ -d "$mount_dir/ChatGPT.app" ]; then
@@ -337,7 +338,7 @@ ensure_codex_app() {
   if [ -z "${source_app:-}" ] || [ ! -d "$source_app" ]; then
     hdiutil detach "$mount_dir" -quiet || true
     rm -rf "$work_dir"
-    fail_install "No supported app bundle found in DMG"
+    fail_install "DMG 中未找到受支持的应用包"
   fi
   app_path="/Applications/$(basename "$source_app")"
   ditto "$source_app" "$app_path"
@@ -348,7 +349,7 @@ ensure_codex_app() {
   test -d "$app_path"
   app_install_method="baijimu-cache-dmg"
   refresh_app_metadata
-  set_step 4 "completed" "ChatGPT desktop app installed"
+  set_step 4 "completed" "ChatGPT 桌面应用已安装"
 }
 
 resolve_codex_cli() {
@@ -371,27 +372,27 @@ install_codex_cli_from_cache() {
   case "$arch" in
     arm64) cli_asset="codex-aarch64-apple-darwin.tar.gz" ;;
     x86_64) cli_asset="codex-x86_64-apple-darwin.tar.gz" ;;
-    *) fail_install "Baijimu cache does not include Codex CLI for this macOS architecture: $arch" ;;
+    *) fail_install "百积木缓存不包含当前 macOS 架构的 Codex CLI：$arch" ;;
   esac
 
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-cli.XXXXXX")"
   manifest="$work_dir/latest.json"
   archive="$work_dir/$cli_asset"
-  download_with_progress "$manifest_url" "$manifest" 5 "Reading Baijimu CLI package manifest" ""
+  download_with_progress "$manifest_url" "$manifest" 5 "正在读取百积木 CLI 安装包清单" ""
   if ! asset_fields "$manifest" "$cli_asset"; then
     rm -rf "$work_dir"
-    fail_install "Baijimu cache asset is missing or incomplete: $cli_asset"
+    fail_install "百积木缓存中的制品缺失或不完整：$cli_asset"
   fi
-  download_with_progress "$mirror_url" "$archive" 5 "Downloading official Codex CLI package" "$size_bytes"
+  download_with_progress "$mirror_url" "$archive" 5 "正在下载官方 Codex CLI 安装包" "$size_bytes"
 
-  set_step 5 "running" "Verifying Codex CLI package SHA256"
+  set_step 5 "running" "正在校验 Codex CLI 安装包 SHA256"
   actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
   if [ "$actual" != "$sha256" ]; then
     rm -rf "$work_dir"
-    fail_install "SHA256 mismatch for $cli_asset"
+    fail_install "制品 SHA256 不匹配：$cli_asset"
   fi
 
-  set_step 5 "running" "Installing Codex CLI"
+  set_step 5 "running" "正在安装 Codex CLI"
   tar -xzf "$archive" -C "$work_dir"
   bin="$(find "$work_dir" -maxdepth 4 -type f \( -name codex -o -name 'codex-*' \) ! -name '*.tar.gz' -perm -111 2>/dev/null | head -n 1)"
   if [ -z "${bin:-}" ]; then
@@ -399,7 +400,7 @@ install_codex_cli_from_cache() {
   fi
   if [ -z "${bin:-}" ]; then
     rm -rf "$work_dir"
-    fail_install "codex binary not found after extracting $cli_asset"
+    fail_install "解压 $cli_asset 后未找到 Codex 可执行文件"
   fi
   mkdir -p "$HOME/.local/bin"
   install_target="$HOME/.local/bin/codex"
@@ -419,17 +420,17 @@ install_codex_cli_from_cache() {
 }
 
 ensure_codex_cli() {
-  set_step 5 "running" "Checking Codex CLI"
+  set_step 5 "running" "正在检查 Codex CLI"
   if cli_path="$(resolve_codex_cli)"; then
     cli_install_method="already-installed"
-    set_step 5 "completed" "Codex CLI is already available"
+    set_step 5 "completed" "Codex CLI 已可用"
     return
   fi
   install_codex_cli_from_cache
   if ! cli_path="$(resolve_codex_cli)"; then
-    fail_install "codex CLI not found after installation"
+    fail_install "安装完成后未找到 Codex CLI"
   fi
-  set_step 5 "completed" "Codex CLI installed"
+  set_step 5 "completed" "Codex CLI 已安装"
 }
 
 shared_auth_path() {
@@ -611,13 +612,13 @@ write_codex_config() {
 }
 
 configure_codex_terminal() {
-  set_step 6 "running" "Creating Baijimu LLM credential and writing Codex config"
+  set_step 6 "running" "正在创建百积木 LLM 凭证并写入 Codex 配置"
   if ! local_api_key="$(create_baijimu_llm_credential)"; then
     error_detail="$(tail -n 5 "$state_dir/baijimu-llm-credential.err" 2>/dev/null | tr '\n' ' ')"
-    fail_install "failed to create Baijimu LLM credential for workspace $BAIJIMU_WORKSPACE_ID: $error_detail"
+    fail_install "为工作区 $BAIJIMU_WORKSPACE_ID 创建百积木 LLM 凭证失败：$error_detail"
   fi
   if [ -z "$local_api_key" ]; then
-    fail_install "Baijimu CLI did not return an LLM credential for workspace $BAIJIMU_WORKSPACE_ID"
+    fail_install "百积木 CLI 未返回工作区 $BAIJIMU_WORKSPACE_ID 的 LLM 凭证"
   fi
   shared_cli_token_read=true
   llm_credential_created=true
@@ -625,11 +626,11 @@ configure_codex_terminal() {
   config_written=true
   auth_written=true
   test "$(stat -f '%Lp' "$codex_dir/auth.json")" = "600"
-  set_step 6 "completed" "Codex config written from Baijimu LLM credential"
+  set_step 6 "completed" "已使用百积木 LLM 凭证写入 Codex 配置"
 }
 
 verify_router() {
-  set_step 7 "running" "Verifying Baijimu router"
+  set_step 7 "running" "正在验证百积木路由"
   router_err="$state_dir/codex-router.err"
   if ! router_status="$(
     curl -sS -m 60 -o /tmp/codex-router-responses.json -w '%{http_code}' \
@@ -641,18 +642,18 @@ verify_router() {
     error_detail="$(tail -n 5 "$router_err" 2>/dev/null | tr '\n' ' ')"
     rm -f /tmp/codex-router-responses.json "$router_err"
     unset local_api_key
-    fail_install "router /responses health check failed: $error_detail"
+    fail_install "路由 /responses 健康检查失败：$error_detail"
   fi
   rm -f /tmp/codex-router-responses.json "$router_err"
   if [ "$router_status" != "200" ]; then
     unset local_api_key
-    fail_install "router /responses health check failed: HTTP $router_status"
+    fail_install "路由 /responses 健康检查失败：HTTP $router_status"
   fi
-  set_step 7 "completed" "Baijimu router verified"
+  set_step 7 "completed" "百积木路由验证通过"
 }
 
 verify_codex_cli() {
-  set_step 8 "running" "Checking Codex CLI version"
+  set_step 8 "running" "正在检查 Codex CLI 版本"
   cli_version="$("$cli_path" --version 2>&1)"
   if smoke_output="$("$cli_path" exec --skip-git-repo-check "Reply exactly OK" 2>&1)"; then
     smoke_exit_code=0
@@ -661,7 +662,7 @@ verify_codex_cli() {
   fi
   if [ "$smoke_exit_code" -ne 0 ]; then
     smoke_detail="$(awk 'NF { line = $0 } END { print line }' <<< "$smoke_output")"
-    fail_install "codex CLI smoke test failed with exit code $smoke_exit_code: $smoke_detail"
+    fail_install "Codex CLI 冒烟测试失败，退出码 $smoke_exit_code：$smoke_detail"
   fi
 
   smoke_ok=false
@@ -673,27 +674,27 @@ verify_codex_cli() {
     fi
   done <<< "$smoke_output"
   if [ "$smoke_ok" != true ]; then
-    fail_install "codex CLI smoke test completed without an exact OK response"
+    fail_install "Codex CLI 冒烟测试未返回准确的 OK 响应"
   fi
   cli_smoke=true
   unset smoke_output
-  set_step 8 "completed" "Codex CLI verified"
+  set_step 8 "completed" "Codex CLI 验证通过"
 }
 
 verify_codex_window() {
   if [ "${CODEX_INSTALL_SKIP_DESKTOP_RESTART:-}" = "1" ]; then
-    set_step 9 "skipped" "Existing ChatGPT desktop session was preserved"
-    set_step 10 "skipped" "Desktop process restart was not requested"
-    set_step 11 "skipped" "Isolated Codex profile was verified through the CLI"
+    set_step 9 "skipped" "已保留现有 ChatGPT 桌面会话"
+    set_step 10 "skipped" "本次未要求重启桌面应用进程"
+    set_step 11 "skipped" "已通过 CLI 验证隔离的 Codex 档案"
     return
   fi
-  set_step 9 "running" "Restarting ChatGPT desktop app"
+  set_step 9 "running" "正在重新启动 ChatGPT 桌面应用"
   if [ -z "$app_path" ] || [ ! -d "$app_path" ]; then
-    fail_install "ChatGPT desktop app is not installed"
+    fail_install "尚未安装 ChatGPT 桌面应用"
   fi
   refresh_app_metadata
   if [ -z "$app_bundle_id" ] || [ "$app_bundle_id" = "(null)" ]; then
-    fail_install "ChatGPT desktop app bundle identifier check failed"
+    fail_install "ChatGPT 桌面应用包标识校验失败"
   fi
   pkill -f "$app_path/Contents/MacOS" 2>/dev/null || true
   pkill -f "$app_path/Contents/Resources/codex app-server" 2>/dev/null || true
@@ -701,17 +702,17 @@ verify_codex_window() {
   sleep 3
   open "$app_path"
   sleep 6
-  set_step 9 "completed" "ChatGPT desktop app opened"
+  set_step 9 "completed" "ChatGPT 桌面应用已打开"
 
-  set_step 10 "running" "Checking ChatGPT desktop app process"
+  set_step 10 "running" "正在检查 ChatGPT 桌面应用进程"
   process_output="$(pgrep -fl "$app_path/Contents/MacOS|codex app-server" || true)"
   process_count="$(printf '%s\n' "$process_output" | awk 'NF { count++ } END { print count + 0 }')"
   if [ "$process_count" -lt 1 ]; then
-    fail_install "ChatGPT desktop app process was not found"
+    fail_install "未找到 ChatGPT 桌面应用进程"
   fi
-  set_step 10 "completed" "ChatGPT desktop app process is running"
+  set_step 10 "completed" "ChatGPT 桌面应用进程正在运行"
 
-  set_step 11 "running" "Checking visible ChatGPT Codex window"
+  set_step 11 "running" "正在检查可见的 ChatGPT Codex 窗口"
   info="$(/usr/bin/lsappinfo info -only pid,front,visible,windows "$app_bundle_id" 2>&1 || true)"
   if [[ "$info" == *'windows=[ NULL ]'* ]]; then
     project="$HOME/Documents/Codex/$(date +%F)/default"
@@ -723,15 +724,15 @@ verify_codex_window() {
     info="$(/usr/bin/lsappinfo info -only pid,front,visible,windows "$app_bundle_id" 2>&1 || true)"
   fi
   if [[ "$info" == *'windows=[ NULL ]'* ]]; then
-    fail_install "ChatGPT desktop app started without a visible window"
+    fail_install "ChatGPT 桌面应用已启动，但未检测到可见窗口"
   fi
   visible_window=true
-  set_step 11 "completed" "ChatGPT Codex window is visible"
+  set_step 11 "completed" "ChatGPT Codex 窗口可见"
 }
 
 write_install_console ""
-write_install_console "Baijimu is installing ChatGPT desktop app and Codex"
-write_install_console "Please keep this window open."
+write_install_console "百积木正在安装 ChatGPT 桌面应用和 Codex"
+write_install_console "请保持此窗口打开。"
 write_install_console ""
 write_status
 
@@ -744,7 +745,7 @@ verify_codex_cli
 verify_codex_window
 
 trap - ERR
-complete_pending_steps "skipped" "Install completed"
+complete_pending_steps "skipped" "安装已完成"
 write_install_console ""
-write_install_console "ChatGPT desktop app and Codex setup completed. You can close this window."
+write_install_console "ChatGPT 桌面应用和 Codex 配置已完成，可以关闭此窗口。"
 finish_result true ""

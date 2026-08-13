@@ -126,7 +126,7 @@ jobs:
             grep -F 'https://download.baijimu.com/codex-artifacts/latest.json' "$output"
             if [ "$platform" = macos ]; then
               grep -F 'curl exit $curl_status' "$output"
-              grep -F 'fail_install "$label failed from $url' "$output"
+              grep -F 'fail_install "$label失败，下载地址：$url' "$output"
             elif [ "$platform" = windows ]; then
               grep -F 'New-Object System.Text.UTF8Encoding($false)' "$output"
               grep -F '[System.IO.File]::WriteAllText' "$output"
@@ -134,7 +134,7 @@ jobs:
               grep -F 'Write-Utf8NoBomFile $configPath' "$output"
               grep -F 'Write-Utf8NoBomFile $statePath' "$output"
               grep -F 'ReadLineAsync()' "$output"
-              grep -F 'account/read API-key state' "$output"
+              grep -F 'account/read API 密钥状态' "$output"
               grep -F 'ConvertFrom-Json -ErrorAction Stop' "$output"
               grep -F 'codex-package-x86_64-pc-windows-msvc.tar.gz' "$output"
               grep -F 'codex-package.json' "$output"

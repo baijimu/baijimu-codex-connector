@@ -132,6 +132,11 @@ function profileRow({ title, detail, meta, active, disabled, actionLabel, onSwit
   return row;
 }
 
+function environmentLabel(value) {
+  const environment = String(value || "prod").trim() || "prod";
+  return environment === "prod" ? "生产环境（prod）" : `环境标识：${environment}`;
+}
+
 function authProfiles() {
   const state = credentialState;
   const profiles = [{
@@ -150,7 +155,7 @@ function authProfiles() {
     profiles.push({
       key: `workspace-${workspace.workspaceId}`,
       title: `${workspace.name || `工作区 ${workspace.workspaceId}`}（${workspace.workspaceId}）`,
-      detail: `${profile?.environment || "prod"} 环境`,
+      detail: environmentLabel(profile?.environment),
       meta: workspace.authorized
         ? (profile ? "凭证档案已保存；可以直接启动 Codex" : "已授权；首次启动时自动创建工作区凭证档案")
         : "当前百积木账号未授权这个工作区",
