@@ -8,13 +8,14 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "macos")]
 const MACOS_SCRIPT_URL: &str =
@@ -24,12 +25,17 @@ const MACOS_SCRIPT_SHA256: &str =
     "0a60334e37593fa95df92b5cf0787b64a9e491ab552b2502d9a195d59a0fe7be";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_URL: &str =
-    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCAkPzrrf8ZIiA4ZjdiZmQyMGJhNGE0YzVlYWMxYTgzZTVhOTU1M2ExYw--";
+    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCA8qjZ7P8ZIiA2NmVlMjIyM2IxNDM0YTBjYjg0ZGNmY2U0NmNmNTFiZg--";
 #[cfg(target_os = "windows")]
 const WINDOWS_SCRIPT_SHA256: &str =
-    "3098b28442a39a7fe5e1baf73157bf42b2362008a39fcf7d072ecff19b6d87ae";
+    "a3692dcc7a8e776635c947e2be2f03c8a0626a833151bbd2f0196478731ffa10";
 const SETUP_STATUS_FILE: &str = "setup-status.json";
 const SETUP_STATUS_SCHEMA_VERSION: u32 = 2;
+const INSTALL_PROCESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const INSTALL_PROCESS_STARTUP_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+const INSTALL_PROCESS_STALE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const INSTALL_PROCESS_TOTAL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+const INSTALL_PROCESS_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const CONNECTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ERROR_CODE_INTERRUPTED: &str = "SETUP_INTERRUPTED";
 const ERROR_CODE_RETRY_AFTER_UPGRADE: &str = "SETUP_RETRY_REQUIRED_AFTER_UPGRADE";
@@ -336,7 +342,8 @@ fn run_install(
         } else {
             command.env_remove("CODEX_CLI_BIN");
         }
-        let output = command.output().context("启动 Codex 官方安装脚本失败")?;
+        let output =
+            run_install_command(&mut command, &state_dir, InstallerMonitorLimits::default())?;
         let installer_result_path = state_dir.join("result.json");
         let installer_result = read_json(&installer_result_path).with_context(|| {
             let exit = output
@@ -396,6 +403,162 @@ fn run_install(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct InstallerMonitorLimits {
+    poll_interval: Duration,
+    startup_timeout: Duration,
+    stale_timeout: Duration,
+    total_timeout: Duration,
+}
+
+impl Default for InstallerMonitorLimits {
+    fn default() -> Self {
+        Self {
+            poll_interval: INSTALL_PROCESS_POLL_INTERVAL,
+            startup_timeout: INSTALL_PROCESS_STARTUP_TIMEOUT,
+            stale_timeout: INSTALL_PROCESS_STALE_TIMEOUT,
+            total_timeout: INSTALL_PROCESS_TOTAL_TIMEOUT,
+        }
+    }
+}
+
+fn run_install_command(
+    command: &mut Command,
+    state_dir: &Path,
+    limits: InstallerMonitorLimits,
+) -> Result<Output> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    configure_install_process_group(command);
+    let mut child = command.spawn().context("启动 Codex 官方安装脚本失败")?;
+    let stdout = child.stdout.take().context("读取安装脚本标准输出失败")?;
+    let stderr = child.stderr.take().context("读取安装脚本错误输出失败")?;
+    let stdout_reader = thread::spawn(move || read_process_stream(stdout));
+    let stderr_reader = thread::spawn(move || read_process_stream(stderr));
+    let status_path = state_dir.join("status.json");
+    let started_at = Instant::now();
+    let mut latest_status_modified = None;
+    let mut latest_progress_at = started_at;
+
+    loop {
+        if let Some(status) = child.try_wait().context("查询安装脚本状态失败")? {
+            return collect_process_output(status, stdout_reader, stderr_reader);
+        }
+
+        if let Ok(modified) = fs::metadata(&status_path).and_then(|metadata| metadata.modified()) {
+            if latest_status_modified != Some(modified) {
+                latest_status_modified = Some(modified);
+                latest_progress_at = Instant::now();
+            }
+        }
+
+        let elapsed = started_at.elapsed();
+        let timeout_error = if elapsed >= limits.total_timeout {
+            Some(format!(
+                "安装脚本执行超过{}的总时限",
+                format_timeout(limits.total_timeout)
+            ))
+        } else if latest_status_modified.is_none() && elapsed >= limits.startup_timeout {
+            Some(format!(
+                "安装脚本启动后{}内没有生成进度状态",
+                format_timeout(limits.startup_timeout)
+            ))
+        } else if latest_status_modified.is_some()
+            && latest_progress_at.elapsed() >= limits.stale_timeout
+        {
+            Some(format!(
+                "安装脚本进度已超过{}未更新",
+                format_timeout(limits.stale_timeout)
+            ))
+        } else {
+            None
+        };
+
+        if let Some(timeout_error) = timeout_error {
+            terminate_install_process(&mut child);
+            let _ = collect_process_output(
+                child.wait().context("等待安装脚本终止失败")?,
+                stdout_reader,
+                stderr_reader,
+            );
+            let _ = fs::remove_file(&status_path);
+            anyhow::bail!("{timeout_error}，已终止安装进程，请重试");
+        }
+
+        thread::sleep(limits.poll_interval);
+    }
+}
+
+fn format_timeout(duration: Duration) -> String {
+    if duration.as_secs() >= 60 && duration.as_secs().is_multiple_of(60) {
+        format!("{} 分钟", duration.as_secs() / 60)
+    } else if duration.as_secs() > 0 {
+        format!("{} 秒", duration.as_secs())
+    } else {
+        format!("{} 毫秒", duration.as_millis())
+    }
+}
+
+fn read_process_stream(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn collect_process_output(
+    status: std::process::ExitStatus,
+    stdout_reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    stderr_reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<Output> {
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("读取安装脚本标准输出的线程异常"))??;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("读取安装脚本错误输出的线程异常"))??;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+#[cfg(unix)]
+fn configure_install_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_install_process_group(_command: &mut Command) {}
+
+fn terminate_install_process(child: &mut Child) {
+    let process_id = child.id();
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill.exe")
+            .args(["/PID", &process_id.to_string(), "/T", "/F"])
+            .status();
+    }
+    #[cfg(unix)]
+    {
+        let process_group = format!("-{process_id}");
+        let _ = Command::new("/bin/kill")
+            .args(["-TERM", &process_group])
+            .status();
+        let deadline = Instant::now() + INSTALL_PROCESS_TERMINATION_GRACE;
+        while Instant::now() < deadline {
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let _ = Command::new("/bin/kill")
+            .args(["-KILL", &process_group])
+            .status();
+    }
+    let _ = child.kill();
 }
 
 fn install_script_path(setup_dir: &Path, unique: &str) -> Result<PathBuf> {
@@ -670,6 +833,71 @@ mod tests {
         assert!(verify_script_sha256(&script, &expected).is_ok());
         let error = verify_script_sha256(&script, &"0".repeat(64)).unwrap_err();
         assert!(error.to_string().contains("安装脚本 SHA256 校验失败"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn monitored_installer_returns_complete_process_output() {
+        let state_dir = env::temp_dir().join(format!(
+            "codex-setup-monitor-output-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&state_dir).unwrap();
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "printf 'installer-out'; printf 'installer-err' >&2"]);
+
+        let output = run_install_command(
+            &mut command,
+            &state_dir,
+            InstallerMonitorLimits {
+                poll_interval: Duration::from_millis(10),
+                startup_timeout: Duration::from_secs(1),
+                stale_timeout: Duration::from_secs(1),
+                total_timeout: Duration::from_secs(2),
+            },
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"installer-out");
+        assert_eq!(output.stderr, b"installer-err");
+        fs::remove_dir(state_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn monitored_installer_terminates_a_stale_process_group() {
+        let state_dir = env::temp_dir().join(format!(
+            "codex-setup-monitor-stale-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::write(state_dir.join("status.json"), br#"{"status":"running"}"#).unwrap();
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "while :; do sleep 10; done"]);
+
+        let error = run_install_command(
+            &mut command,
+            &state_dir,
+            InstallerMonitorLimits {
+                poll_interval: Duration::from_millis(10),
+                startup_timeout: Duration::from_secs(1),
+                stale_timeout: Duration::from_millis(100),
+                total_timeout: Duration::from_secs(2),
+            },
+        )
+        .unwrap_err();
+
+        let error = error.to_string();
+        assert!(
+            error.contains("安装脚本进度已超过100 毫秒未更新"),
+            "error={error:?}"
+        );
+        assert!(error.contains("已终止安装进程"));
+        assert!(!state_dir.join("status.json").exists());
+        fs::remove_dir_all(state_dir).unwrap();
     }
 
     #[test]
