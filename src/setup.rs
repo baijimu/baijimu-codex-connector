@@ -543,10 +543,16 @@ fn terminate_install_process(child: &mut Child) {
     }
     #[cfg(unix)]
     {
-        let process_group = format!("-{process_id}");
-        let _ = Command::new("/bin/kill")
-            .args(["-TERM", &process_group])
-            .status();
+        let process_group_id = i32::try_from(process_id).ok().filter(|process_id| {
+            let process_group_id = unsafe { libc::getpgid(*process_id) };
+            let connector_process_group_id = unsafe { libc::getpgrp() };
+            process_group_id == *process_id && process_group_id != connector_process_group_id
+        });
+        if let Some(process_group_id) = process_group_id {
+            unsafe {
+                libc::kill(-process_group_id, libc::SIGTERM);
+            }
+        }
         let deadline = Instant::now() + INSTALL_PROCESS_TERMINATION_GRACE;
         while Instant::now() < deadline {
             if child.try_wait().ok().flatten().is_some() {
@@ -554,9 +560,11 @@ fn terminate_install_process(child: &mut Child) {
             }
             thread::sleep(Duration::from_millis(50));
         }
-        let _ = Command::new("/bin/kill")
-            .args(["-KILL", &process_group])
-            .status();
+        if let Some(process_group_id) = process_group_id {
+            unsafe {
+                libc::kill(-process_group_id, libc::SIGKILL);
+            }
+        }
     }
     let _ = child.kill();
 }
