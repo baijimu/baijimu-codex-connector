@@ -419,7 +419,7 @@ test("rust connector forwards Codex app-server calls", async () => {
       occurredAt: domainAttempts[1].occurredAt,
       source: "codex-app-server",
       sourceMethod: "turn/completed",
-      connectorVersion: "1.2.43",
+      connectorVersion: "1.2.44",
     });
     assert.ok(emittedEvents.some((event) => event.event === "codexNotification"));
   } finally {
@@ -631,7 +631,11 @@ test("rust connector launches an isolated Baijimu workspace and can launch the p
     for await (const chunk of request) body += chunk;
     response.setHeader("content-type", "application/json");
     if (request.url === "/llm-credential/validateCredential") {
-      response.end(JSON.stringify({ data: { valid: true, allowed: true, workspaceId: 1390, projectId: null } }));
+      response.end(JSON.stringify({
+        errorCode: "0",
+        value: "成功",
+        data: { valid: true, allowed: true, workspaceId: 1390, projectId: null },
+      }));
       return;
     }
     if (request.url === "/lowcode3/partner/v1/workspaces/list") {

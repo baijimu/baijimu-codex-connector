@@ -948,22 +948,20 @@ fn validate_credential(base_url: &str, credential: &str) -> Result<Option<Value>
 }
 
 fn unwrap_baijimu_data(response: &Value) -> Result<&Value> {
-    if let Some(code) = response
+    let code = response
         .get("errorCode")
         .or_else(|| response.get("error_code"))
         .and_then(Value::as_str)
-    {
-        if code != "0" {
-            let message = response
-                .get("value")
-                .or_else(|| response.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("平台操作失败");
-            anyhow::bail!("{message}（{code}）");
-        }
-        return Ok(response.get("data").unwrap_or(&Value::Null));
+        .context("百积木平台响应缺少errorCode")?;
+    if code != "0" {
+        let message = response
+            .get("value")
+            .or_else(|| response.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("平台操作失败");
+        anyhow::bail!("{message}（{code}）");
     }
-    Ok(response.get("data").unwrap_or(response))
+    response.get("data").context("百积木平台成功响应缺少data")
 }
 
 fn compact_body(value: &str) -> String {
@@ -1525,6 +1523,29 @@ mod tests {
                 None => std::env::remove_var(self.key),
             }
         }
+    }
+
+    #[test]
+    fn baijimu_response_requires_cmodel_envelope_and_data() {
+        assert_eq!(
+            unwrap_baijimu_data(&json!({
+                "errorCode": "0",
+                "value": "成功",
+                "data": {"valid": true}
+            }))
+            .unwrap()["valid"],
+            true
+        );
+        assert!(unwrap_baijimu_data(&json!({"valid": true}))
+            .expect_err("bare response must fail")
+            .to_string()
+            .contains("errorCode"));
+        assert!(
+            unwrap_baijimu_data(&json!({"errorCode": "0", "value": "成功"}))
+                .expect_err("missing data must fail")
+                .to_string()
+                .contains("缺少data")
+        );
     }
 
     #[test]
