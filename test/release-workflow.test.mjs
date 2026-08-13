@@ -387,7 +387,8 @@ test("default Codex home has one workspace binding and other profiles stay safel
   assert.match(credential, /read_valid_ownership/);
   assert.match(credential, /commit_default_home_ownership/);
   assert.match(credential, /managed_files: vec!\[OWNED_AUTH_FILE\.to_string\(\), OWNED_CONFIG_FILE\.to_string\(\)\]/);
-  assert.match(credential, /assert!\(!marker_content\.contains\("642"\)\)/);
+  assert.match(credential, /"workspaceId",[\s\S]*?"workspaceName",[\s\S]*?"userId",[\s\S]*?"clientId",[\s\S]*?"environment",[\s\S]*?"profileId"/);
+  assert.match(credential, /assert!\(!marker_content\.contains\(&profile\.profile_id\)\)/);
   assert.match(credential, /assert!\(!marker_content\.contains\("workspace-token"\)\)/);
   assert.match(credential, /default_home_ownership_marker_binds_a_profile_without_business_identifiers/);
 });

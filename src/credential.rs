@@ -2292,6 +2292,7 @@ mod tests {
         commit_default_home_ownership(&profile).unwrap();
 
         let marker_content = fs::read_to_string(default_home.join(OWNERSHIP_MARKER_FILE)).unwrap();
+        let marker_json: Value = serde_json::from_str(&marker_content).unwrap();
         let marker = read_valid_ownership(&default_home).unwrap().unwrap();
         assert_eq!(marker.owner, OWNERSHIP_OWNER);
         assert_eq!(
@@ -2302,7 +2303,17 @@ mod tests {
             marker.profile_key,
             Some(profile_short_key(&profile.profile_id))
         );
-        assert!(!marker_content.contains("642"));
+        for forbidden_field in [
+            "workspaceId",
+            "workspaceName",
+            "userId",
+            "clientId",
+            "environment",
+            "profileId",
+        ] {
+            assert!(marker_json.get(forbidden_field).is_none());
+        }
+        assert!(!marker_content.contains(&profile.profile_id));
         assert!(!marker_content.contains("workspace-token"));
         fs::remove_dir_all(root).unwrap();
     }
