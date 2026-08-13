@@ -79,9 +79,13 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   background: var(--panel);
   box-shadow: 0 12px 36px rgba(31, 54, 44, 0.055);
 }
+.panel[hidden],
+.privacy-note[hidden],
+.hero > .button[hidden] { display: none; }
 
 .active-panel { border-top: 3px solid var(--green); }
 .workspace-panel { box-shadow: 0 16px 44px rgba(31, 54, 44, 0.08); }
+.setup-panel { max-width: 720px; margin-right: auto; margin-left: auto; }
 
 .section-heading {
   display: flex;
@@ -238,6 +242,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   gap: 20px;
   padding-top: 4px;
 }
+.form-actions[hidden] { display: none; }
 .form-actions p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 
 .setup-progress {

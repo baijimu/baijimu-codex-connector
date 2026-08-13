@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.45",
+  "version": "1.2.46",
   "description": "Initialize and configure Codex, select an isolated Baijimu workspace or the original Codex environment, and launch Codex with the selected state directory.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.45"
+    "revision": "v1.2.46"
   },
   "runtime": {
     "type": "process",
@@ -116,6 +116,7 @@
     "defaultView": true
   },
   "releaseNotes": [
+    "初始化完成前使用独立安装视图，只显示安装进度、失败原因和修复入口；初始化成功后才切换到 Codex 环境状态与工作区管理，避免安装过程中提前暴露不可用操作。",
     "百积木平台认证和 Partner API 调用统一交由平台管理的 baijimu CLI；Connector 不再读取共享 PAT 文件，也不再自行发起工作区或 LLM credential HTTP 请求。",
     "工作区初始化与修复通过 baijimu llm-credential create 重新签发 LLM credential，并对 CLI 的认证状态、工作区和凭证响应使用类型化契约校验。",
     "从旧版长路径升级时，Connector 会在启动就绪前检测活动档案迁移，先停止占用目录的 Codex 桌面进程，完成原子迁移后再以短 CODEX_HOME 恢复桌面，避免 Windows 文件占用导致迁移卡在可恢复中间态。",

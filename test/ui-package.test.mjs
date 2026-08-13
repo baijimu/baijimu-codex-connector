@@ -8,6 +8,7 @@ import {
   credentialStatusMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
+  setupPageMeta,
   setupStatusMeta,
   shouldShowSetupProgress,
 } from "../ui/state.mjs";
@@ -95,6 +96,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /error-retry-button/);
   assert.match(html, /restore-external-home-button/);
   assert.match(html, /全新用户会直接初始化默认 \.codex/);
+  assert.match(html, /id="management-active-panel"[^>]*hidden/);
+  assert.match(html, /id="management-workspace-panel"[^>]*hidden/);
+  assert.match(html, /id="setup-panel"/);
   const app = await readFile(join(root, "ui", "app.js"), "utf8");
   assert.match(app, /启动个人 Codex/);
   assert.match(app, /不会删除任何工作区目录/);
@@ -110,9 +114,28 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(app, /重新检查/);
   assert.match(app, /connectorStartupRetryable/);
   assert.match(app, /restoreExternalCodexHome/);
+  assert.match(app, /setupPageMeta/);
+  assert.match(app, /management-workspace-panel/);
   assert.doesNotMatch(app, /Promise\.all\(\[loadSessions\(\), loadState\(\)\]\)/);
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
+});
+
+test("UI keeps setup isolated until initialization succeeds", () => {
+  assert.deepEqual(setupPageMeta({ status: "pending" }), {
+    mode: "setup",
+    title: "正在准备安装 Codex",
+    description: "正在检查本机环境并准备初始化，请保持此页面打开。",
+  });
+  assert.equal(setupPageMeta({ status: "running" }).mode, "setup");
+  assert.equal(setupPageMeta({ status: "failed" }).mode, "setup");
+  assert.equal(setupPageMeta({ status: "interrupted" }).mode, "setup");
+  assert.equal(setupPageMeta({ status: "needs_retry" }).mode, "setup");
+  assert.deepEqual(setupPageMeta({ status: "succeeded" }), {
+    mode: "management",
+    title: "Codex 工作区管理",
+    description: "选择个人环境或百积木工作区并启动 Codex；所有状态目录彼此隔离。",
+  });
 });
 
 test("UI retries only the bounded Connector startup response", () => {

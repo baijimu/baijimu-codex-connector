@@ -16,7 +16,7 @@ binary under `bin/<platform>-<arch>/`. The legacy Node.js implementation is
 kept for reference and compatibility, but the platform-managed entrypoint is
 the native binary.
 
-The package includes `ui/`, a static workspace-management interface loaded inside the local-app detail panel. It shows the active Codex identity and state directory, lists authorized Baijimu workspaces and the original Codex environment, launches Codex with the selected profile, and provides initialization progress and repair. Session and turn operations remain available through the Connector API but are intentionally not duplicated in this interface.
+The package includes `ui/`, a static interface loaded inside the local-app detail panel. Before initialization succeeds, it presents an installation-only view with the official installer progress or repair action and hides environment and workspace controls. After initialization succeeds, it switches to workspace management: it shows the active Codex identity and state directory, lists authorized Baijimu workspaces and the original Codex environment, and launches Codex with the selected profile. Session and turn operations remain available through the Connector API but are intentionally not duplicated in this interface.
 
 ## Install
 

@@ -14,10 +14,10 @@
         <div class="brand-mark" aria-hidden="true">C</div>
         <div class="hero-copy">
           <p class="eyebrow">Codex Local App</p>
-          <h1>Codex 工作区管理</h1>
-          <p>选择个人环境或百积木工作区并启动 Codex；首次安装自动完成，所有状态目录彼此隔离。</p>
+          <h1 id="page-title">正在准备安装 Codex</h1>
+          <p id="page-description">正在检查本机环境并准备初始化，请保持此页面打开。</p>
         </div>
-        <button id="refresh-button" class="button secondary" type="button">刷新状态</button>
+        <button id="refresh-button" class="button secondary" type="button" hidden>刷新状态</button>
       </header>
 
       <div id="message" class="message" role="status" aria-live="polite" hidden></div>
@@ -47,7 +47,7 @@
         </section>
       </div>
 
-      <section class="panel active-panel" aria-labelledby="active-title">
+      <section id="management-active-panel" class="panel active-panel" aria-labelledby="active-title" hidden>
         <div class="section-heading active-heading">
           <div>
             <p class="eyebrow">当前生效</p>
@@ -83,7 +83,7 @@
         </ol>
       </section>
 
-      <section class="panel workspace-panel" aria-labelledby="profiles-title">
+      <section id="management-workspace-panel" class="panel workspace-panel" aria-labelledby="profiles-title" hidden>
         <div class="section-heading">
           <div>
             <p class="eyebrow">工作区</p>
@@ -96,7 +96,7 @@
         </div>
       </section>
 
-      <section class="panel" aria-labelledby="setup-title">
+      <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title">
         <div class="section-heading">
           <div>
             <p class="eyebrow">安装与修复</p>
@@ -123,13 +123,13 @@
           </div>
           <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
         </div>
-        <div class="form-actions">
+        <div id="setup-actions" class="form-actions" hidden>
           <p>全新用户会直接初始化默认 .codex；检测到既有用户状态时只创建隔离档案。桌面 Codex 仅在你从上方明确选择配置并启动时打开。</p>
           <button id="setup-retry-button" class="button primary" type="button" hidden>重新安装并修复</button>
         </div>
       </section>
 
-      <footer class="privacy-note">
+      <footer id="management-footer" class="privacy-note" hidden>
         <strong>安全边界</strong>
         <span>工作区选择、安装修复和桌面启动只通过本机管理令牌调用；Connector 的远程会话能力不会在此页面中重复展示。</span>
       </footer>

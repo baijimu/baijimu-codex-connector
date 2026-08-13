@@ -129,6 +129,36 @@ export function setupStatusMeta(value) {
   };
 }
 
+export function setupPageMeta(value) {
+  const status = String(value?.status || "pending");
+  if (status === "succeeded") {
+    return {
+      mode: "management",
+      title: "Codex 工作区管理",
+      description: "选择个人环境或百积木工作区并启动 Codex；所有状态目录彼此隔离。",
+    };
+  }
+  if (["failed", "interrupted", "needs_retry"].includes(status)) {
+    return {
+      mode: "setup",
+      title: "Codex 安装需要处理",
+      description: "查看安装结果并完成修复；成功前不会展示工作区和环境操作。",
+    };
+  }
+  if (status === "running") {
+    return {
+      mode: "setup",
+      title: "正在安装 Codex",
+      description: "正在为当前授权工作区安装并配置本机 Codex，请保持此页面打开。",
+    };
+  }
+  return {
+    mode: "setup",
+    title: "正在准备安装 Codex",
+    description: "正在检查本机环境并准备初始化，请保持此页面打开。",
+  };
+}
+
 export function normalizeSetupProgress(value) {
   const setupStatus = String(value?.status || "pending");
   const installer = value?.installerStatus && typeof value.installerStatus === "object"

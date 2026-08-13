@@ -4,12 +4,14 @@ import {
   credentialStatusMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
+  setupPageMeta,
   setupStatusMeta,
   shouldShowSetupProgress,
 } from "./state.mjs";
 
 const elementIds = [
-  "refresh-button", "open-codex-button", "message", "error", "error-text",
+  "page-title", "page-description", "refresh-button", "open-codex-button",
+  "message", "error", "error-text",
   "error-retry-button", "warning",
   "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
   "credential-badge", "active-workspace", "active-codex-home", "active-model",
@@ -19,6 +21,8 @@ const elementIds = [
   "switch-progress", "switch-progress-message", "auth-switch-modal",
   "auth-switch-modal-title", "auth-switch-modal-message", "auth-switch-cancel",
   "auth-switch-confirm",
+  "management-active-panel", "management-workspace-panel", "management-footer",
+  "setup-panel", "setup-actions",
 ];
 const elements = Object.fromEntries(elementIds.map((id) => [id, document.getElementById(id)]));
 
@@ -287,6 +291,7 @@ async function launchCodex(request, progressMessage) {
 
 function renderSetupState() {
   const meta = setupStatusMeta(setupState);
+  renderPageMode();
   const status = meta.status;
   elements["setup-status"].textContent = meta.label;
   elements["setup-message"].textContent = meta.showCurrentError
@@ -294,8 +299,22 @@ function renderSetupState() {
     : setupState?.message || "等待初始化";
   renderSetupProgress();
   setAccountBusy(status === "running");
+  elements["setup-actions"].hidden = !meta.retryable;
   elements["setup-retry-button"].hidden = !meta.retryable;
   elements["setup-retry-button"].textContent = setupRetryLabel();
+}
+
+function renderPageMode() {
+  const page = setupPageMeta(setupState);
+  const setupVisible = page.mode === "setup";
+  document.body.dataset.pageMode = page.mode;
+  elements["page-title"].textContent = page.title;
+  elements["page-description"].textContent = page.description;
+  elements["refresh-button"].hidden = setupVisible;
+  elements["management-active-panel"].hidden = setupVisible;
+  elements["management-workspace-panel"].hidden = setupVisible;
+  elements["management-footer"].hidden = setupVisible;
+  elements["setup-panel"].hidden = !setupVisible;
 }
 
 function formatBytes(value) {
