@@ -35,6 +35,7 @@ const INSTALL_PROCESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const INSTALL_PROCESS_STARTUP_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 const INSTALL_PROCESS_STALE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const INSTALL_PROCESS_TOTAL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+#[cfg(unix)]
 const INSTALL_PROCESS_TERMINATION_GRACE: Duration = Duration::from_secs(2);
 const CONNECTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ERROR_CODE_INTERRUPTED: &str = "SETUP_INTERRUPTED";
