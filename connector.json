@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.49",
+  "version": "1.2.50",
   "description": "Initialize and configure Codex, select an isolated Baijimu workspace or the original Codex environment, and launch Codex with the selected state directory.",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.49"
+    "revision": "v1.2.50"
   },
   "runtime": {
     "type": "process",

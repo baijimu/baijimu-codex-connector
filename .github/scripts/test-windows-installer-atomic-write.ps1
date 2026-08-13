@@ -5,21 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$setupSource = Get-Content -LiteralPath "src/setup.rs" -Raw
-$shaMatch = [regex]::Match(
-  $setupSource,
-  'const WINDOWS_SCRIPT_SHA256: &str =\s*\r?\n\s*"([0-9a-f]{64})";'
-)
-if (-not $shaMatch.Success) {
-  throw "Unable to read the pinned Windows installer checksum from src/setup.rs"
-}
-
 if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
-  throw "Validated Windows installer artifact is missing: $ScriptPath"
-}
-$actualSha256 = (Get-FileHash -LiteralPath $ScriptPath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualSha256 -ne $shaMatch.Groups[1].Value) {
-  throw "Pinned Windows installer SHA-256 mismatch: $actualSha256"
+  throw "Embedded Windows installer source is missing: $ScriptPath"
 }
 
 $tokens = $null
@@ -30,7 +17,7 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile(
   [ref]$parseErrors
 )
 if ($parseErrors.Count -gt 0) {
-  throw "Pinned Windows installer does not parse: $($parseErrors[0].Message)"
+  throw "Embedded Windows installer does not parse: $($parseErrors[0].Message)"
 }
 
 $writer = $ast.Find(

@@ -2,10 +2,8 @@ use crate::{codex_binary, credential};
 use anyhow::{Context, Result};
 #[cfg(any(target_os = "windows", test))]
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 #[cfg(unix)]
@@ -14,20 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(target_os = "macos")]
-const MACOS_SCRIPT_URL: &str =
-    "https://download.baijimu.com/docs/scripts/codex-device-install/macos-configure-terminal-and-login.sh?versionId=CAEQogIYgYDAqJK.lf8ZIiAzNGYyNDM3NjQzOTY0ZTg4YWExMzg4OWZlY2U1NGU1YQ--";
-#[cfg(target_os = "macos")]
-const MACOS_SCRIPT_SHA256: &str =
-    "0a60334e37593fa95df92b5cf0787b64a9e491ab552b2502d9a195d59a0fe7be";
-#[cfg(target_os = "windows")]
-const WINDOWS_SCRIPT_URL: &str =
-    "https://download.baijimu.com/docs/scripts/codex-device-install/windows-configure-terminal-and-login.ps1?versionId=CAEQogIYgYCAkPzrrf8ZIiA4ZjdiZmQyMGJhNGE0YzVlYWMxYTgzZTVhOTU1M2ExYw--";
-#[cfg(target_os = "windows")]
-const WINDOWS_SCRIPT_SHA256: &str =
-    "3098b28442a39a7fe5e1baf73157bf42b2362008a39fcf7d072ecff19b6d87ae";
 const SETUP_STATUS_FILE: &str = "setup-status.json";
 const SETUP_STATUS_SCHEMA_VERSION: u32 = 2;
 const CONNECTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -308,12 +294,7 @@ fn run_install(
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
 
-        let script_override = env::var("CODEX_CONNECTOR_INSTALL_SCRIPT_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty());
-        let script_url = script_override.clone().unwrap_or_else(default_script_url);
-        let expected_sha256 = script_override.is_none().then(default_script_sha256);
-        download_script(&script_url, &script_path, expected_sha256)?;
+        write_embedded_install_script(&script_path)?;
         let state_dir = installer_state_dir();
         fs::create_dir_all(&state_dir)?;
         set_private_directory(&state_dir)?;
@@ -414,35 +395,26 @@ fn install_script_path(setup_dir: &Path, unique: &str) -> Result<PathBuf> {
     }
 }
 
-fn download_script(url: &str, path: &Path, expected_sha256: Option<&str>) -> Result<()> {
-    let response = Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(90))
-        .build()?
-        .get(url)
-        .send()
-        .with_context(|| format!("下载安装脚本失败: {url}"))?;
-    if !response.status().is_success() {
-        anyhow::bail!("下载安装脚本失败: HTTP {}", response.status());
-    }
-    let bytes = response.bytes().context("读取安装脚本失败")?;
-    if bytes.len() < 1_000 {
-        anyhow::bail!("下载的安装脚本内容异常");
-    }
-    if let Some(expected_sha256) = expected_sha256 {
-        verify_script_sha256(&bytes, expected_sha256)?;
-    }
-    atomic_write_private(path, &bytes)
-}
-
-fn verify_script_sha256(bytes: &[u8], expected_sha256: &str) -> Result<()> {
-    let actual_sha256 = format!("{:x}", Sha256::digest(bytes));
-    if actual_sha256 != expected_sha256 {
-        anyhow::bail!(
-            "安装脚本 SHA256 校验失败: expected={expected_sha256}, actual={actual_sha256}"
+fn write_embedded_install_script(path: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        return atomic_write_private(
+            path,
+            include_bytes!("../installers/macos-configure-terminal-and-login.sh"),
         );
     }
-    Ok(())
+    #[cfg(target_os = "windows")]
+    {
+        return atomic_write_private(
+            path,
+            include_bytes!("../installers/windows-configure-terminal-and-login.ps1"),
+        );
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = path;
+        anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
+    }
 }
 
 fn install_command(script_path: &Path) -> Result<Command> {
@@ -482,36 +454,6 @@ fn powershell_encoded_command(script: &str) -> String {
         .flat_map(u16::to_le_bytes)
         .collect::<Vec<_>>();
     BASE64_STANDARD.encode(utf16le)
-}
-
-fn default_script_url() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        MACOS_SCRIPT_URL.to_string()
-    }
-    #[cfg(target_os = "windows")]
-    {
-        WINDOWS_SCRIPT_URL.to_string()
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        String::new()
-    }
-}
-
-fn default_script_sha256() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        MACOS_SCRIPT_SHA256
-    }
-    #[cfg(target_os = "windows")]
-    {
-        WINDOWS_SCRIPT_SHA256
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        ""
-    }
 }
 
 fn connector_home() -> PathBuf {
@@ -657,19 +599,10 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn default_macos_installer_is_pinned_to_an_immutable_oss_version() {
-        assert!(MACOS_SCRIPT_URL.starts_with("https://download.baijimu.com/"));
-        assert!(MACOS_SCRIPT_URL.contains("?versionId="));
-        assert_eq!(MACOS_SCRIPT_SHA256.len(), 64);
-    }
-
-    #[test]
-    fn installer_script_sha256_must_match_before_execution() {
-        let script = vec![b'x'; 1_001];
-        let expected = format!("{:x}", Sha256::digest(&script));
-        assert!(verify_script_sha256(&script, &expected).is_ok());
-        let error = verify_script_sha256(&script, &"0".repeat(64)).unwrap_err();
-        assert!(error.to_string().contains("安装脚本 SHA256 校验失败"));
+    fn macos_installer_is_compiled_into_the_connector() {
+        let script = include_bytes!("../installers/macos-configure-terminal-and-login.sh");
+        assert!(script.len() > 1_000);
+        assert!(script.starts_with(b"#!/usr/bin/env bash"));
     }
 
     #[test]
@@ -690,10 +623,10 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn default_windows_installer_is_pinned_to_an_immutable_oss_version() {
-        assert!(WINDOWS_SCRIPT_URL.starts_with("https://download.baijimu.com/"));
-        assert!(WINDOWS_SCRIPT_URL.contains("?versionId="));
-        assert_eq!(WINDOWS_SCRIPT_SHA256.len(), 64);
+    fn windows_installer_is_compiled_into_the_connector() {
+        let script = include_bytes!("../installers/windows-configure-terminal-and-login.ps1");
+        assert!(script.len() > 1_000);
+        assert!(script.starts_with(b"$ErrorActionPreference"));
     }
 
     #[cfg(target_os = "windows")]

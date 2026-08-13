@@ -116,29 +116,13 @@ jobs:
           cargo test --locked
           npm test
 
-      - name: Verify immutable installer scripts
+      - name: Verify embedded installer scripts
         shell: bash
         run: |
           set -euo pipefail
-          read_rust_constant() {
-            local key="$1"
-            awk -v declaration="const ${key}:" '
-              index($0, declaration) {
-                getline
-                gsub(/^[[:space:]]*"|";[[:space:]]*$/, "")
-                print
-                exit
-              }
-            ' src/setup.rs
-          }
           verify_script() {
-            local platform="$1" url="$2" expected="$3" output="$RUNNER_TEMP/$1-installer"
-            test -n "$url"
-            test "${#expected}" = 64
-            curl -fsSL --retry 6 --retry-all-errors --retry-delay 3 \
-              --connect-timeout 15 --max-time 120 \
-              "$url" -o "$output"
-            printf '%s  %s\n' "$expected" "$output" | sha256sum -c -
+            local platform="$1" output="$2"
+            test -s "$output"
             grep -F 'https://download.baijimu.com/codex-artifacts/latest.json' "$output"
             if [ "$platform" = macos ]; then
               grep -F 'curl exit $curl_status' "$output"
@@ -162,20 +146,8 @@ jobs:
               fi
             fi
           }
-          verify_script macos \
-            "$(read_rust_constant MACOS_SCRIPT_URL)" \
-            "$(read_rust_constant MACOS_SCRIPT_SHA256)"
-          verify_script windows \
-            "$(read_rust_constant WINDOWS_SCRIPT_URL)" \
-            "$(read_rust_constant WINDOWS_SCRIPT_SHA256)"
-
-      - name: Upload validated installer scripts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: validated-installer-scripts
-          path: ${{ runner.temp }}/*-installer
-          if-no-files-found: error
-          retention-days: 1
+          verify_script macos installers/macos-configure-terminal-and-login.sh
+          verify_script windows installers/windows-configure-terminal-and-login.ps1
 
   build:
     if: needs.validate.outputs.verify != 'true'
@@ -199,13 +171,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.sha }}
-
-      - name: Download validated installer scripts
-        if: runner.os == 'Windows'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: validated-installer-scripts
-          path: ${{ runner.temp }}/validated-installer-scripts
 
       - name: Set up Rust
         shell: bash
@@ -324,7 +289,7 @@ jobs:
         timeout-minutes: 5
         run: >
           .github/scripts/test-windows-installer-atomic-write.ps1
-          -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
+          -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
 
       - name: Verify installer app-server login protocol with Windows PowerShell 5.1
         if: runner.os == 'Windows'
@@ -332,7 +297,7 @@ jobs:
         timeout-minutes: 5
         run: >
           .github/scripts/test-windows-installer-app-server-login.ps1
-          -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
+          -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
 
       - name: Verify official Codex package layout with Windows PowerShell 5.1
         if: runner.os == 'Windows'
@@ -340,7 +305,7 @@ jobs:
         timeout-minutes: 5
         run: >
           .github/scripts/test-windows-installer-package-layout.ps1
-          -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
+          -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
 
       - name: Verify Codex CLI candidate resolution with Windows PowerShell 5.1
         if: runner.os == 'Windows'
@@ -348,7 +313,7 @@ jobs:
         timeout-minutes: 5
         run: >
           .github/scripts/test-windows-installer-cli-resolution.ps1
-          -ScriptPath "$env:RUNNER_TEMP\validated-installer-scripts\windows-installer"
+          -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
 
       - name: Download and run Windows signing tool
         if: runner.os == 'Windows' && needs.validate.outputs.publish == 'true'

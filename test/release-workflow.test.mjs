@@ -78,10 +78,9 @@ test("connector owns its application release and upstream artifact sync workflow
     /Verify official Codex package layout with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
   );
   assert.match(workflow, /test-windows-installer-package-layout\.ps1/);
-  assert.match(workflow, /Upload validated installer scripts/);
-  assert.match(workflow, /Download validated installer scripts/);
-  assert.match(workflow, /name: validated-installer-scripts/);
-  assert.match(workflow, /validated-installer-scripts\\windows-installer/);
+  assert.doesNotMatch(workflow, /Upload validated installer scripts/);
+  assert.doesNotMatch(workflow, /Download validated installer scripts/);
+  assert.match(workflow, /installers\\windows-configure-terminal-and-login\.ps1/);
   const windowsInstallerTest = await readFile(
     join(root, ".github", "scripts", "test-windows-installer-atomic-write.ps1"),
     "utf8",
@@ -107,11 +106,10 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(windowsPackageTest, /Resolve-CodexPackageContents/);
   assert.match(windowsPackageTest, /codex-command-runner\.exe/);
   assert.match(windowsPackageTest, /Legacy flat Windows Codex cache was not removed/);
-  assert.match(windowsInstallerTest, /Get-FileHash -LiteralPath \$ScriptPath/);
-  assert.match(workflow, /Verify immutable installer scripts/);
-  assert.match(workflow, /read_rust_constant MACOS_SCRIPT_SHA256/);
-  assert.match(workflow, /read_rust_constant WINDOWS_SCRIPT_SHA256/);
-  assert.match(workflow, /sha256sum -c -/);
+  assert.doesNotMatch(windowsInstallerTest, /Get-FileHash -LiteralPath \$ScriptPath/);
+  assert.match(workflow, /Verify embedded installer scripts/);
+  assert.match(workflow, /installers\/macos-configure-terminal-and-login\.sh/);
+  assert.match(workflow, /installers\/windows-configure-terminal-and-login\.ps1/);
   assert.match(workflow, /curl exit \$curl_status/);
   assert.match(workflow, /New-Object System\.Text\.UTF8Encoding\(\$false\)/);
   assert.match(workflow, /Write-Utf8NoBomFile \$authPath/);
@@ -138,6 +136,29 @@ test("connector owns its application release and upstream artifact sync workflow
     const pattern = new RegExp(`${action.replace("/", "\\/")}@[0-9a-f]{40}`);
     assert.match(workflow, pattern);
   }
+});
+
+test("connector compiles platform installers instead of downloading executable scripts", async () => {
+  const setupSource = await readFile(join(root, "src", "setup.rs"), "utf8");
+  const macosInstaller = await readFile(
+    join(root, "installers", "macos-configure-terminal-and-login.sh"),
+  );
+  const windowsInstaller = await readFile(
+    join(root, "installers", "windows-configure-terminal-and-login.ps1"),
+  );
+
+  assert.match(
+    setupSource,
+    /include_bytes!\("\.\.\/installers\/macos-configure-terminal-and-login\.sh"\)/,
+  );
+  assert.match(
+    setupSource,
+    /include_bytes!\("\.\.\/installers\/windows-configure-terminal-and-login\.ps1"\)/,
+  );
+  assert.doesNotMatch(setupSource, /CODEX_CONNECTOR_INSTALL_SCRIPT_URL/);
+  assert.doesNotMatch(setupSource, /SCRIPT_URL|SCRIPT_SHA256|download_script/);
+  assert.ok(macosInstaller.length > 1_000);
+  assert.ok(windowsInstaller.length > 1_000);
 });
 
 test("upstream sync is release-side, complete, latest-only, and independently scheduled", async () => {
