@@ -60,10 +60,11 @@ Configuration can be provided with flags or environment variables:
 
 ```bash
 CODEX_CONNECTOR_PORT=18110
-CODEX_CONNECTOR_BAIJIMU_BINARY=baijimu
 CODEX_CONNECTOR_PROJECTS_DIR=/absolute/path/to/Baijimu/Projects
 CODEX_CONNECTOR_CODEX_ARGS='["app-server","--listen","stdio://"]'
 ```
+
+`CODEX_CONNECTOR_BAIJIMU_BINARY` 由支持 `connector.managed-tool-dependencies.v1` 的 Bridge Agent 在每次启动时注入，值为已安装并验证的 Baijimu CLI launcher 绝对路径。Connector 不从 `PATH` 查找该命令，也不提供持久化覆盖项。
 
 ## Local App Capabilities
 

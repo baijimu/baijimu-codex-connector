@@ -82,10 +82,20 @@ test("connector manifest declares the packaged embedded UI", async () => {
   ]);
   assert.equal(manifest.setup, undefined);
   assert.deepEqual(manifest.hostRequirements, {
-    minimumVersion: "0.2.40",
-    capabilities: ["connector.process.host-managed.v1"],
+    minimumVersion: "0.2.82",
+    capabilities: [
+      "connector.process.host-managed.v1",
+      "connector.managed-tool-dependencies.v1",
+    ],
   });
+  assert.deepEqual(manifest.managedToolDependencies, [{
+    id: "com.baijimu.cli",
+    minimumVersion: "0.1.43",
+    requiredFor: ["install", "start"],
+    executablePathEnv: "CODEX_CONNECTOR_BAIJIMU_BINARY",
+  }]);
   assert.equal(manifest.configSchema.properties.codexBinary, undefined);
+  assert.equal(manifest.configSchema.properties.baijimuBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
   assert.match(html, /src="\.\/app\.js"/);
   assert.match(html, /href="\.\/styles\.css"/);

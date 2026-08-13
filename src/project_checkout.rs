@@ -41,7 +41,8 @@ pub fn prepare(request: CheckoutRequest) -> Result<CheckoutResult> {
     }
     fs::create_dir_all(directory.parent().context("平台项目检出目录缺少父目录")?)
         .with_context(|| format!("创建平台项目目录失败: {}", directory.display()))?;
-    let mut command = crate::baijimu_cli::command();
+    let mut command =
+        crate::baijimu_cli::command().context("Bridge Agent 未提供平台管理的 baijimu CLI")?;
     command
         .args([
             "project",

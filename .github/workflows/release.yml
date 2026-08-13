@@ -678,7 +678,7 @@ jobs:
             PUBLISHED)
               for target in 'macos&arch=aarch64' 'windows&arch=x86_64' 'linux&arch=x86_64'; do
                 curl -fsS --retry 5 --retry-all-errors --retry-delay 3 \
-                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex?platform=${target}&hostVersion=0.2.40&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1" \
+                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex?platform=${target}&hostVersion=0.2.82&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1" \
                   | jq -e --arg version "$VERSION" '
                     (.data // .).latestVersion.version == $version and
                     (.data // .).latestVersion.compatibility.compatible == true and
@@ -786,8 +786,8 @@ jobs:
               'https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex' \
               --data-urlencode "platform=$platform" \
               --data-urlencode "arch=$arch" \
-              --data-urlencode 'hostVersion=0.2.40' \
-              --data-urlencode 'hostCapabilities=connector.setup.v1,connector.process.host-managed.v1' \
+              --data-urlencode 'hostVersion=0.2.82' \
+              --data-urlencode 'hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1' \
               -o "$response"
             jq -e --arg version "$VERSION" --arg platform "$platform" --arg arch "$arch" \
               --slurpfile oss "$oss_manifest" '
@@ -802,7 +802,14 @@ jobs:
                 } and
                 .latestVersion.manifest.runtime.processOwnership == "host" and
                 .latestVersion.manifest.runtime.args == ["start"] and
-                .latestVersion.manifest.hostRequirements.minimumVersion == "0.2.40" and
+                .latestVersion.manifest.hostRequirements.minimumVersion == "0.2.82" and
+                (.latestVersion.manifest.hostRequirements.capabilities | index("connector.managed-tool-dependencies.v1") != null) and
+                .latestVersion.manifest.managedToolDependencies == [{
+                  "id": "com.baijimu.cli",
+                  "minimumVersion": "0.1.43",
+                  "requiredFor": ["install", "start"],
+                  "executablePathEnv": "CODEX_CONNECTOR_BAIJIMU_BINARY"
+                }] and
                 any(.latestVersion.manifest.artifacts[];
                   .platform == $platform and
                   (.arch == $arch or ($platform == "macos" and .arch == "universal")) and

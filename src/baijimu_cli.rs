@@ -3,10 +3,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const DEFAULT_BAIJIMU_BINARY: &str = "baijimu";
+const BAIJIMU_BINARY_ENV: &str = "CODEX_CONNECTOR_BAIJIMU_BINARY";
 const WORKSPACE_PAGE_SIZE: u64 = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,8 +108,8 @@ struct LlmCredentialContract {
     credential: String,
 }
 
-pub fn command() -> Command {
-    Command::new(binary())
+pub fn command() -> Result<Command> {
+    Ok(Command::new(binary()?))
 }
 
 pub fn auth_status() -> Result<AuthStatus> {
@@ -217,18 +217,28 @@ pub fn create_llm_credential(workspace_id: u64) -> Result<String> {
     required_text(contract.credential, "llm-credential create.credential")
 }
 
-fn binary() -> PathBuf {
-    env::var_os("CODEX_CONNECTOR_BAIJIMU_BINARY")
+fn binary() -> Result<PathBuf> {
+    let value = env::var_os(BAIJIMU_BINARY_ENV)
         .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_BAIJIMU_BINARY))
+        .context("Bridge Agent 未注入平台管理的 baijimu CLI 绝对路径；请升级或重启 Bridge Agent")?;
+    validate_binary_path(PathBuf::from(value))
+}
+
+fn validate_binary_path(path: PathBuf) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        bail!("{BAIJIMU_BINARY_ENV} 必须是绝对路径，不能依赖 PATH 查找")
+    }
+    if !Path::new(&path).is_file() {
+        bail!("Bridge Agent 注入的 baijimu CLI 不存在：{}", path.display())
+    }
+    Ok(path)
 }
 
 fn run_json<T>(operation: &str, args: &[&str]) -> Result<T>
 where
     T: DeserializeOwned,
 {
-    let output = command()
+    let output = command()?
         .args(args)
         .output()
         .with_context(|| format!("启动 baijimu CLI {operation} 失败；请检查平台管理的 CLI 安装"))?;
@@ -352,5 +362,15 @@ mod tests {
     fn invalid_workspace_ids_fail_closed() {
         assert!(require_workspace_id(0).is_err());
         assert!(positive_unique_ids(vec![642, 0], "workspaceIds").is_err());
+    }
+
+    #[test]
+    fn managed_cli_path_requires_an_absolute_existing_file() {
+        assert!(validate_binary_path(PathBuf::from("baijimu")).is_err());
+        let executable = std::env::current_exe().unwrap();
+        assert_eq!(
+            validate_binary_path(executable.clone()).unwrap(),
+            executable
+        );
     }
 }
