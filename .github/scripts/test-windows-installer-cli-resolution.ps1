@@ -19,6 +19,7 @@ if ($parseErrors.Count -gt 0) {
 foreach ($name in @(
   "Set-CodexProcessCommand",
   "Stop-CodexProcess",
+  "Invoke-NativeProcess",
   "Invoke-CodexProcess",
   "Test-CodexCliCandidate",
   "Get-SystemCodexCli"
