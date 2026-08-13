@@ -116,6 +116,8 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(windowsLoginTest, /Start-Sleep -Seconds 3/);
   assert.match(windowsLoginTest, /denied by fake server/);
   assert.match(windowsLoginTest, /exposed the API key/);
+  assert.match(windowsLoginTest, /非 JSON 标准输出/);
+  assert.doesNotMatch(windowsLoginTest, /-notmatch "non-JSON"/);
   assert.doesNotMatch(windowsPackageTest, /Invoke-WebRequest|curl\.exe|https?:\/\//);
   assert.match(windowsPackageTest, /Resolve-CodexPackageContents/);
   assert.match(windowsPackageTest, /codex-command-runner\.exe/);
