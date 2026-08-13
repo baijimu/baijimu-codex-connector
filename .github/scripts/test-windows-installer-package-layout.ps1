@@ -7,8 +7,9 @@ $ErrorActionPreference = "Stop"
 
 $tokens = $null
 $parseErrors = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile(
-  $ScriptPath,
+$installerSource = [System.IO.File]::ReadAllText($ScriptPath, [System.Text.Encoding]::UTF8)
+$ast = [System.Management.Automation.Language.Parser]::ParseInput(
+  $installerSource,
   [ref]$tokens,
   [ref]$parseErrors
 )

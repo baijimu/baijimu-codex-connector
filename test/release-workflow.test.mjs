@@ -93,15 +93,29 @@ test("connector owns its application release and upstream artifact sync workflow
     join(root, ".github", "scripts", "test-windows-installer-app-server-login.ps1"),
     "utf8",
   );
+  const windowsPackageTest = await readFile(
+    join(root, ".github", "scripts", "test-windows-installer-package-layout.ps1"),
+    "utf8",
+  );
+  const windowsCliResolutionTest = await readFile(
+    join(root, ".github", "scripts", "test-windows-installer-cli-resolution.ps1"),
+    "utf8",
+  );
+  for (const windowsInstallerCheck of [
+    windowsInstallerTest,
+    windowsLoginTest,
+    windowsPackageTest,
+    windowsCliResolutionTest,
+  ]) {
+    assert.match(windowsInstallerCheck, /ReadAllText\(\$ScriptPath, \[System\.Text\.Encoding\]::UTF8\)/);
+    assert.match(windowsInstallerCheck, /Parser\]::ParseInput\(/);
+    assert.doesNotMatch(windowsInstallerCheck, /Parser\]::ParseFile\(/);
+  }
   assert.doesNotMatch(windowsLoginTest, /Invoke-WebRequest|curl\.exe|https?:\/\//);
   assert.match(windowsLoginTest, /delayed-success/);
   assert.match(windowsLoginTest, /Start-Sleep -Seconds 3/);
   assert.match(windowsLoginTest, /denied by fake server/);
   assert.match(windowsLoginTest, /exposed the API key/);
-  const windowsPackageTest = await readFile(
-    join(root, ".github", "scripts", "test-windows-installer-package-layout.ps1"),
-    "utf8",
-  );
   assert.doesNotMatch(windowsPackageTest, /Invoke-WebRequest|curl\.exe|https?:\/\//);
   assert.match(windowsPackageTest, /Resolve-CodexPackageContents/);
   assert.match(windowsPackageTest, /codex-command-runner\.exe/);
