@@ -136,8 +136,12 @@ try {
   if (-not $script:result.appServerLogin) { throw "Login completion was not recorded" }
   if (-not $script:result.appServerAuthModeUpdated) { throw "Auth mode update was not recorded" }
   if ($script:result.appServerAccountType -ne "apiKey") { throw "Final account type was not verified" }
-  if ($script:Warnings.Count -ne 1 -or $script:Warnings[0] -notmatch "非 JSON 标准输出") {
-    throw "本地化后的非 JSON app-server 诊断信息未按预期处理"
+  if (
+    $script:Warnings.Count -ne 1 -or
+    $script:Warnings[0] -notmatch "JSON" -or
+    $script:Warnings[0] -notmatch "app-server"
+  ) {
+    throw "Localized non-JSON app-server diagnostics were not handled as expected"
   }
 
   Reset-TestResult
