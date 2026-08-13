@@ -349,7 +349,7 @@ test("setup launches desktop after profile finalization without an installer con
   assert.doesNotMatch(desktop, /pkill/);
 });
 
-test("workspace profile homes are short, isolated, and safely migratable", async () => {
+test("default Codex home has one workspace binding and other profiles stay safely isolated", async () => {
   const credential = await readFile(join(root, "src", "credential.rs"), "utf8");
   const main = await readFile(join(root, "src", "main.rs"), "utf8");
   assert.match(credential, /home_dir\(\)\.join\("\.baijimu"\)\.join\("codex"\)\.join\("p"\)/);
@@ -358,8 +358,12 @@ test("workspace profile homes are short, isolated, and safely migratable", async
   assert.match(credential, /migrate_legacy_profile_homes/);
   assert.match(credential, /fs::rename\(&source, &target\)/);
   assert.match(credential, /源目录和目标目录同时存在/);
-  assert.match(credential, /a_new_profile_never_adopts_the_default_codex_home/);
-  assert.match(credential, /v4_legacy_profile_directory_is_atomically_migrated_to_the_short_home/);
+  assert.match(credential, /a_new_user_binds_the_first_workspace_to_the_default_codex_home/);
+  assert.match(credential, /an_existing_unowned_default_home_keeps_new_workspace_isolated/);
+  assert.match(credential, /a_second_workspace_cannot_take_the_default_home_binding/);
+  assert.match(credential, /switching_back_to_bound_workspace_restores_default_codex_home/);
+  assert.match(credential, /v5_active_private_profile_migrates_to_default_home_and_commits_binding/);
+  assert.match(credential, /v4_active_legacy_profile_is_atomically_migrated_to_the_default_home/);
   assert.match(credential, /legacy_profile_migration_recovers_after_rename_before_metadata_save/);
   assert.match(credential, /legacy_profile_migration_preserves_both_directories_on_collision/);
   const migrationDetection = main.indexOf("credential::pending_profile_home_migration()");
@@ -369,15 +373,16 @@ test("workspace profile homes are short, isolated, and safely migratable", async
   assert.ok(desktopStop > migrationDetection);
   assert.ok(metadataMigration > desktopStop);
   assert.match(main, /thread::spawn\(move \|\| match initialize_server\(\)/);
-  assert.doesNotMatch(credential, /default_home_can_be_initialized/);
+  assert.match(credential, /default_home_can_bind_profile/);
   assert.match(credential, /OWNERSHIP_MARKER_FILE: &str = "\.baijimu-owner\.json"/);
+  assert.match(credential, /OWNERSHIP_RESERVATION_FILE: &str = "\.baijimu-owner\.pending\.json"/);
   assert.match(credential, /OWNERSHIP_OWNER: &str = "baijimu-connector-codex"/);
   assert.match(credential, /read_valid_ownership/);
   assert.match(credential, /commit_default_home_ownership/);
   assert.match(credential, /managed_files: vec!\[OWNED_AUTH_FILE\.to_string\(\), OWNED_CONFIG_FILE\.to_string\(\)\]/);
   assert.match(credential, /assert!\(!marker_content\.contains\("642"\)\)/);
   assert.match(credential, /assert!\(!marker_content\.contains\("workspace-token"\)\)/);
-  assert.match(credential, /legacy_default_home_ownership_marker_contains_no_business_identifiers/);
+  assert.match(credential, /default_home_ownership_marker_binds_a_profile_without_business_identifiers/);
 });
 
 test("all package identities agree with the GitHub source tag", async () => {

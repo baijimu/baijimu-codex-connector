@@ -418,10 +418,10 @@ fn install_script_path(setup_dir: &Path, unique: &str) -> Result<PathBuf> {
 fn write_embedded_install_script(path: &Path) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        return atomic_write_private(
+        atomic_write_private(
             path,
             include_bytes!("../installers/macos-configure-terminal-and-login.sh"),
-        );
+        )
     }
     #[cfg(target_os = "windows")]
     {

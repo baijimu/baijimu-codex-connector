@@ -117,7 +117,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /auth-switch-modal/);
   assert.match(html, /error-retry-button/);
   assert.match(html, /restore-external-home-button/);
-  assert.match(html, /全新初始化会在验证完成后自动打开隔离的工作区 Codex/);
+  assert.match(html, /全新用户会把当前工作区绑定到默认 \.codex 并在验证后自动打开/);
   assert.match(html, /id="management-active-panel"[^>]*hidden/);
   assert.match(html, /id="management-workspace-panel"[^>]*hidden/);
   assert.match(html, /id="setup-panel"/);
@@ -157,7 +157,7 @@ test("UI keeps setup isolated until initialization succeeds", () => {
   assert.deepEqual(setupPageMeta({ status: "succeeded" }), {
     mode: "management",
     title: "Codex 工作区管理",
-    description: "选择个人环境或百积木工作区并启动 Codex；所有状态目录彼此隔离。",
+    description: "选择百积木工作区并启动 Codex；默认 .codex 只绑定一个工作区，其他工作区使用隔离目录。",
   });
 });
 
@@ -281,6 +281,7 @@ test("UI state normalizes management responses and keeps the active workspace", 
   assert.equal(state.workspaces[1].authorized, true);
   assert.deepEqual(state.workspaces[1].userIds, [25]);
   assert.equal(state.chatgpt.accountId, "acct-1");
+  assert.equal(state.chatgpt.available, true);
   assert.equal(state.originalCodexHome, "/users/test/.codex");
   assert.equal(state.originalCodexHomeState.captured, true);
   assert.equal(state.originalCodexHomeState.wasSet, false);

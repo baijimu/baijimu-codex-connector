@@ -43,6 +43,7 @@ export function normalizeCredentialState(value) {
     profiles,
     workspaces,
     chatgpt: {
+      available: input.chatgpt?.available !== false,
       configured: input.chatgpt?.configured === true,
       authMode: String(input.chatgpt?.authMode || ""),
       accountId: String(input.chatgpt?.accountId || ""),
@@ -135,7 +136,7 @@ export function setupPageMeta(value) {
     return {
       mode: "management",
       title: "Codex 工作区管理",
-      description: "选择个人环境或百积木工作区并启动 Codex；所有状态目录彼此隔离。",
+      description: "选择百积木工作区并启动 Codex；默认 .codex 只绑定一个工作区，其他工作区使用隔离目录。",
     };
   }
   if (["failed", "interrupted", "needs_retry"].includes(status)) {

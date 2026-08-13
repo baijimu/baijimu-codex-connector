@@ -3,7 +3,7 @@
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
   "version": "1.2.51",
-  "description": "初始化并配置 Codex，选择隔离的百积木工作区或原有 Codex 环境，并使用所选状态目录启动 Codex。",
+  "description": "初始化并配置 Codex，将全新用户的首个工作区绑定到默认 .codex，保护既有目录，并用所选工作区状态启动 Codex。",
   "publisher": {
     "name": "Baijimu",
     "homepage": "https://baijimu.com"
@@ -134,8 +134,8 @@
     "百积木平台认证和 Partner API 调用统一交由平台管理的 baijimu CLI；Connector 不再读取共享 PAT 文件，也不再自行发起工作区或 LLM credential HTTP 请求。",
     "工作区初始化与修复通过 baijimu llm-credential create 重新签发 LLM credential，并对 CLI 的认证状态、工作区和凭证响应使用类型化契约校验。",
     "从旧版长路径升级时，Connector 会在启动就绪前检测活动档案迁移，先停止占用目录的 Codex 桌面进程，完成原子迁移后再以短 CODEX_HOME 恢复桌面，避免 Windows 文件占用导致迁移卡在可恢复中间态。",
-    "百积木工作区 Codex Home 统一放入用户目录下的 .baijimu/codex/p/<短档案键>，不再把环境、用户、客户端和工作区标识逐层拼入物理路径，规避 Windows 长路径下子进程 cwd 启动失败。",
-    "旧版 Connector 私有档案在启动时通过同盘目录重命名原子迁移；支持重命名完成但元数据尚未写入时自动恢复，源目录与目标目录冲突时保留两份数据并停止覆盖。",
+    "全新用户的首个百积木工作区直接绑定默认 .codex；默认目录只绑定一个工作区，切回该工作区恢复默认路径，其他工作区使用 .baijimu/codex/p/<短档案键>。",
+    "已有但不受百积木控制的 .codex 与显式 CODEX_HOME 保持不变；旧版活动隔离档案仅在默认目录未被占用时通过同盘重命名安全迁移并提交绑定标记。",
     "Connector 启动和内部工作区切换不再写用户级 CODEX_HOME，也不再广播 WM_SETTINGCHANGE；管理接口启动桌面时按单次进程显式传入所选目录。",
     "Windows 使用 Appx 清单声明的全信任可执行入口启动隔离桌面配置，不再通过 Explorer 继承用户级环境；Codex 子进程会剥离 Connector 私有环境变量。",
     "旧版本留下的全局 CODEX_HOME 仅在管理界面明确操作且所有权可证明时恢复；全新初始化激活工作区档案后由 Connector 自动打开并验证桌面应用，既有个人配置不会被自动切换。",

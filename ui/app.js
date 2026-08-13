@@ -139,25 +139,35 @@ function environmentLabel(value) {
 
 function authProfiles() {
   const state = credentialState;
-  const profiles = [{
-    key: "chatgpt",
-    title: "原有 Codex 环境",
-    detail: state?.chatgpt?.accountId ? `ChatGPT 账号 ${state.chatgpt.accountId}` : "接管前的默认 Codex 登录",
-    meta: state?.chatgpt?.configured ? "已配置；恢复后使用原有登录、配置和会话" : "尚未登录；恢复后可在 Codex 中完成登录",
-    active: state?.activeMode === "chatgpt",
-    disabled: false,
-    actionLabel: state?.activeMode === "chatgpt" ? "重新启动个人 Codex" : "启动个人 Codex",
-    request: { mode: "chatgpt" },
-  }];
+  const profiles = [];
+  if (state?.chatgpt?.available !== false) {
+    profiles.push({
+      key: "chatgpt",
+      title: "原有 Codex 环境",
+      detail: state?.chatgpt?.accountId ? `ChatGPT 账号 ${state.chatgpt.accountId}` : "接管前的默认 Codex 登录",
+      meta: state?.chatgpt?.configured ? "已配置；恢复后使用原有登录、配置和会话" : "尚未登录；恢复后可在 Codex 中完成登录",
+      active: state?.activeMode === "chatgpt",
+      disabled: false,
+      actionLabel: state?.activeMode === "chatgpt" ? "重新启动个人 Codex" : "启动个人 Codex",
+      request: { mode: "chatgpt" },
+    });
+  }
   for (const workspace of state?.workspaces || []) {
     const profile = state.profiles.find((item) => item.workspaceId === workspace.workspaceId);
     const active = state.activeMode === "baijimu" && state.activeWorkspaceId === workspace.workspaceId;
+    const usesDefaultHome = profile?.codexHome
+      && profile.codexHome === state.originalCodexHome
+      && state?.chatgpt?.available === false;
     profiles.push({
       key: `workspace-${workspace.workspaceId}`,
       title: `${workspace.name || `工作区 ${workspace.workspaceId}`}（${workspace.workspaceId}）`,
       detail: environmentLabel(profile?.environment),
       meta: workspace.authorized
-        ? (profile ? "凭证档案已保存；可以直接启动 Codex" : "已授权；首次启动时自动创建工作区凭证档案")
+        ? (profile
+          ? (usesDefaultHome
+            ? "已绑定默认 .codex；从系统直接启动也使用该工作区"
+            : "凭证档案已保存；使用隔离目录启动 Codex")
+          : "已授权；首次启动时自动创建工作区凭证档案")
         : "当前百积木账号未授权这个工作区",
       active,
       disabled: !workspace.authorized,
@@ -238,7 +248,7 @@ function codexLaunchCopy(request) {
     : `工作区 ${request.workspaceId}`;
   return {
     title: `使用${name}启动 Codex`,
-    message: `将关闭当前 Codex，选择“${name}”的独立状态目录并重新启动。不会删除个人或其他工作区数据。`,
+    message: `将关闭当前 Codex，使用“${name}”已绑定的状态目录重新启动。不会删除个人或其他工作区数据。`,
     progress: `正在使用${name}启动并验证 Codex…`,
   };
 }

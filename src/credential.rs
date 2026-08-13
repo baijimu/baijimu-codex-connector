@@ -10,10 +10,12 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::{baijimu_cli, user_environment};
 
-const METADATA_VERSION: u32 = 5;
+const METADATA_VERSION: u32 = 6;
 const METADATA_FILE: &str = "codex-credentials.json";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
-const OWNERSHIP_SCHEMA_VERSION: u32 = 1;
+const OWNERSHIP_RESERVATION_FILE: &str = ".baijimu-owner.pending.json";
+const OWNERSHIP_SCHEMA_VERSION: u32 = 2;
+const LEGACY_OWNERSHIP_SCHEMA_VERSION: u32 = 1;
 const OWNERSHIP_OWNER: &str = "baijimu-connector-codex";
 const OWNED_AUTH_FILE: &str = "auth.json";
 const OWNED_CONFIG_FILE: &str = "config.toml";
@@ -63,6 +65,7 @@ pub struct WorkspaceOption {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatGptProfileState {
+    pub available: bool,
     pub configured: bool,
     pub auth_mode: Option<String>,
     pub account_id: Option<String>,
@@ -145,6 +148,17 @@ struct CodexHomeOwnership {
     owner: String,
     initialized_at_epoch_seconds: u64,
     managed_files: Vec<String>,
+    #[serde(default)]
+    profile_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CodexHomeReservation {
+    schema_version: u32,
+    owner: String,
+    reserved_at_epoch_seconds: u64,
+    profile_key: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -175,7 +189,11 @@ impl Default for CredentialMetadata {
 pub fn state() -> Result<CredentialManagerState> {
     let mut metadata = load_metadata()?;
     let original_home = original_home_from_metadata(&metadata);
-    let chatgpt = read_chatgpt_state(&original_home)?;
+    let mut chatgpt = read_chatgpt_state(&original_home)?;
+    chatgpt.available = !metadata
+        .profiles
+        .iter()
+        .any(|profile| Path::new(&profile.codex_home) == original_home);
     let auth_status = baijimu_cli::auth_status();
     let mut warning = auth_status.as_ref().err().map(ToString::to_string);
     let (current_workspace_id, authorized_workspace_ids) = match auth_status.as_ref() {
@@ -324,6 +342,9 @@ pub fn prepare_workspace_profile(workspace_id: u64) -> Result<PreparedWorkspaceP
             let profile_id = profile_id(&environment, None, None, workspace_id);
             let profile_home =
                 select_new_profile_home(&metadata, &environment, None, None, workspace_id)?;
+            if profile_home == default_original_codex_home() {
+                reserve_default_home(&profile_home, &profile_id)?;
+            }
             (profile_id, environment, None, None, profile_home)
         };
     let auth_path = profile_home.join("auth.json");
@@ -387,6 +408,13 @@ pub fn activate_prepared_workspace_profile(
 pub fn activate_chatgpt_profile() -> Result<PathBuf> {
     let previous = load_metadata()?;
     let home = original_home_from_metadata(&previous);
+    if previous
+        .profiles
+        .iter()
+        .any(|profile| Path::new(&profile.codex_home) == home)
+    {
+        anyhow::bail!("默认 .codex 已绑定百积木工作区，不能同时作为个人 Codex 环境");
+    }
     let mut metadata = previous.clone();
     metadata.active_mode = AuthMode::Chatgpt;
     metadata.active_profile_id = None;
@@ -570,6 +598,7 @@ fn read_chatgpt_state(home: &Path) -> Result<ChatGptProfileState> {
     let path = home.join("auth.json");
     if !path.exists() {
         return Ok(ChatGptProfileState {
+            available: true,
             configured: false,
             auth_mode: None,
             account_id: None,
@@ -596,6 +625,7 @@ fn read_chatgpt_state(home: &Path) -> Result<ChatGptProfileState> {
             .and_then(Value::as_str)
             .is_some_and(|v| !v.is_empty());
     Ok(ChatGptProfileState {
+        available: true,
         configured,
         auth_mode,
         account_id,
@@ -675,7 +705,8 @@ fn load_metadata() -> Result<CredentialMetadata> {
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }
-    let profile_homes_migrated = migrate_legacy_profile_homes(&mut metadata)?;
+    let legacy_profile_homes_migrated = migrate_legacy_profile_homes(&mut metadata)?;
+    let default_home_migrated_profile = migrate_active_profile_to_default_home(&mut metadata)?;
     if previous_version < 2 && metadata.active_profile_id.is_none() {
         metadata.active_profile_id = metadata.active_workspace_id.and_then(|id| {
             metadata
@@ -693,9 +724,17 @@ fn load_metadata() -> Result<CredentialMetadata> {
     if source.as_ref() != Some(&path)
         || needs_version_migration
         || baseline_captured
-        || profile_homes_migrated
+        || legacy_profile_homes_migrated
+        || default_home_migrated_profile.is_some()
     {
         save_metadata(&metadata)?;
+    }
+    if let Some(profile) = default_home_migrated_profile.as_ref() {
+        if read_codex_api_key(&Path::new(&profile.codex_home).join(OWNED_AUTH_FILE))?.is_some()
+            && managed_config_ready(&Path::new(&profile.codex_home).join(OWNED_CONFIG_FILE))
+        {
+            commit_default_home_ownership(profile)?;
+        }
     }
     if let Some(source) = source.filter(|source| source != &path) {
         fs::remove_file(&source)
@@ -723,13 +762,10 @@ pub fn pending_profile_home_migration() -> Result<Option<PendingProfileHomeMigra
     for profile in &mut metadata.profiles {
         normalize_profile(profile);
     }
-    if !metadata
+    let has_legacy_migration = metadata
         .profiles
         .iter()
-        .any(|profile| Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root()))
-    {
-        return Ok(None);
-    }
+        .any(|profile| Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root()));
 
     let legacy_workspace_selection = metadata.version < 2
         && metadata.active_profile_id.is_none()
@@ -756,12 +792,34 @@ pub fn pending_profile_home_migration() -> Result<Option<PendingProfileHomeMigra
     } else {
         None
     };
-    let active_profile = active_profile.filter(|profile| {
-        Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root())
-    });
+    if has_legacy_migration {
+        let active_profile = active_profile.filter(|profile| {
+            Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root())
+        });
+        let active_home_after = active_profile.map(|profile| {
+            if default_home_can_bind_profile(&metadata, &profile.profile_id).unwrap_or(false) {
+                default_original_codex_home()
+            } else {
+                profile_home_for_id(&profile.profile_id)
+            }
+        });
+        return Ok(Some(PendingProfileHomeMigration {
+            active_home_before: active_profile.map(|profile| PathBuf::from(&profile.codex_home)),
+            active_home_after,
+        }));
+    }
+
+    let Some(profile) = active_profile
+        .filter(|profile| Path::new(&profile.codex_home).starts_with(managed_profile_root()))
+    else {
+        return Ok(None);
+    };
+    if !default_home_can_bind_profile(&metadata, &profile.profile_id)? {
+        return Ok(None);
+    }
     Ok(Some(PendingProfileHomeMigration {
-        active_home_before: active_profile.map(|profile| PathBuf::from(&profile.codex_home)),
-        active_home_after: active_profile.map(|profile| profile_home_for_id(&profile.profile_id)),
+        active_home_before: Some(PathBuf::from(&profile.codex_home)),
+        active_home_after: Some(default_original_codex_home()),
     }))
 }
 
@@ -923,6 +981,75 @@ fn migrate_legacy_profile_homes(metadata: &mut CredentialMetadata) -> Result<boo
     Ok(changed)
 }
 
+fn migrate_active_profile_to_default_home(
+    metadata: &mut CredentialMetadata,
+) -> Result<Option<CredentialProfile>> {
+    let Some(profile_index) = active_managed_profile_index(metadata) else {
+        return Ok(None);
+    };
+    let profile_id = metadata.profiles[profile_index].profile_id.clone();
+    if !default_home_can_bind_profile(metadata, &profile_id)? {
+        return Ok(None);
+    }
+
+    let source = PathBuf::from(&metadata.profiles[profile_index].codex_home);
+    let target = default_original_codex_home();
+    if source == target {
+        return Ok(None);
+    }
+    let target_has_matching_reservation = read_default_home_reservation(&target)?
+        .is_some_and(|reservation| reservation.profile_key == profile_short_key(&profile_id));
+    let target_has_matching_ownership = read_valid_ownership(&target)?
+        .and_then(|ownership| ownership.profile_key)
+        .is_some_and(|key| key == profile_short_key(&profile_id));
+
+    match (source.exists(), target.exists()) {
+        (true, false) => {
+            if !source.is_dir() {
+                anyhow::bail!("百积木 Codex 档案路径不是目录: {}", source.display());
+            }
+            write_default_home_reservation(&source, &profile_id)?;
+            fs::rename(&source, &target).with_context(|| {
+                format!(
+                    "将活动百积木 Codex 档案绑定到默认目录失败；迁移要求两个目录位于同一文件系统，并且没有进程占用源目录: source={}, target={}",
+                    source.display(),
+                    target.display()
+                )
+            })?;
+            set_private_directory(&target)?;
+        }
+        // Recovery after the directory rename succeeded but metadata persistence was interrupted.
+        (false, true) if target_has_matching_reservation || target_has_matching_ownership => {}
+        // A user-owned or differently bound default directory must never be overwritten.
+        (_, true) => return Ok(None),
+        // The profile has no state yet. Reserve the absent default directory for this profile.
+        (false, false) => reserve_default_home(&target, &profile_id)?,
+    }
+
+    metadata.profiles[profile_index].codex_home = target.display().to_string();
+    Ok(Some(metadata.profiles[profile_index].clone()))
+}
+
+fn active_managed_profile_index(metadata: &CredentialMetadata) -> Option<usize> {
+    if metadata.active_mode != AuthMode::Baijimu {
+        return None;
+    }
+    let active_profile_id = metadata.active_profile_id.as_deref().or_else(|| {
+        metadata.active_workspace_id.and_then(|workspace_id| {
+            metadata
+                .profiles
+                .iter()
+                .find(|profile| profile.workspace_id == workspace_id)
+                .map(|profile| profile.profile_id.as_str())
+        })
+    })?;
+    metadata.profiles.iter().position(|profile| {
+        profile.profile_id == active_profile_id
+            && (Path::new(&profile.codex_home).starts_with(managed_profile_root())
+                || Path::new(&profile.codex_home).starts_with(legacy_managed_profile_root()))
+    })
+}
+
 fn sort_profiles(profiles: &mut [CredentialProfile]) {
     profiles.sort_by(|left, right| {
         (&left.workspace_name, &left.profile_id).cmp(&(&right.workspace_name, &right.profile_id))
@@ -986,12 +1113,16 @@ fn legacy_managed_profile_root() -> PathBuf {
 }
 
 fn select_new_profile_home(
-    _metadata: &CredentialMetadata,
+    metadata: &CredentialMetadata,
     environment: &str,
     user_id: Option<u64>,
     client_id: Option<&str>,
     workspace_id: u64,
 ) -> Result<PathBuf> {
+    let profile_id = profile_id(environment, user_id, client_id, workspace_id);
+    if default_home_can_bind_profile(metadata, &profile_id)? {
+        return Ok(default_original_codex_home());
+    }
     Ok(workspace_profile_home(
         environment,
         user_id,
@@ -1000,13 +1131,124 @@ fn select_new_profile_home(
     ))
 }
 
+fn default_home_can_bind_profile(metadata: &CredentialMetadata, profile_id: &str) -> Result<bool> {
+    let default_home = default_original_codex_home();
+    if metadata.profiles.iter().any(|profile| {
+        Path::new(&profile.codex_home) == default_home && profile.profile_id != profile_id
+    }) {
+        return Ok(false);
+    }
+
+    if let Some(configured_home) = user_environment::read_codex_home()? {
+        let is_legacy_managed_pointer = configured_home.starts_with(managed_profile_root())
+            || configured_home.starts_with(legacy_managed_profile_root());
+        if !is_legacy_managed_pointer {
+            return Ok(false);
+        }
+    }
+    if metadata.original_codex_home_state.captured
+        && metadata.original_codex_home_state.value.is_some()
+    {
+        return Ok(false);
+    }
+
+    let profile_key = profile_short_key(profile_id);
+    match read_valid_ownership(&default_home) {
+        Ok(Some(ownership)) => {
+            return Ok(ownership.profile_key.as_deref() == Some(profile_key.as_str()))
+        }
+        Err(_) => return Ok(false),
+        Ok(None) => {}
+    }
+    match read_default_home_reservation(&default_home) {
+        Ok(Some(reservation)) => return Ok(reservation.profile_key == profile_key),
+        Err(_) => return Ok(false),
+        Ok(None) => {}
+    }
+    Ok(!default_home.exists())
+}
+
+fn reserve_default_home(home: &Path, profile_id: &str) -> Result<()> {
+    if let Some(ownership) = read_valid_ownership(home)? {
+        if ownership.profile_key.as_deref() == Some(profile_short_key(profile_id).as_str()) {
+            return Ok(());
+        }
+        anyhow::bail!("默认 Codex 状态目录已经绑定其他档案: {}", home.display());
+    }
+    if let Some(reservation) = read_default_home_reservation(home)? {
+        if reservation.profile_key == profile_short_key(profile_id) {
+            return Ok(());
+        }
+        anyhow::bail!("默认 Codex 状态目录已经被其他档案预留: {}", home.display());
+    }
+    if home.exists() {
+        anyhow::bail!(
+            "默认 Codex 状态目录已存在且不受百积木控制: {}",
+            home.display()
+        );
+    }
+    fs::create_dir_all(home)
+        .with_context(|| format!("创建默认 Codex 状态目录失败: {}", home.display()))?;
+    set_private_directory(home)?;
+    write_default_home_reservation(home, profile_id)
+}
+
+fn write_default_home_reservation(home: &Path, profile_id: &str) -> Result<()> {
+    let reservation = CodexHomeReservation {
+        schema_version: OWNERSHIP_SCHEMA_VERSION,
+        owner: OWNERSHIP_OWNER.to_string(),
+        reserved_at_epoch_seconds: now_epoch_seconds(),
+        profile_key: profile_short_key(profile_id),
+    };
+    let path = home.join(OWNERSHIP_RESERVATION_FILE);
+    atomic_write_private(&path, &serde_json::to_vec_pretty(&reservation)?)?;
+    let verified = read_default_home_reservation(home)?
+        .context("百积木 Codex 默认目录预留标记写入后无法回读")?;
+    if verified != reservation {
+        anyhow::bail!("百积木 Codex 默认目录预留标记回读不一致");
+    }
+    Ok(())
+}
+
+fn read_default_home_reservation(home: &Path) -> Result<Option<CodexHomeReservation>> {
+    let path = home.join(OWNERSHIP_RESERVATION_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read(&path)
+        .with_context(|| format!("读取百积木 Codex 默认目录预留标记失败: {}", path.display()))?;
+    let reservation: CodexHomeReservation = crate::json_compat::from_slice(&content)
+        .with_context(|| format!("解析百积木 Codex 默认目录预留标记失败: {}", path.display()))?;
+    if reservation.schema_version != OWNERSHIP_SCHEMA_VERSION
+        || reservation.owner != OWNERSHIP_OWNER
+        || reservation.profile_key.len() != 24
+        || !reservation
+            .profile_key
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        anyhow::bail!(
+            "百积木 Codex 默认目录预留标记不受当前版本支持: {}",
+            path.display()
+        );
+    }
+    Ok(Some(reservation))
+}
+
 fn commit_default_home_ownership(profile: &CredentialProfile) -> Result<()> {
     let profile_home = Path::new(&profile.codex_home);
     if profile_home != default_original_codex_home() {
         return Ok(());
     }
-    if read_valid_ownership(profile_home)?.is_some() {
-        return Ok(());
+    let profile_key = profile_short_key(&profile.profile_id);
+    if let Some(ownership) = read_valid_ownership(profile_home)? {
+        if ownership.profile_key.as_deref() == Some(profile_key.as_str()) {
+            let _ = fs::remove_file(profile_home.join(OWNERSHIP_RESERVATION_FILE));
+            return Ok(());
+        }
+        if ownership.schema_version != LEGACY_OWNERSHIP_SCHEMA_VERSION {
+            anyhow::bail!("默认 Codex 状态目录已经绑定其他百积木档案");
+        }
     }
     if read_codex_api_key(&profile_home.join(OWNED_AUTH_FILE))?.is_none()
         || !managed_config_ready(&profile_home.join(OWNED_CONFIG_FILE))
@@ -1018,6 +1260,7 @@ fn commit_default_home_ownership(profile: &CredentialProfile) -> Result<()> {
         owner: OWNERSHIP_OWNER.to_string(),
         initialized_at_epoch_seconds: now_epoch_seconds(),
         managed_files: vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()],
+        profile_key: Some(profile_key),
     };
     let marker = profile_home.join(OWNERSHIP_MARKER_FILE);
     atomic_write_private(&marker, &serde_json::to_vec_pretty(&ownership)?)?;
@@ -1025,6 +1268,12 @@ fn commit_default_home_ownership(profile: &CredentialProfile) -> Result<()> {
         read_valid_ownership(profile_home)?.context("百积木 Codex 所有权标记写入后无法回读")?;
     if verified != ownership {
         anyhow::bail!("百积木 Codex 所有权标记回读不一致");
+    }
+    let reservation = profile_home.join(OWNERSHIP_RESERVATION_FILE);
+    if reservation.exists() {
+        fs::remove_file(&reservation).with_context(|| {
+            format!("清理默认 Codex 目录预留标记失败: {}", reservation.display())
+        })?;
     }
     Ok(())
 }
@@ -1039,9 +1288,20 @@ fn read_valid_ownership(home: &Path) -> Result<Option<CodexHomeOwnership>> {
     let marker: CodexHomeOwnership = crate::json_compat::from_slice(&content)
         .with_context(|| format!("解析百积木 Codex 所有权标记失败: {}", path.display()))?;
     let expected_files = vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()];
-    if marker.schema_version != OWNERSHIP_SCHEMA_VERSION
+    let supported_schema = marker.schema_version == OWNERSHIP_SCHEMA_VERSION
+        || marker.schema_version == LEGACY_OWNERSHIP_SCHEMA_VERSION;
+    let valid_profile_key = match marker.schema_version {
+        OWNERSHIP_SCHEMA_VERSION => marker
+            .profile_key
+            .as_ref()
+            .is_some_and(|key| key.len() == 24 && key.bytes().all(|byte| byte.is_ascii_hexdigit())),
+        LEGACY_OWNERSHIP_SCHEMA_VERSION => marker.profile_key.is_none(),
+        _ => false,
+    };
+    if !supported_schema
         || marker.owner != OWNERSHIP_OWNER
         || marker.managed_files != expected_files
+        || !valid_profile_key
     {
         anyhow::bail!(
             "百积木 Codex 所有权标记不受当前版本支持: {}",
@@ -1329,15 +1589,43 @@ mod tests {
     }
 
     #[test]
-    fn a_new_profile_never_adopts_the_default_codex_home() {
+    fn a_new_user_binds_the_first_workspace_to_the_default_codex_home() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
-            "baijimu-codex-private-profile-home-{}-{}",
+            "baijimu-codex-default-profile-home-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+
+        let selected = select_new_profile_home(
+            &CredentialMetadata::default(),
+            "prod",
+            Some(25),
+            Some("device-a"),
+            1390,
+        )
+        .unwrap();
+
+        assert_eq!(selected, user_home.join(".codex"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_existing_unowned_default_home_keeps_new_workspace_isolated() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-unowned-default-home-{}-{}",
             std::process::id(),
             now_epoch_seconds()
         ));
         let user_home = root.join("user");
         fs::create_dir_all(user_home.join(".codex")).unwrap();
+        fs::write(user_home.join(".codex/user-state"), b"keep").unwrap();
         let _home = EnvironmentRestore::set("HOME", &user_home);
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
@@ -1353,11 +1641,50 @@ mod tests {
 
         assert_eq!(selected.parent().unwrap(), managed_profile_root());
         assert_ne!(selected, user_home.join(".codex"));
+        assert_eq!(
+            fs::read(user_home.join(".codex/user-state")).unwrap(),
+            b"keep"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn v4_legacy_profile_directory_is_atomically_migrated_to_the_short_home() {
+    fn a_second_workspace_cannot_take_the_default_home_binding() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-single-default-binding-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let mut first = test_workspace_profile(&data_dir, 642);
+        first.codex_home = user_home.join(".codex").display().to_string();
+        let metadata = CredentialMetadata {
+            profiles: vec![first],
+            original_codex_home_state: OriginalCodexHomeState {
+                captured: true,
+                value: None,
+                capture_source: "test".to_string(),
+            },
+            ..CredentialMetadata::default()
+        };
+
+        let selected =
+            select_new_profile_home(&metadata, "prod", Some(25), Some("device-a"), 1390).unwrap();
+
+        assert_eq!(selected.parent().unwrap(), managed_profile_root());
+        assert_ne!(selected, user_home.join(".codex"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn v4_active_legacy_profile_is_atomically_migrated_to_the_default_home() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "baijimu-codex-profile-migration-{}-{}",
@@ -1418,7 +1745,7 @@ mod tests {
         )
         .unwrap();
 
-        let migrated_home = profile_home_for_id(profile_id);
+        let migrated_home = user_home.join(".codex");
         let pending = pending_profile_home_migration().unwrap().unwrap();
         assert_eq!(
             pending.active_home_before.as_deref(),
@@ -1429,7 +1756,7 @@ mod tests {
             Some(migrated_home.as_path())
         );
         let metadata = load_metadata().unwrap();
-        assert_eq!(metadata.version, 5);
+        assert_eq!(metadata.version, METADATA_VERSION);
         assert_eq!(
             metadata.profiles[0].codex_home,
             migrated_home.display().to_string()
@@ -1464,9 +1791,9 @@ mod tests {
         let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
         let _codex = EnvironmentRestore::unset("CODEX_HOME");
         let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
-        let migrated_home = profile_home_for_id(profile_id);
-        fs::create_dir_all(&migrated_home).unwrap();
-        fs::write(migrated_home.join("state_5.sqlite"), b"recovered").unwrap();
+        let short_home = profile_home_for_id(profile_id);
+        fs::create_dir_all(&short_home).unwrap();
+        fs::write(short_home.join("state_5.sqlite"), b"recovered").unwrap();
         fs::create_dir_all(&data_dir).unwrap();
         let mut profile = test_workspace_profile(&data_dir, 1390);
         profile.codex_home = legacy_home.display().to_string();
@@ -1496,9 +1823,10 @@ mod tests {
         );
         assert_eq!(
             pending.active_home_after.as_deref(),
-            Some(migrated_home.as_path())
+            Some(user_home.join(".codex").as_path())
         );
         let metadata = load_metadata().unwrap();
+        let migrated_home = user_home.join(".codex");
         assert_eq!(
             metadata.profiles[0].codex_home,
             migrated_home.display().to_string()
@@ -1508,6 +1836,120 @@ mod tests {
             b"recovered"
         );
         assert!(pending_profile_home_migration().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn v5_active_private_profile_migrates_to_default_home_and_commits_binding() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-v5-default-home-migration-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        fs::create_dir_all(&user_home).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let mut profile = test_workspace_profile(&data_dir, 642);
+        profile.codex_home = profile_home_for_id(&profile.profile_id)
+            .display()
+            .to_string();
+        let private_home = PathBuf::from(&profile.codex_home);
+        write_workspace_auth(&private_home.join(OWNED_AUTH_FILE), "workspace-token").unwrap();
+        write_workspace_config(&private_home.join(OWNED_CONFIG_FILE)).unwrap();
+        fs::write(private_home.join("state_5.sqlite"), b"workspace-state").unwrap();
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(
+            metadata_path(),
+            serde_json::to_vec_pretty(&CredentialMetadata {
+                version: 5,
+                profiles: vec![profile.clone()],
+                active_mode: AuthMode::Baijimu,
+                active_profile_id: Some(profile.profile_id.clone()),
+                active_workspace_id: Some(profile.workspace_id),
+                original_codex_home_state: OriginalCodexHomeState {
+                    captured: true,
+                    value: None,
+                    capture_source: "test".to_string(),
+                },
+                ..CredentialMetadata::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let default_home = user_home.join(".codex");
+        let pending = pending_profile_home_migration().unwrap().unwrap();
+        assert_eq!(
+            pending.active_home_before.as_deref(),
+            Some(private_home.as_path())
+        );
+        assert_eq!(
+            pending.active_home_after.as_deref(),
+            Some(default_home.as_path())
+        );
+
+        let metadata = load_metadata().unwrap();
+        assert_eq!(
+            metadata.profiles[0].codex_home,
+            default_home.display().to_string()
+        );
+        assert!(!private_home.exists());
+        assert_eq!(
+            fs::read(default_home.join("state_5.sqlite")).unwrap(),
+            b"workspace-state"
+        );
+        let ownership = read_valid_ownership(&default_home).unwrap().unwrap();
+        assert_eq!(
+            ownership.profile_key,
+            Some(profile_short_key(&profile.profile_id))
+        );
+        assert!(!default_home.join(OWNERSHIP_RESERVATION_FILE).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn switching_back_to_bound_workspace_restores_default_codex_home() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-bound-workspace-switch-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let user_home = root.join("user");
+        let data_dir = root.join("connector-data");
+        fs::create_dir_all(user_home.join(".codex")).unwrap();
+        let _home = EnvironmentRestore::set("HOME", &user_home);
+        let _user_profile = EnvironmentRestore::set("USERPROFILE", &user_home);
+        let _codex = EnvironmentRestore::unset("CODEX_HOME");
+        let _data = EnvironmentRestore::set("BAIJIMU_CONNECTOR_DATA_DIR", &data_dir);
+        let mut bound = test_workspace_profile(&data_dir, 642);
+        bound.codex_home = user_home.join(".codex").display().to_string();
+        let isolated = test_workspace_profile(&data_dir, 1390);
+        save_metadata(&CredentialMetadata {
+            profiles: vec![bound.clone(), isolated.clone()],
+            active_mode: AuthMode::Baijimu,
+            active_profile_id: Some(isolated.profile_id.clone()),
+            active_workspace_id: Some(isolated.workspace_id),
+            original_codex_home_state: OriginalCodexHomeState {
+                captured: true,
+                value: None,
+                capture_source: "test".to_string(),
+            },
+            ..CredentialMetadata::default()
+        })
+        .unwrap();
+
+        activate_prepared_workspace_profile(&bound).unwrap();
+        assert_eq!(active_codex_home(), user_home.join(".codex"));
+        activate_prepared_workspace_profile(&isolated).unwrap();
+        assert_eq!(active_codex_home(), PathBuf::from(&isolated.codex_home));
+        activate_prepared_workspace_profile(&bound).unwrap();
+        assert_eq!(active_codex_home(), user_home.join(".codex"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1615,7 +2057,6 @@ mod tests {
         );
         assert_eq!(original_codex_home(), user_home.join(".codex"));
 
-        activate_chatgpt_profile().unwrap();
         assert_eq!(
             std::env::var_os("CODEX_HOME"),
             Some(managed_home.into_os_string())
@@ -1625,7 +2066,7 @@ mod tests {
         assert!(migration.can_restore);
         restore_legacy_global_codex_home().unwrap();
         assert_eq!(std::env::var_os("CODEX_HOME"), None);
-        assert_eq!(load_metadata().unwrap().active_mode, AuthMode::Chatgpt);
+        assert_eq!(load_metadata().unwrap().active_mode, AuthMode::Baijimu);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1828,7 +2269,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_default_home_ownership_marker_contains_no_business_identifiers() {
+    fn default_home_ownership_marker_binds_a_profile_without_business_identifiers() {
         let _guard = ENVIRONMENT_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "baijimu-codex-default-home-{}-{}",
@@ -1856,6 +2297,10 @@ mod tests {
         assert_eq!(
             marker.managed_files,
             vec![OWNED_AUTH_FILE.to_string(), OWNED_CONFIG_FILE.to_string()]
+        );
+        assert_eq!(
+            marker.profile_key,
+            Some(profile_short_key(&profile.profile_id))
         );
         assert!(!marker_content.contains("642"));
         assert!(!marker_content.contains("workspace-token"));
