@@ -110,7 +110,7 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /Verify embedded installer scripts/);
   assert.match(workflow, /installers\/macos-configure-terminal-and-login\.sh/);
   assert.match(workflow, /installers\/windows-configure-terminal-and-login\.ps1/);
-  assert.match(workflow, /curl exit \$curl_status/);
+  assert.match(workflow, /curl 退出码 \$curl_status/);
   assert.match(workflow, /New-Object System\.Text\.UTF8Encoding\(\$false\)/);
   assert.match(workflow, /Write-Utf8NoBomFile \$authPath/);
   assert.match(workflow, /Write-Utf8NoBomFile \$configPath/);
