@@ -4,7 +4,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -419,7 +419,7 @@ test("rust connector forwards Codex app-server calls", async () => {
       occurredAt: domainAttempts[1].occurredAt,
       source: "codex-app-server",
       sourceMethod: "turn/completed",
-      connectorVersion: "1.2.44",
+      connectorVersion: "1.2.45",
     });
     assert.ok(emittedEvents.some((event) => event.event === "codexNotification"));
   } finally {
@@ -625,41 +625,78 @@ test("rust connector resolves current Codex project IDs to their real roots", as
 
 test("rust connector launches an isolated Baijimu workspace and can launch the personal profile again", async () => {
   execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
-  const { createServer } = await import("node:http");
-  const platform = createServer(async (request, response) => {
-    let body = "";
-    for await (const chunk of request) body += chunk;
-    response.setHeader("content-type", "application/json");
-    if (request.url === "/llm-credential/validateCredential") {
-      response.end(JSON.stringify({
-        errorCode: "0",
-        value: "成功",
-        data: { valid: true, allowed: true, workspaceId: 1390, projectId: null },
-      }));
-      return;
-    }
-    if (request.url === "/lowcode3/partner/v1/workspaces/list") {
-      response.end(JSON.stringify({ data: { list: [{ id: 1390, name: "研发工作区" }] } }));
-      return;
-    }
-    response.statusCode = 404;
-    response.end(JSON.stringify({ message: `unexpected test path: ${request.url}` }));
-  });
-  platform.listen(0, "127.0.0.1");
-  await once(platform, "listening");
-  const platformUrl = `http://127.0.0.1:${platform.address().port}`;
   const port = await freePort();
   const rootHome = await mkdtemp(join(tmpdir(), "codex-auth-switch-"));
   const personalHome = join(rootHome, "personal-codex");
   const connectorHome = join(rootHome, "connector-data");
-  const configHome = join(rootHome, "config");
+  const fakeCliLog = join(rootHome, "baijimu-cli.log");
+  const fakeCliScript = join(rootHome, "fake-baijimu.mjs");
+  const fakeCli = process.platform === "win32"
+    ? join(rootHome, "fake-baijimu.cmd")
+    : join(rootHome, "fake-baijimu");
   const profileId = "test:user-25:client-device-test:workspace-1390";
   const legacyWorkspaceHome = join(connectorHome, "codex-profiles", "baijimu", "test", "user-25", "client-device-test", "workspace-1390");
   const profileKey = createHash("sha256").update(profileId).digest("hex").slice(0, 24);
   const workspaceHome = join(fakeCodexHome, ".baijimu", "codex", "p", profileKey);
   await mkdir(personalHome, { recursive: true });
   await mkdir(legacyWorkspaceHome, { recursive: true });
-  await mkdir(join(configHome, "baijimu"), { recursive: true });
+  await writeFile(fakeCliScript, `
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.BAIJIMU_FAKE_LOG, JSON.stringify(args) + "\\n");
+let output;
+if (args.join(" ") === "auth status") {
+  output = {
+    authenticated: true,
+    baseUrl: "https://api.baijimu.test",
+    configuredCurrentWorkspaceId: 1390,
+    credentialCount: 1,
+    currentWorkspaceId: 1390,
+    sharedAuthPath: "owned-by-baijimu-cli",
+    verification: null,
+    workspaceIds: [1390],
+  };
+} else if (args[0] === "workspace" && args[1] === "list") {
+  output = {
+    currentWorkspaceId: 1390,
+    data: { list: [{ id: 1390, name: "研发工作区" }], total: 1, totalPages: 1 },
+    errorCode: "0",
+    systemCurrentTime: 1,
+    value: "成功",
+  };
+} else if (args.join(" ") === "workspace get 1390 --json") {
+  output = {
+    data: { id: 1390, name: "研发工作区" },
+    errorCode: "0",
+    systemCurrentTime: 1,
+    value: "成功",
+  };
+} else if (args.join(" ") === "llm-credential create --json --workspace-id 1390 --show-secret") {
+  output = {
+    created: true,
+    keyType: "llmCredential",
+    workspaceId: 1390,
+    projectId: null,
+    agentConfigId: null,
+    agentSessionId: null,
+    sessionId: null,
+    maskedLlmCredential: "worksp****test",
+    credential: "workspace-key",
+    llmCredential: "workspace-key",
+    apiKey: "workspace-key",
+  };
+} else {
+  process.stderr.write("unexpected fake baijimu CLI arguments: " + args.join(" "));
+  process.exit(2);
+}
+process.stdout.write(JSON.stringify(output));
+`);
+  if (process.platform === "win32") {
+    await writeFile(fakeCli, `@echo off\r\n"${process.execPath}" "${fakeCliScript}" %*\r\n`);
+  } else {
+    await writeFile(fakeCli, `#!/bin/sh\nexec "${process.execPath}" "${fakeCliScript}" "$@"\n`);
+    await chmod(fakeCli, 0o755);
+  }
   await writeFile(join(personalHome, "auth.json"), JSON.stringify({
     auth_mode: "chatgpt",
     tokens: { access_token: "chatgpt-test-access", account_id: "acct-test" },
@@ -693,14 +730,6 @@ test("rust connector launches an isolated Baijimu workspace and can launch the p
     completedAtEpochSeconds: 2,
     installerStatus: null,
   }));
-  await writeFile(join(configHome, "baijimu", "auth.json"), JSON.stringify({
-    schemaVersion: 2,
-    currentEnvironment: "test",
-    currentWorkspaceId: 1390,
-    environments: { test: { baseUrl: platformUrl } },
-    credentials: [{ workspaceIds: [1390], token: "machine-token", userId: 25, clientId: "device-test", issuedAt: "2026-08-02T00:00:00Z" }],
-  }));
-
   const proc = spawn(cli, [
     "start", "--port", String(port),
     "--codex-args", JSON.stringify([fakeCodex]),
@@ -710,8 +739,9 @@ test("rust connector launches an isolated Baijimu workspace and can launch the p
     env: {
       ...process.env,
       CODEX_HOME: personalHome,
-      BAIJIMU_CONFIG_HOME: configHome,
       BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+      BAIJIMU_FAKE_LOG: fakeCliLog,
+      CODEX_CONNECTOR_BAIJIMU_BINARY: fakeCli,
       CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
     },
   });
@@ -744,9 +774,23 @@ test("rust connector launches an isolated Baijimu workspace and can launch the p
     const personalStatus = await postJson(port, "/invoke/status");
     assert.equal(personalStatus.data.appServer.codexHome, personalHome);
     assert.equal(JSON.parse(await readFile(join(personalHome, "auth.json"), "utf8")).auth_mode, "chatgpt");
+    const cliCalls = (await readFile(fakeCliLog, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.ok(cliCalls.some((args) => args.join(" ") === "auth status"));
+    assert.ok(cliCalls.some((args) => args[0] === "workspace" && args[1] === "list"));
+    assert.ok(cliCalls.some((args) => args.join(" ") === "workspace get 1390 --json"));
+    assert.ok(cliCalls.some((args) => (
+      args[0] === "llm-credential"
+      && args[1] === "create"
+      && args.includes("--json")
+      && args.includes("--workspace-id")
+      && args.includes("1390")
+      && args.includes("--show-secret")
+    )));
   } finally {
     await stopConnector(proc, port);
-    platform.close();
     await rm(rootHome, { recursive: true, force: true });
   }
 });

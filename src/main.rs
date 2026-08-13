@@ -1,3 +1,4 @@
+mod baijimu_cli;
 mod child_process;
 mod codex_binary;
 mod credential;

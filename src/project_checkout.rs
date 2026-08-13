@@ -7,8 +7,6 @@ use std::{
     process::Command,
 };
 
-const DEFAULT_BAIJIMU_BINARY: &str = "baijimu";
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckoutRequest {
@@ -43,7 +41,7 @@ pub fn prepare(request: CheckoutRequest) -> Result<CheckoutResult> {
     }
     fs::create_dir_all(directory.parent().context("平台项目检出目录缺少父目录")?)
         .with_context(|| format!("创建平台项目目录失败: {}", directory.display()))?;
-    let mut command = Command::new(baijimu_binary());
+    let mut command = crate::baijimu_cli::command();
     command
         .args([
             "project",
@@ -179,12 +177,4 @@ fn projects_root() -> Result<PathBuf> {
         bail!("CODEX_CONNECTOR_PROJECTS_DIR必须是绝对路径");
     }
     Ok(root)
-}
-
-fn baijimu_binary() -> String {
-    env::var("CODEX_CONNECTOR_BAIJIMU_BINARY")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_BAIJIMU_BINARY.to_string())
 }
