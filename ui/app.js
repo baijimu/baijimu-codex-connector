@@ -232,11 +232,10 @@ function renderCredentialState() {
 }
 
 function codexLaunchCopy(request) {
-  const currentName = elements["active-workspace"].textContent || "当前环境";
   if (request.mode === "chatgpt") {
     return {
       title: "启动个人 Codex",
-      message: `将关闭当前 Codex，并使用“${currentName}”接管前的个人状态目录重新启动。不会删除任何工作区目录。`,
+      message: "将关闭当前 Codex，并切换回百积木接管前的个人 Codex 状态目录重新启动。不会删除任何工作区目录。",
       progress: "正在使用个人状态目录启动 Codex…",
     };
   }

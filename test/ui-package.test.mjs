@@ -125,6 +125,8 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /id="setup-panel"/);
   const app = await readFile(join(root, "ui", "app.js"), "utf8");
   assert.match(app, /启动个人 Codex/);
+  assert.match(app, /切换回百积木接管前的个人 Codex 状态目录重新启动/);
+  assert.doesNotMatch(app, /接管前的个人状态目录/);
   assert.match(app, /全新工作区配置已自动打开，既有个人配置保持不变/);
   assert.match(app, /不会删除任何工作区目录/);
   assert.doesNotMatch(app, /window\.confirm/);
