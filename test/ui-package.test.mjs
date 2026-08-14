@@ -102,7 +102,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   });
   assert.deepEqual(manifest.managedToolDependencies, [{
     id: "com.baijimu.cli",
-    minimumVersion: "0.1.43",
+    minimumVersion: "0.1.50",
     requiredFor: ["install", "start"],
     executablePathEnv: "CODEX_CONNECTOR_BAIJIMU_BINARY",
   }]);

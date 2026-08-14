@@ -48,9 +48,9 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.doesNotMatch(workflow, /release-codex-local-app/);
   assert.doesNotMatch(workflow, /Jenkins/i);
   assert.doesNotMatch(workflow, /gitee\.com|zxflimit_admin/);
-  assert.match(workflow, /BAIJIMU_CLI_VERSION: "0\.1\.43"/);
-  assert.match(workflow, /c3b73aeeef5a03166eef784d06a0825386b245d012add0910db8ee68d2447add/);
-  assert.match(workflow, /managed-tool-artifacts\/baijimu-cli\/releases\/v0\.1\.43/);
+  assert.match(workflow, /BAIJIMU_CLI_VERSION: "0\.1\.50"/);
+  assert.match(workflow, /41b688119de97f48be68a7a33e5c60134464a32a19ec19bd5c120976cbdd5b14/);
+  assert.match(workflow, /managed-tool-artifacts\/baijimu-cli\/releases\/v0\.1\.50/);
   assert.doesNotMatch(workflow, /bridge-agent\/releases/);
   assert.match(workflow, /git merge-base --is-ancestor "\$sha" origin\/main/);
   assert.match(workflow, /needs\.validate\.outputs\.verify == 'true'/);

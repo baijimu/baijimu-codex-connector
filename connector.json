@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.57",
+  "version": "1.2.58",
   "description": "初始化并配置 Codex，将全新用户的首个工作区绑定到默认 .codex，保护既有目录，并用所选工作区状态启动 Codex。",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.57"
+    "revision": "v1.2.58"
   },
   "runtime": {
     "type": "process",
@@ -113,7 +113,7 @@
   "managedToolDependencies": [
     {
       "id": "com.baijimu.cli",
-      "minimumVersion": "0.1.43",
+      "minimumVersion": "0.1.50",
       "requiredFor": [
         "install",
         "start"
@@ -128,6 +128,7 @@
     "defaultView": true
   },
   "releaseNotes": [
+    "将安装与启动阶段依赖的 Baijimu CLI 最低版本提升到 0.1.50，确保工作区 LLM credential 统一通过 /partner/v1/llm-credential/api 路径签发；Connector 仍不直接发送 Partner HTTP 请求。",
     "Windows 初始化不再由 Connector 检查或配置安全沙箱，也不会主动触发 UAC；Connector 只写入并回读桌面语言配置（默认 zh-CN），沙箱初始化、重试和降级由官方 ChatGPT/Codex 应用负责。",
     "修复 macOS 下载进度被第 9 步标题污染且总字节数丢失的问题；下载步骤现在显示已下载大小、总大小和下载百分比，安装状态通过原子替换发布。",
     "安装页轮询改为复用现有步骤节点并只更新变化内容，避免每秒全量销毁重建造成界面刷新和闪烁；顶部百分比明确标注为总进度。",
