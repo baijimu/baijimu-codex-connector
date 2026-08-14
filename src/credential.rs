@@ -23,10 +23,12 @@ const DEFAULT_MODEL: &str = "gpt-5.6-sol";
 const ROUTER_PROVIDER: &str = "baijimu-router";
 const ROUTER_BASE_URL: &str = "https://router.baijimu.com/api/claudecode/v1";
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 pub fn default_model() -> &'static str {
     DEFAULT_MODEL
 }
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 pub fn router_base_url() -> &'static str {
     ROUTER_BASE_URL
 }

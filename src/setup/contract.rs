@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 use std::error::Error;
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 use std::fmt;
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 pub const MACOS_STEP_NAMES: [&str; 9] = [
     "检查 ChatGPT 桌面应用",
     "读取应用安装包清单",
@@ -49,6 +52,7 @@ pub struct InstallerStatus {
     pub steps: Vec<InstallerStep>,
 }
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 impl InstallerStatus {
     pub fn macos(started_at: String, status_path: String, result_path: String) -> Self {
         Self {
@@ -116,12 +120,14 @@ impl InstallerStatus {
     }
 }
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstallerProgressError {
     pub index: usize,
     pub step_count: usize,
 }
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 impl fmt::Display for InstallerProgressError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -132,6 +138,7 @@ impl fmt::Display for InstallerProgressError {
     }
 }
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 impl Error for InstallerProgressError {}
 
 #[cfg(any(target_os = "windows", test))]
@@ -143,6 +150,7 @@ pub struct InstallerResultEnvelope {
     pub errors: Vec<String>,
 }
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MacosInstallerResult {
@@ -173,6 +181,7 @@ pub struct MacosInstallerResult {
     pub errors: Vec<String>,
 }
 
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 impl MacosInstallerResult {
     pub fn pending(
         started_at: String,
@@ -210,7 +219,7 @@ impl MacosInstallerResult {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "windows")))]
 mod tests {
     use super::*;
 

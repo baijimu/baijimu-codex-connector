@@ -17,7 +17,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod contract;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 mod macos;
 mod source;
 
