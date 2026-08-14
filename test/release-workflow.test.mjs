@@ -70,7 +70,7 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /test-windows-installer-atomic-write\.ps1/);
   assert.match(
     workflow,
-    /Verify installer app-server login protocol with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
+    /Verify installer app-server setup protocol with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
   );
   assert.match(workflow, /test-windows-installer-app-server-login\.ps1/);
   assert.match(
@@ -113,6 +113,11 @@ test("connector owns its application release and upstream artifact sync workflow
   }
   assert.doesNotMatch(windowsLoginTest, /Invoke-WebRequest|curl\.exe|https?:\/\//);
   assert.match(windowsLoginTest, /delayed-success/);
+  assert.match(windowsLoginTest, /desktop\.localeOverride/);
+  assert.match(windowsLoginTest, /windowsSandbox\/readiness/);
+  assert.match(windowsLoginTest, /windowsSandbox\/setupStart/);
+  assert.match(windowsLoginTest, /windowsSandbox\/setupCompleted/);
+  assert.match(windowsLoginTest, /sandbox-failed/);
   assert.match(windowsLoginTest, /Start-Sleep -Seconds 3/);
   assert.match(windowsLoginTest, /denied by fake server/);
   assert.match(windowsLoginTest, /exposed the API key/);

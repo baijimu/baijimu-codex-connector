@@ -24,7 +24,7 @@ if ($parseErrors.Count -gt 0) {
 $requiredFunctions = @(
   "Set-CodexProcessCommand",
   "Stop-CodexProcess",
-  "Invoke-AppServerLogin"
+  "Invoke-AppServerSetup"
 )
 foreach ($name in $requiredFunctions) {
   $definition = $ast.FindAll({
@@ -39,6 +39,7 @@ foreach ($name in $requiredFunctions) {
 }
 
 $script:TestApiKey = 'lcmk_TEST_SECRET_123'
+$script:CodexUiLocale = 'zh-CN'
 $script:Warnings = @()
 function Get-CodexRouterApiKey { return $script:TestApiKey }
 function Set-InstallStep([int]$index, [string]$state, [string]$detail) {}
@@ -50,6 +51,12 @@ function Reset-TestResult {
     appServerLogin = $false
     appServerAccountType = $null
     appServerAuthModeUpdated = $false
+    uiLocaleConfigured = $false
+    windowsSandboxMode = $null
+    windowsSandboxReadiness = $null
+    windowsSandboxSetupStarted = $false
+    windowsSandboxSetupCompleted = $false
+    windowsSandboxReady = $false
   }
   $script:Warnings = @()
 }
@@ -116,6 +123,42 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         requiresOpenaiAuth = $true
       }
     })
+    continue
+  }
+  if ($request.method -eq "config/batchWrite") {
+    $localeEdit = @($request.params.edits | Where-Object { $_.keyPath -eq "desktop.localeOverride" } | Select-Object -First 1)
+    if (-not $localeEdit -or $localeEdit.value -ne "zh-CN" -or $localeEdit.mergeStrategy -ne "replace") {
+      Send-Message ([ordered]@{ id = $request.id; error = [ordered]@{ code = -32602; message = "unexpected locale edit" } })
+      continue
+    }
+    Send-Message ([ordered]@{ id = $request.id; result = [ordered]@{ status = "ok"; version = "fake"; filePath = "C:\fake\config.toml" } })
+    continue
+  }
+  if ($request.method -eq "config/read") {
+    Send-Message ([ordered]@{
+      id = $request.id
+      result = [ordered]@{ config = [ordered]@{ desktop = [ordered]@{ localeOverride = "zh-CN" } }; origins = [ordered]@{} }
+    })
+    continue
+  }
+  if ($request.method -eq "windowsSandbox/readiness") {
+    $status = if ($env:BAIJIMU_FAKE_LOGIN_SCENARIO -eq "already-ready") { "ready" } else { "notConfigured" }
+    Send-Message ([ordered]@{ id = $request.id; result = [ordered]@{ status = $status } })
+    continue
+  }
+  if ($request.method -eq "windowsSandbox/setupStart") {
+    Send-Message ([ordered]@{ id = $request.id; result = [ordered]@{ started = $true } })
+    if ($env:BAIJIMU_FAKE_LOGIN_SCENARIO -eq "sandbox-failed") {
+      Send-Message ([ordered]@{
+        method = "windowsSandbox/setupCompleted"
+        params = [ordered]@{ mode = "elevated"; success = $false; error = "UAC was canceled" }
+      })
+      continue
+    }
+    Send-Message ([ordered]@{
+      method = "windowsSandbox/setupCompleted"
+      params = [ordered]@{ mode = "elevated"; success = $true; error = $null }
+    })
   }
 }
 '@
@@ -131,11 +174,17 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0fa
 try {
   Reset-TestResult
   $env:BAIJIMU_FAKE_LOGIN_SCENARIO = "delayed-success"
-  Invoke-AppServerLogin $fakeLauncherPath
+  Invoke-AppServerSetup $fakeLauncherPath
   if (-not $script:result.appServerLoginResponse) { throw "Login response was not recorded" }
   if (-not $script:result.appServerLogin) { throw "Login completion was not recorded" }
   if (-not $script:result.appServerAuthModeUpdated) { throw "Auth mode update was not recorded" }
   if ($script:result.appServerAccountType -ne "apiKey") { throw "Final account type was not verified" }
+  if (-not $script:result.uiLocaleConfigured) { throw "UI locale was not configured and verified" }
+  if (-not $script:result.windowsSandboxSetupStarted) { throw "Sandbox setup was not started" }
+  if (-not $script:result.windowsSandboxSetupCompleted) { throw "Sandbox setup completion was not recorded" }
+  if (-not $script:result.windowsSandboxReady) { throw "Sandbox readiness was not recorded" }
+  if ($script:result.windowsSandboxReadiness -ne "ready") { throw "Sandbox did not reach ready state" }
+  if ($script:result.windowsSandboxMode -ne "elevated") { throw "Sandbox mode was not verified" }
   if (
     $script:Warnings.Count -ne 1 -or
     $script:Warnings[0] -notmatch "JSON" -or
@@ -148,7 +197,7 @@ try {
   $env:BAIJIMU_FAKE_LOGIN_SCENARIO = "rejected"
   $rejection = $null
   try {
-    Invoke-AppServerLogin $fakeLauncherPath
+    Invoke-AppServerSetup $fakeLauncherPath
   } catch {
     $rejection = $_.Exception.Message
   }
@@ -157,7 +206,25 @@ try {
   if ($rejection.Contains($script:TestApiKey)) { throw "Rejected login exposed the API key" }
   if ($rejection -notmatch '\*\*\*') { throw "Rejected login did not retain a masked credential marker" }
 
-  Write-Host "Windows installer app-server login state machine verified"
+  Reset-TestResult
+  $env:BAIJIMU_FAKE_LOGIN_SCENARIO = "already-ready"
+  Invoke-AppServerSetup $fakeLauncherPath
+  if (-not $script:result.windowsSandboxReady) { throw "Existing sandbox readiness was not accepted" }
+  if ($script:result.windowsSandboxSetupStarted) { throw "Already-ready sandbox was configured again" }
+
+  Reset-TestResult
+  $env:BAIJIMU_FAKE_LOGIN_SCENARIO = "sandbox-failed"
+  $sandboxFailure = $null
+  try {
+    Invoke-AppServerSetup $fakeLauncherPath
+  } catch {
+    $sandboxFailure = $_.Exception.Message
+  }
+  if (-not $sandboxFailure) { throw "Failed sandbox setup unexpectedly succeeded" }
+  if ($sandboxFailure -notmatch "UAC was canceled") { throw "Sandbox setup failure lost its actionable error: $sandboxFailure" }
+  if ($script:result.windowsSandboxReady) { throw "Failed sandbox setup was marked ready" }
+
+  Write-Host "Windows installer app-server setup state machine verified"
 } finally {
   Remove-Item Env:BAIJIMU_FAKE_LOGIN_SCENARIO -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
