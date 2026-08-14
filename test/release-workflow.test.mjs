@@ -70,7 +70,7 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /test-windows-installer-atomic-write\.ps1/);
   assert.match(
     workflow,
-    /Verify installer app-server setup protocol with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
+    /Verify installer app-server profile protocol with Windows PowerShell 5\.1[\s\S]*?timeout-minutes: 5/,
   );
   assert.match(workflow, /test-windows-installer-app-server-login\.ps1/);
   assert.match(
@@ -114,10 +114,8 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.doesNotMatch(windowsLoginTest, /Invoke-WebRequest|curl\.exe|https?:\/\//);
   assert.match(windowsLoginTest, /delayed-success/);
   assert.match(windowsLoginTest, /desktop\.localeOverride/);
-  assert.match(windowsLoginTest, /windowsSandbox\/readiness/);
-  assert.match(windowsLoginTest, /windowsSandbox\/setupStart/);
-  assert.match(windowsLoginTest, /windowsSandbox\/setupCompleted/);
-  assert.match(windowsLoginTest, /sandbox-failed/);
+  assert.match(windowsLoginTest, /locale-mismatch/);
+  assert.doesNotMatch(windowsLoginTest, /windowsSandbox\//);
   assert.match(windowsLoginTest, /Start-Sleep -Seconds 3/);
   assert.match(windowsLoginTest, /denied by fake server/);
   assert.match(windowsLoginTest, /exposed the API key/);
@@ -168,9 +166,11 @@ test("connector compiles platform installers instead of downloading executable s
   const setupSource = await readFile(join(root, "src", "setup.rs"), "utf8");
   const macosInstaller = await readFile(
     join(root, "installers", "macos-configure-terminal-and-login.sh"),
+    "utf8",
   );
   const windowsInstaller = await readFile(
     join(root, "installers", "windows-configure-terminal-and-login.ps1"),
+    "utf8",
   );
 
   assert.match(
@@ -185,6 +185,8 @@ test("connector compiles platform installers instead of downloading executable s
   assert.doesNotMatch(setupSource, /SCRIPT_URL|SCRIPT_SHA256|download_script/);
   assert.ok(macosInstaller.length > 1_000);
   assert.ok(windowsInstaller.length > 1_000);
+  assert.match(windowsInstaller, /desktop\.localeOverride/);
+  assert.doesNotMatch(windowsInstaller, /windowsSandbox\//);
 });
 
 test("upstream sync is release-side, complete, latest-only, and independently scheduled", async () => {

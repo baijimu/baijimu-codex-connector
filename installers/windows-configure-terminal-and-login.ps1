@@ -70,9 +70,8 @@ $script:InstallSteps = @(
   [pscustomobject]@{ index = 6; name = "创建百积木 LLM 凭证和配置"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
   [pscustomobject]@{ index = 7; name = "验证百积木路由"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
   [pscustomobject]@{ index = 8; name = "验证隔离的 Codex 档案"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 9; name = "配置 Windows 安全沙箱"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 10; name = "验证 Codex CLI"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
-  [pscustomobject]@{ index = 11; name = "完成安装配置"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null }
+  [pscustomobject]@{ index = 9; name = "验证 Codex CLI"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null },
+  [pscustomobject]@{ index = 10; name = "完成安装配置"; state = "pending"; detail = ""; downloadedBytes = $null; totalBytes = $null }
 )
 
 $result = [ordered]@{
@@ -102,11 +101,6 @@ $result = [ordered]@{
   appServerAuthModeUpdated = $false
   uiLocale = $CodexUiLocale
   uiLocaleConfigured = $false
-  windowsSandboxMode = $null
-  windowsSandboxReadiness = $null
-  windowsSandboxSetupStarted = $false
-  windowsSandboxSetupCompleted = $false
-  windowsSandboxReady = $false
   cliVersion = $null
   cliSmoke = $false
   elapsedMs = 0
@@ -265,7 +259,8 @@ function Wait-CodexStartApp([int]$timeoutSeconds) {
 
 function Get-CodexCacheAsset([string]$assetName) {
   Set-InstallStep 2 "running" "正在读取百积木安装包清单"
-  $manifestUrl = "https://download.baijimu.com/codex-artifacts/latest.json"
+  $manifestUrl = $env:CODEX_ARTIFACT_MANIFEST_URL
+  if ([string]::IsNullOrWhiteSpace($manifestUrl)) { throw "缺少安装制品清单地址" }
   $manifestPath = Join-Path $env:TEMP "codex-artifacts-latest.json"
   Save-WebFileWithProgress $manifestUrl $manifestPath 2 "正在读取百积木安装包清单"
   $manifest = Get-Content -Raw -Path $manifestPath | ConvertFrom-Json
@@ -736,7 +731,8 @@ function Remove-LegacyManagedCodexCli([object]$state, [string]$cliRoot, [string]
 function Install-CodexCliFromBaijimuCache {
   Set-InstallStep 8 "running" "正在解析当前官方 Codex CLI 制品"
   $assetName = Get-CodexCliAssetName
-  $manifestUrl = "https://download.baijimu.com/codex-artifacts/latest.json"
+  $manifestUrl = $env:CODEX_ARTIFACT_MANIFEST_URL
+  if ([string]::IsNullOrWhiteSpace($manifestUrl)) { throw "缺少安装制品清单地址" }
   $manifest = Invoke-RestMethod -UseBasicParsing -TimeoutSec 120 -Uri $manifestUrl
   $asset = @($manifest.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1)
   if (-not $asset -or -not $asset.mirror_url -or -not $asset.sha256) {
@@ -903,7 +899,7 @@ function Invoke-CodexProcess([string]$codexExe, [string]$arguments, [int]$timeou
   }
 }
 
-function Invoke-AppServerSetup([string]$codexExe) {
+function Invoke-AppServerProfileSetup([string]$codexExe) {
   Set-InstallStep 8 "running" "正在使用官方 CLI 验证隔离的 Codex 档案"
   $apiKey = Get-CodexRouterApiKey
   $script:result.codexExe = $codexExe
@@ -1095,62 +1091,6 @@ function Invoke-AppServerSetup([string]$codexExe) {
     }
 
     Set-InstallStep 8 "completed" "已验证隔离档案并将桌面界面设置为 $CodexUiLocale"
-    Set-InstallStep 9 "running" "正在检查 Windows 安全沙箱状态"
-    $protocolStage = "Windows 安全沙箱状态"
-    Send-JsonRpcLine '{"method":"windowsSandbox/readiness","id":6}'
-    while ($true) {
-      $message = Read-AppServerMessage
-      if ([string]$message.id -ne "6") { continue }
-      $rpcError = Get-AppServerError $message
-      if ($rpcError) { throw "读取 Windows 安全沙箱状态失败：$rpcError" }
-      $readiness = if ($message.result -and $message.result.PSObject.Properties["status"]) { [string]$message.result.status } else { "" }
-      $script:result.windowsSandboxReadiness = if ($readiness) { $readiness } else { $null }
-      if ($readiness -eq "ready") {
-        $script:result.windowsSandboxReady = $true
-        Set-InstallStep 9 "completed" "Windows 安全沙箱已配置并通过检查"
-      } elseif ($readiness -notin @("notConfigured", "updateRequired")) {
-        throw "Windows 安全沙箱返回了未知状态 '$readiness'"
-      }
-      break
-    }
-
-    if (-not $script:result.windowsSandboxReady) {
-      Set-InstallStep 9 "running" "请在 Windows 管理员权限提示中选择 是"
-      $protocolStage = "Windows 管理员安全沙箱配置"
-      $deadline = [DateTime]::UtcNow.AddMinutes(5)
-      Send-JsonRpcLine '{"method":"windowsSandbox/setupStart","id":7,"params":{"mode":"elevated"}}'
-      $setupResponse = $false
-      $setupCompleted = $false
-      while (-not ($setupResponse -and $setupCompleted)) {
-        $message = Read-AppServerMessage
-        if ([string]$message.id -eq "7") {
-          $rpcError = Get-AppServerError $message
-          if ($rpcError) { throw "启动 Windows 安全沙箱配置失败：$rpcError" }
-          $started = $message.result -and $message.result.started -eq $true
-          if (-not $started) { throw "Codex app-server 未启动 Windows 安全沙箱配置" }
-          $setupResponse = $true
-          $script:result.windowsSandboxSetupStarted = $true
-          continue
-        }
-        if ([string]$message.method -eq "windowsSandbox/setupCompleted") {
-          $mode = if ($message.params -and $message.params.PSObject.Properties["mode"]) { [string]$message.params.mode } else { "" }
-          $success = $message.params -and $message.params.success -eq $true
-          $script:result.windowsSandboxMode = if ($mode) { $mode } else { "elevated" }
-          if (-not $success) {
-            $detail = if ($message.params -and $message.params.PSObject.Properties["error"] -and $message.params.error) { [string]$message.params.error } else { "未知错误" }
-            throw "Windows 安全沙箱配置失败：$(Mask-AppServerText $detail)"
-          }
-          if ($mode -and $mode -ne "elevated") {
-            throw "Windows 安全沙箱完成事件返回了非预期模式 '$mode'"
-          }
-          $setupCompleted = $true
-          $script:result.windowsSandboxSetupCompleted = $true
-          $script:result.windowsSandboxReadiness = "ready"
-          $script:result.windowsSandboxReady = $true
-        }
-      }
-      Set-InstallStep 9 "completed" "Windows 安全沙箱已完成管理员配置并通过检查"
-    }
   } catch {
     $protocolError = Mask-AppServerText $_.Exception.Message
   } finally {
@@ -1173,7 +1113,7 @@ function Invoke-AppServerSetup([string]$codexExe) {
 }
 
 function Test-CodexCli([string]$codexExe) {
-  Set-InstallStep 10 "running" "正在检查 Codex CLI 版本"
+  Set-InstallStep 9 "running" "正在检查 Codex CLI 版本"
   $versionResult = Invoke-CodexProcess $codexExe "--version" 20
   if ($versionResult.timedOut -or $versionResult.exitCode -ne 0) {
     throw "codex --version 执行失败：$($versionResult.stderr)"
@@ -1186,7 +1126,7 @@ function Test-CodexCli([string]$codexExe) {
     throw "codex exec 冒烟测试失败：$($smokeResult.stderr)"
   }
   $script:result.cliSmoke = $true
-  Set-InstallStep 10 "completed" "Codex CLI 验证通过"
+  Set-InstallStep 9 "completed" "Codex CLI 验证通过"
 }
 
 try {
@@ -1194,9 +1134,9 @@ try {
   Write-CodexConfig
   Test-Router
   $codexExe = Resolve-CodexCli
-  Invoke-AppServerSetup $codexExe
+  Invoke-AppServerProfileSetup $codexExe
   Test-CodexCli $codexExe
-  Set-InstallStep 11 "completed" "安装配置已完成，桌面启动由 Connector 按档案状态处理"
+  Set-InstallStep 10 "completed" "安装配置已完成，桌面启动由 Connector 按档案状态处理"
 } catch {
   Add-Error $_.Exception.Message
   if ($script:CurrentStepIndex -gt 0) {

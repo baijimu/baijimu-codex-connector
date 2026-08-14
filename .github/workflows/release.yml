@@ -136,9 +136,6 @@ jobs:
               grep -F 'ReadLineAsync()' "$output"
               grep -F 'account/read API 密钥状态' "$output"
               grep -F 'desktop.localeOverride' "$output"
-              grep -F 'windowsSandbox/readiness' "$output"
-              grep -F 'windowsSandbox/setupStart' "$output"
-              grep -F 'windowsSandbox/setupCompleted' "$output"
               grep -F 'ConvertFrom-Json -ErrorAction Stop' "$output"
               grep -F 'codex-package-x86_64-pc-windows-msvc.tar.gz' "$output"
               grep -F 'codex-package.json' "$output"
@@ -295,7 +292,7 @@ jobs:
           .github/scripts/test-windows-installer-atomic-write.ps1
           -ScriptPath "installers\windows-configure-terminal-and-login.ps1"
 
-      - name: Verify installer app-server setup protocol with Windows PowerShell 5.1
+      - name: Verify installer app-server profile protocol with Windows PowerShell 5.1
         if: runner.os == 'Windows'
         shell: powershell
         timeout-minutes: 5
