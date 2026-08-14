@@ -763,6 +763,7 @@ jobs:
               --data-urlencode 'hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1' \
               -o "$response"
             jq -e --arg version "$VERSION" --arg platform "$platform" --arg arch "$arch" \
+              --slurpfile connector connector.json \
               --slurpfile oss "$oss_manifest" '
                 .latestVersion.version == $version and
                 .latestVersion.repo == "momoplan/baijimu-connector-codex" and
@@ -777,12 +778,7 @@ jobs:
                 .latestVersion.manifest.runtime.args == ["start"] and
                 .latestVersion.manifest.hostRequirements.minimumVersion == "0.2.82" and
                 (.latestVersion.manifest.hostRequirements.capabilities | index("connector.managed-tool-dependencies.v1") != null) and
-                .latestVersion.manifest.managedToolDependencies == [{
-                  "id": "com.baijimu.cli",
-                  "minimumVersion": "0.1.43",
-                  "requiredFor": ["install", "start"],
-                  "executablePathEnv": "CODEX_CONNECTOR_BAIJIMU_BINARY"
-                }] and
+                .latestVersion.manifest.managedToolDependencies == $connector[0].managedToolDependencies and
                 any(.latestVersion.manifest.artifacts[];
                   .platform == $platform and
                   (.arch == $arch or ($platform == "macos" and .arch == "universal")) and

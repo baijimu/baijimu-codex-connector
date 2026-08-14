@@ -52,12 +52,12 @@ connector_manifest="$(jq -ce \
     | select(.hostRequirements.minimumVersion == "0.2.82")
     | select((.hostRequirements.capabilities // []) | index("connector.process.host-managed.v1") != null)
     | select((.hostRequirements.capabilities // []) | index("connector.managed-tool-dependencies.v1") != null)
-    | select(.managedToolDependencies == [{
-        "id": "com.baijimu.cli",
-        "minimumVersion": "0.1.50",
-        "requiredFor": ["install", "start"],
-        "executablePathEnv": "CODEX_CONNECTOR_BAIJIMU_BINARY"
-      }])
+    | select((.managedToolDependencies | type) == "array")
+    | select((.managedToolDependencies | length) == 1)
+    | select(.managedToolDependencies[0].id == "com.baijimu.cli")
+    | select(.managedToolDependencies[0].minimumVersion | test("^[0-9]+\\.[0-9]+\\.[0-9]+([.-][0-9A-Za-z.-]+)?$"))
+    | select(.managedToolDependencies[0].requiredFor == ["install", "start"])
+    | select(.managedToolDependencies[0].executablePathEnv == "CODEX_CONNECTOR_BAIJIMU_BINARY")
   ' "$connector_manifest_path")" || {
   echo "connector manifest identity, GitHub source, version, or runtime contract is invalid" >&2
   exit 2
