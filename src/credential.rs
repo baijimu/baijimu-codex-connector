@@ -23,6 +23,14 @@ const DEFAULT_MODEL: &str = "gpt-5.6-sol";
 const ROUTER_PROVIDER: &str = "baijimu-router";
 const ROUTER_BASE_URL: &str = "https://router.baijimu.com/api/claudecode/v1";
 
+pub fn default_model() -> &'static str {
+    DEFAULT_MODEL
+}
+
+pub fn router_base_url() -> &'static str {
+    ROUTER_BASE_URL
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {

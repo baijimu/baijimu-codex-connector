@@ -1,18 +1,29 @@
-use crate::{codex_binary, credential};
+#[cfg(target_os = "windows")]
+use crate::codex_binary;
+use crate::credential;
 use anyhow::{Context, Result};
 #[cfg(any(target_os = "windows", test))]
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::env;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+mod contract;
+#[cfg(any(target_os = "macos", test))]
+mod macos;
+mod source;
+
+#[cfg(any(target_os = "windows", test))]
+use contract::InstallerResultEnvelope;
+pub use contract::InstallerStatus;
 
 const SETUP_STATUS_FILE: &str = "setup-status.json";
 const SETUP_STATUS_SCHEMA_VERSION: u32 = 2;
@@ -52,7 +63,7 @@ pub struct SetupStatus {
     pub automatic_retry_count: u32,
     pub started_at_epoch_seconds: Option<u64>,
     pub completed_at_epoch_seconds: Option<u64>,
-    pub installer_status: Option<Value>,
+    pub installer_status: Option<InstallerStatus>,
 }
 
 impl Default for SetupStatus {
@@ -280,13 +291,53 @@ fn run_install(
     codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
 ) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let setup_dir = connector_home().join("setup");
+        fs::create_dir_all(&setup_dir)
+            .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
+        set_private_directory(&setup_dir)?;
+        let unique = format!("{}-{}", std::process::id(), now_epoch_seconds());
+        let script_path = setup_dir.join(format!("native-install-{unique}.sh"));
+        atomic_write_private(
+            &script_path,
+            include_bytes!("../installers/macos-configure-terminal-and-login.sh"),
+        )?;
+        let install_result = macos::run_install(
+            workspace_id,
+            codex_cli,
+            verify_app_server_capability,
+            &script_path,
+        );
+        let _ = fs::remove_file(&script_path);
+        install_result
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        run_windows_install(workspace_id, codex_cli, verify_app_server_capability)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (workspace_id, codex_cli, verify_app_server_capability);
+        anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_windows_install(
+    workspace_id: u64,
+    codex_cli: Option<&Path>,
+    verify_app_server_capability: bool,
+) -> Result<()> {
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
     set_private_directory(&setup_dir)?;
     let unique = format!("{}-{}", std::process::id(), now_epoch_seconds());
     let secret_path = setup_dir.join(format!("credential-{unique}"));
-    let script_path = install_script_path(&setup_dir, &unique)?;
+    let script_path = setup_dir.join(format!("install-{unique}.ps1"));
     let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
 
     let install_result = (|| -> Result<Option<PathBuf>> {
@@ -294,7 +345,7 @@ fn run_install(
         let profile_home = PathBuf::from(&prepared.profile.codex_home);
         atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
 
-        write_embedded_install_script(&script_path)?;
+        atomic_write_private(&script_path, &windows_install_script_bytes())?;
         let state_dir = installer_state_dir();
         fs::create_dir_all(&state_dir)?;
         set_private_directory(&state_dir)?;
@@ -304,6 +355,7 @@ fn run_install(
         let mut command = install_command(&script_path)?;
         command
             .env("CODEX_WORKSPACE_ID", workspace_id.to_string())
+            .env("CODEX_ARTIFACT_MANIFEST_URL", source::manifest_url()?)
             .env("CODEX_LLM_CREDENTIAL_FILE", &secret_path)
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
@@ -318,37 +370,27 @@ fn run_install(
         }
         let output = command.output().context("启动 Codex 官方安装脚本失败")?;
         let installer_result_path = state_dir.join("result.json");
-        let installer_result = read_json(&installer_result_path).with_context(|| {
-            let exit = output
-                .status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "signal".to_string());
-            let stderr = compact_error(&String::from_utf8_lossy(&output.stderr));
-            format!(
-                "安装脚本没有生成结果文件: {}（exit={exit}，stderr={}）",
-                installer_result_path.display(),
-                if stderr.is_empty() {
-                    "<empty>"
-                } else {
-                    &stderr
-                }
-            )
-        })?;
-        if !output.status.success()
-            || installer_result.get("ok").and_then(Value::as_bool) != Some(true)
-        {
-            let errors = installer_result
-                .get("errors")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join("；")
-                })
-                .filter(|value| !value.is_empty())
+        let installer_result = read_json::<InstallerResultEnvelope>(&installer_result_path)
+            .with_context(|| {
+                let exit = output
+                    .status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "signal".to_string());
+                let stderr = compact_error(&String::from_utf8_lossy(&output.stderr));
+                format!(
+                    "安装脚本没有生成结果文件: {}（exit={exit}，stderr={}）",
+                    installer_result_path.display(),
+                    if stderr.is_empty() {
+                        "<empty>"
+                    } else {
+                        &stderr
+                    }
+                )
+            })?;
+        if !output.status.success() || !installer_result.ok {
+            let errors = (!installer_result.errors.is_empty())
+                .then(|| installer_result.errors.join("；"))
                 .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).to_string());
             anyhow::bail!("官方安装脚本执行失败: {}", compact_error(&errors));
         }
@@ -399,41 +441,6 @@ fn launch_desktop_after_setup(profile_home: &Path) -> Result<()> {
     }
 }
 
-fn install_script_path(setup_dir: &Path, unique: &str) -> Result<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        Ok(setup_dir.join(format!("install-{unique}.sh")))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Ok(setup_dir.join(format!("install-{unique}.ps1")))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = (setup_dir, unique);
-        anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
-    }
-}
-
-fn write_embedded_install_script(path: &Path) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        atomic_write_private(
-            path,
-            include_bytes!("../installers/macos-configure-terminal-and-login.sh"),
-        )
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return atomic_write_private(path, &windows_install_script_bytes());
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = path;
-        anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
-    }
-}
-
 #[cfg(any(target_os = "windows", test))]
 fn windows_install_script_bytes() -> Vec<u8> {
     const UTF8_BOM: &[u8] = &[0xef, 0xbb, 0xbf];
@@ -444,34 +451,21 @@ fn windows_install_script_bytes() -> Vec<u8> {
     script
 }
 
+#[cfg(target_os = "windows")]
 fn install_command(script_path: &Path) -> Result<Command> {
-    #[cfg(target_os = "macos")]
-    {
-        let mut command = Command::new("/bin/bash");
-        command.arg(script_path);
-        Ok(command)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let mut command = Command::new("powershell.exe");
-        command.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-OutputFormat",
-            "Text",
-            "-EncodedCommand",
-            &powershell_encoded_command(WINDOWS_INSTALL_WRAPPER),
-        ]);
-        command.env(WINDOWS_INSTALL_SCRIPT_ENV, script_path);
-        Ok(command)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = script_path;
-        anyhow::bail!("不支持当前平台")
-    }
+    let mut command = Command::new("powershell.exe");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-OutputFormat",
+        "Text",
+        "-EncodedCommand",
+        &powershell_encoded_command(WINDOWS_INSTALL_WRAPPER),
+    ]);
+    command.env(WINDOWS_INSTALL_SCRIPT_ENV, script_path);
+    Ok(command)
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -508,7 +502,7 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn read_json(path: impl AsRef<Path>) -> Option<Value> {
+fn read_json<T: DeserializeOwned>(path: impl AsRef<Path>) -> Option<T> {
     fs::read(path)
         .ok()
         .and_then(|content| crate::json_compat::from_slice(&content).ok())
@@ -695,10 +689,14 @@ throw $message
             std::process::id(),
             now_epoch_seconds()
         ));
-        fs::write(&path, "\u{feff}{\"ok\":true,\"projectId\":null}").unwrap();
-        let value = read_json(&path).unwrap();
-        assert_eq!(value.get("ok").and_then(Value::as_bool), Some(true));
-        assert!(value.get("projectId").is_some_and(Value::is_null));
+        fs::write(
+            &path,
+            "\u{feff}{\"ok\":true,\"projectId\":null,\"errors\":[]}",
+        )
+        .unwrap();
+        let value = read_json::<InstallerResultEnvelope>(&path).unwrap();
+        assert!(value.ok);
+        assert!(value.errors.is_empty());
         fs::remove_file(path).unwrap();
     }
 }

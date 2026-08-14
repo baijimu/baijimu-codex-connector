@@ -123,11 +123,17 @@ jobs:
           verify_script() {
             local platform="$1" output="$2"
             test -s "$output"
-            grep -F 'https://download.baijimu.com/codex-artifacts/latest.json' "$output"
             if [ "$platform" = macos ]; then
-              grep -F 'curl 退出码 $curl_status' "$output"
-              grep -F 'fail_install "$detail 失败，下载地址：$url' "$output"
+              grep -F 'install-app)' "$output"
+              grep -F 'install-cli)' "$output"
+              grep -F 'verify_sha256' "$output"
+              grep -F 'hdiutil attach' "$output"
+              if grep -Eq 'status\.json|result\.json|write_status|set_step|download_with_progress|curl' "$output"; then
+                echo "macOS native installer must remain a stateless action adapter" >&2
+                exit 1
+              fi
             elif [ "$platform" = windows ]; then
+              grep -F 'CODEX_ARTIFACT_MANIFEST_URL' "$output"
               grep -F 'New-Object System.Text.UTF8Encoding($false)' "$output"
               grep -F '[System.IO.File]::WriteAllText' "$output"
               grep -F 'Write-Utf8NoBomFile $authPath' "$output"
@@ -147,6 +153,7 @@ jobs:
               fi
             fi
           }
+          grep -F 'https://download.baijimu.com/codex-artifacts/latest.json' installers/upstream-artifact-source.json
           verify_script macos installers/macos-configure-terminal-and-login.sh
           verify_script windows installers/windows-configure-terminal-and-login.ps1
 

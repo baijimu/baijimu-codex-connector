@@ -1,0 +1,71 @@
+{
+  "schema_version": 3,
+  "manifest_kind": "baijimu.codex.customer-install-artifacts",
+  "source": "momoplan/baijimu-connector-codex",
+  "snapshot_id": "fixture-snapshot",
+  "fetched_at": "2026-08-14T00:00:00Z",
+  "components": {
+    "codex_cli": {
+      "source": "github.com/openai/codex",
+      "tag_name": "rust-v0.147.0",
+      "published_at": "2026-08-07T01:41:49Z",
+      "html_url": "https://github.com/openai/codex/releases/tag/rust-v0.147.0",
+      "windows_install_layout": "codex_package_v1",
+      "legacy_windows_archives_retained_for": "pre-package-layout-connectors"
+    },
+    "codex_desktop_app": {
+      "source": "official OpenAI static distribution",
+      "version_identity": "asset SHA256 digests"
+    }
+  },
+  "upstream_release": {
+    "tag_name": "rust-v0.147.0",
+    "name": "0.147.0",
+    "published_at": "2026-08-07T01:41:49Z",
+    "html_url": "https://github.com/openai/codex/releases/tag/rust-v0.147.0"
+  },
+  "required_assets": [
+    "codex-app-aarch64-apple-darwin.dmg",
+    "codex-aarch64-apple-darwin.tar.gz"
+  ],
+  "assets": [
+    {
+      "name": "codex-app-aarch64-apple-darwin.dmg",
+      "component": "codex_desktop_app",
+      "platform": "macos",
+      "arch": "aarch64",
+      "source_kind": "official_openai_static",
+      "upstream_url": "https://example.invalid/ChatGPT.dmg",
+      "effective_upstream_url": "https://example.invalid/ChatGPT.dmg",
+      "upstream_sha256": "fixture-app-sha256",
+      "signature_verification": "codesign+spctl",
+      "install_layout": null,
+      "deprecated": false,
+      "mirror_url": "https://download.baijimu.com/codex-artifacts/fixture/ChatGPT.dmg",
+      "object_key": "codex-artifacts/fixture/ChatGPT.dmg",
+      "sha256": "fixture-app-sha256",
+      "size": 1000,
+      "size_bytes": 1000,
+      "content_type": "application/x-apple-diskimage"
+    },
+    {
+      "name": "codex-aarch64-apple-darwin.tar.gz",
+      "component": "codex_cli",
+      "platform": "macos",
+      "arch": "aarch64",
+      "source_kind": "official_openai_github_release",
+      "upstream_url": "https://example.invalid/codex.tar.gz",
+      "effective_upstream_url": "https://example.invalid/codex.tar.gz",
+      "upstream_sha256": "fixture-cli-sha256",
+      "signature_verification": null,
+      "install_layout": "legacy_single_binary_archive",
+      "deprecated": false,
+      "mirror_url": "https://download.baijimu.com/codex-artifacts/fixture/codex.tar.gz",
+      "object_key": "codex-artifacts/fixture/codex.tar.gz",
+      "sha256": "fixture-cli-sha256",
+      "size": 500,
+      "size_bytes": 500,
+      "content_type": "application/gzip"
+    }
+  ]
+}

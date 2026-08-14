@@ -134,7 +134,8 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.match(workflow, /Verify embedded installer scripts/);
   assert.match(workflow, /installers\/macos-configure-terminal-and-login\.sh/);
   assert.match(workflow, /installers\/windows-configure-terminal-and-login\.ps1/);
-  assert.match(workflow, /curl 退出码 \$curl_status/);
+  assert.match(workflow, /macOS native installer must remain a stateless action adapter/);
+  assert.match(workflow, /installers\/upstream-artifact-source\.json/);
   assert.match(workflow, /New-Object System\.Text\.UTF8Encoding\(\$false\)/);
   assert.match(workflow, /Write-Utf8NoBomFile \$authPath/);
   assert.match(workflow, /Write-Utf8NoBomFile \$configPath/);
@@ -180,6 +181,11 @@ test("connector compiles platform installers instead of downloading executable s
   assert.match(
     setupSource,
     /include_bytes!\("\.\.\/installers\/windows-configure-terminal-and-login\.ps1"\)/,
+  );
+  const artifactSource = await readFile(join(root, "src", "setup", "source.rs"), "utf8");
+  assert.match(
+    artifactSource,
+    /include_bytes!\(\s*"\.\.\/\.\.\/installers\/upstream-artifact-source\.json"/,
   );
   assert.doesNotMatch(setupSource, /CODEX_CONNECTOR_INSTALL_SCRIPT_URL/);
   assert.doesNotMatch(setupSource, /SCRIPT_URL|SCRIPT_SHA256|download_script/);
