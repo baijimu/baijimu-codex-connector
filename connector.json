@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.58",
+  "version": "1.2.59",
   "description": "初始化并配置 Codex，将全新用户的首个工作区绑定到默认 .codex，保护既有目录，并用所选工作区状态启动 Codex。",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.58"
+    "revision": "v1.2.59"
   },
   "runtime": {
     "type": "process",
@@ -128,27 +128,8 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "将安装与启动阶段依赖的 Baijimu CLI 最低版本提升到 0.1.50，确保工作区 LLM credential 统一通过 /partner/v1/llm-credential/api 路径签发；Connector 仍不直接发送 Partner HTTP 请求。",
-    "Windows 初始化不再由 Connector 检查或配置安全沙箱，也不会主动触发 UAC；Connector 只写入并回读桌面语言配置（默认 zh-CN），沙箱初始化、重试和降级由官方 ChatGPT/Codex 应用负责。",
-    "修复 macOS 下载进度被第 9 步标题污染且总字节数丢失的问题；下载步骤现在显示已下载大小、总大小和下载百分比，安装状态通过原子替换发布。",
-    "安装页轮询改为复用现有步骤节点并只更新变化内容，避免每秒全量销毁重建造成界面刷新和闪烁；顶部百分比明确标注为总进度。",
-    "面向中文用户统一内嵌管理页、macOS/Windows 安装进度、安装诊断错误和连接器市场元数据；Windows 运行时安装脚本显式写入 UTF-8 BOM，确保 Windows PowerShell 5.1 正确显示中文。",
-    "声明 Baijimu CLI 为安装与启动阶段的官方托管工具依赖；Bridge Agent 会等待 CLI 完成安装或修复并在每次启动时注入已验证的稳定 launcher 绝对路径，不再依赖首次安装进程继承的 PATH。",
-    "初始化完成前使用独立安装视图，只显示安装进度、失败原因和修复入口；初始化成功后才切换到 Codex 环境状态与工作区管理，避免安装过程中提前暴露不可用操作。",
-    "百积木平台认证和 Partner API 调用统一交由平台管理的 baijimu CLI；Connector 不再读取共享 PAT 文件，也不再自行发起工作区或 LLM credential HTTP 请求。",
-    "工作区初始化与修复通过 baijimu llm-credential create 重新签发 LLM credential，并对 CLI 的认证状态、工作区和凭证响应使用类型化契约校验。",
-    "从旧版长路径升级时，Connector 会在启动就绪前检测活动档案迁移，先停止占用目录的 Codex 桌面进程，完成原子迁移后再以短 CODEX_HOME 恢复桌面，避免 Windows 文件占用导致迁移卡在可恢复中间态。",
-    "全新用户的首个百积木工作区直接绑定默认 .codex；默认目录只绑定一个工作区，切回该工作区恢复默认路径，其他工作区使用 .baijimu/codex/p/<短档案键>。",
-    "已有但不受百积木控制的 .codex 与显式 CODEX_HOME 保持不变；旧版活动隔离档案仅在默认目录未被占用时通过同盘重命名安全迁移并提交绑定标记。",
-    "Connector 启动和内部工作区切换不再写用户级 CODEX_HOME，也不再广播 WM_SETTINGCHANGE；管理接口启动桌面时按单次进程显式传入所选目录。",
-    "Windows 使用 Appx 清单声明的全信任可执行入口启动隔离桌面配置，不再通过 Explorer 继承用户级环境；Codex 子进程会剥离 Connector 私有环境变量。",
-    "旧版本留下的全局 CODEX_HOME 仅在管理界面明确操作且所有权可证明时恢复；全新初始化激活工作区档案后由 Connector 自动打开并验证桌面应用，既有个人配置不会被自动切换。",
-    "旧版本遗留失败升级后转为需要重新验证，安装中断转为可恢复状态；连接器不再无条件重写未变化的历史状态。",
-    "初始化、启动和状态读取等可恢复错误统一提供上下文重试入口；未授权工作区只重新检查，不触发无效重装。",
-    "新增 codexTurnCompleted、codexThreadClosed、codexThreadArchived 和 codexThreadDeleted 稳定领域事件；保留 codexNotification 原始协议事件用于诊断。",
-    "完成事件按 threadId 与 turnId 生成稳定幂等标识，暂时性投递失败自动重试，Bridge Agent 接收后进入持久化 outbox。",
-    "macOS 不再等待 6 秒后创建并打开 ~/Documents/Codex/default，个人 Codex 使用与桌面图标相同的标准启动语义。",
-    "macOS 与 Windows 统一以真实桌面进程作为启动结果，不再用窗口可见性、前台状态或窗口句柄推断成功。"
+    "安装、启动和修复 Codex 前要求 Baijimu CLI 0.1.50 或更高版本，确保工作区 LLM credential 统一通过 /partner/v1/llm-credential/api 路径签发；Connector 仍不直接发送 Partner HTTP 请求。",
+    "版本说明改为只描述当前版本，不再把历史版本变更累计到 releaseNotes。"
   ],
   "configSchema": {
     "type": "object",

@@ -419,7 +419,7 @@ test("rust connector forwards Codex app-server calls", async () => {
       occurredAt: domainAttempts[1].occurredAt,
       source: "codex-app-server",
       sourceMethod: "turn/completed",
-      connectorVersion: "1.2.58",
+      connectorVersion: "1.2.59",
     });
     assert.ok(emittedEvents.some((event) => event.event === "codexNotification"));
   } finally {

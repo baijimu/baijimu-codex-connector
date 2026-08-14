@@ -106,6 +106,11 @@ test("connector manifest declares the packaged embedded UI", async () => {
     requiredFor: ["install", "start"],
     executablePathEnv: "CODEX_CONNECTOR_BAIJIMU_BINARY",
   }]);
+  assert.equal(manifest.releaseNotes.length, 2);
+  assert.ok(manifest.releaseNotes.every((note) => typeof note === "string" && note.trim()));
+  assert.match(manifest.releaseNotes[0], /Baijimu CLI 0\.1\.50/);
+  assert.match(manifest.releaseNotes[0], /\/partner\/v1\/llm-credential\/api/);
+  assert.match(manifest.releaseNotes[1], /只描述当前版本/);
   assert.equal(manifest.configSchema.properties.codexBinary, undefined);
   assert.equal(manifest.configSchema.properties.baijimuBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
