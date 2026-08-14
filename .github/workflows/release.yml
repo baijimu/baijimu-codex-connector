@@ -126,7 +126,7 @@ jobs:
             grep -F 'https://download.baijimu.com/codex-artifacts/latest.json' "$output"
             if [ "$platform" = macos ]; then
               grep -F 'curl 退出码 $curl_status' "$output"
-              grep -F 'fail_install "$label失败，下载地址：$url' "$output"
+              grep -F 'fail_install "$detail 失败，下载地址：$url' "$output"
             elif [ "$platform" = windows ]; then
               grep -F 'New-Object System.Text.UTF8Encoding($false)' "$output"
               grep -F '[System.IO.File]::WriteAllText' "$output"

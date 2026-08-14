@@ -339,6 +339,18 @@ function formatBytes(value) {
   return `${bytes} B`;
 }
 
+function setTextIfChanged(element, value) {
+  if (element.textContent !== value) element.textContent = value;
+}
+
+function setupDownloadLabel(step) {
+  if (!(step.totalBytes > 0) || step.downloadedBytes == null) return "";
+  const downloadedBytes = Math.max(0, step.downloadedBytes);
+  const totalBytes = Math.max(0, step.totalBytes);
+  const percent = Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
+  return ` · ${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}（${percent}%）`;
+}
+
 function setupStepStateLabel(state) {
   return ({
     pending: "等待",
@@ -357,35 +369,50 @@ function renderSetupProgress() {
 
   const current = progress.steps.find((step) => step.state === "running")
     || [...progress.steps].reverse().find((step) => ["completed", "failed"].includes(step.state));
-  elements["setup-progress-label"].textContent = current
+  setTextIfChanged(elements["setup-progress-label"], current
     ? `${current.index}/${progress.steps.length} ${current.name}`
-    : "准备初始化";
-  elements["setup-progress-percent"].textContent = `${progress.percent}%`;
+    : "准备初始化");
+  setTextIfChanged(elements["setup-progress-percent"], `总进度 ${progress.percent}%`);
   elements["setup-progress-track"].setAttribute("aria-valuenow", String(progress.percent));
   elements["setup-progress-bar"].style.width = `${progress.percent}%`;
 
   const list = elements["setup-step-list"];
-  list.replaceChildren();
-  progress.steps.forEach((step) => {
-    const item = document.createElement("li");
+  const existing = new Map(
+    [...list.children].map((item) => [Number(item.dataset.stepIndex), item]),
+  );
+  const activeIndexes = new Set(progress.steps.map((step) => step.index));
+  [...list.children].forEach((item) => {
+    if (!activeIndexes.has(Number(item.dataset.stepIndex))) item.remove();
+  });
+  progress.steps.forEach((step, stepIndex) => {
+    let item = existing.get(step.index);
+    if (!item) {
+      item = document.createElement("li");
+      item.dataset.stepIndex = String(step.index);
+      const marker = document.createElement("span");
+      marker.className = "setup-step-marker";
+      const copy = document.createElement("span");
+      copy.className = "setup-step-copy";
+      const title = document.createElement("strong");
+      const detail = document.createElement("small");
+      const state = document.createElement("em");
+      copy.append(title, detail);
+      item.append(marker, copy, state);
+    }
     item.className = `setup-step ${step.state}`;
-    const marker = document.createElement("span");
-    marker.className = "setup-step-marker";
-    marker.textContent = ["completed", "skipped"].includes(step.state) ? "✓" : String(step.index);
-    const copy = document.createElement("span");
-    copy.className = "setup-step-copy";
-    const title = document.createElement("strong");
-    title.textContent = step.name;
-    const detail = document.createElement("small");
-    const download = step.totalBytes > 0 && step.downloadedBytes != null
-      ? ` · ${formatBytes(step.downloadedBytes)} / ${formatBytes(step.totalBytes)}`
-      : "";
-    detail.textContent = `${step.detail || setupStepStateLabel(step.state)}${download}`;
-    const state = document.createElement("em");
-    state.textContent = setupStepStateLabel(step.state);
-    copy.append(title, detail);
-    item.append(marker, copy, state);
-    list.append(item);
+    const marker = item.querySelector(".setup-step-marker");
+    const title = item.querySelector("strong");
+    const detail = item.querySelector("small");
+    const state = item.querySelector("em");
+    setTextIfChanged(marker, ["completed", "skipped"].includes(step.state) ? "✓" : String(step.index));
+    setTextIfChanged(title, step.name);
+    setTextIfChanged(
+      detail,
+      `${step.detail || setupStepStateLabel(step.state)}${setupDownloadLabel(step)}`,
+    );
+    setTextIfChanged(state, setupStepStateLabel(step.state));
+    const expectedAtIndex = list.children[stepIndex];
+    if (expectedAtIndex !== item) list.insertBefore(item, expectedAtIndex || null);
   });
 }
 

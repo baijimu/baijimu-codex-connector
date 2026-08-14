@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -219,6 +221,79 @@ test("packaged installers emit zh-CN user-facing progress", async () => {
     assert.doesNotMatch(installer, /[“”]/);
     for (const pattern of leakedEnglishProgress) assert.doesNotMatch(installer, pattern);
   }
+});
+
+test("macOS installer keeps download progress variables scoped and publishes status atomically", async () => {
+  const installer = await readFile(
+    join(root, "installers", "macos-configure-terminal-and-login.sh"),
+    "utf8",
+  );
+  assert.match(installer, /write_status\(\) \{\n\s+local index name state detail downloaded total status_temp/);
+  assert.match(installer, /set_step\(\) \{\n\s+local index="\$1"[\s\S]*?local name console_label downloaded_mb total_mb/);
+  assert.match(installer, /download_with_progress\(\) \{\n\s+local url="\$1"[\s\S]*?local total="\$\{5:-\}"/);
+  assert.match(installer, /> "\$status_temp"\n\s+mv -f "\$status_temp" "\$status_path"/);
+  assert.doesNotMatch(installer, /> "\$status_path"/);
+
+  const functionsStart = installer.indexOf("json_escape() {");
+  const functionsEnd = installer.indexOf("\ninstalled_app_path()", functionsStart);
+  assert.ok(functionsStart >= 0 && functionsEnd > functionsStart);
+  const functions = installer.slice(functionsStart, functionsEnd);
+  const stepDeclarations = Array.from(
+    { length: 9 },
+    (_, offset) => {
+      const index = offset + 1;
+      return `step${index}_name="步骤 ${index}"; step${index}_state="pending"; step${index}_detail=""; step${index}_downloaded=""; step${index}_total=""`;
+    },
+  ).join("\n");
+  const stateDir = await mkdtemp(join(tmpdir(), "codex-installer-progress-"));
+  try {
+    const harness = `
+set -Eeuo pipefail
+state_dir="$1"
+status_path="$state_dir/status.json"
+result_path="$state_dir/result.json"
+started_at="2026-08-14T00:00:00Z"
+start_epoch=0
+current_step=0
+step_count=9
+CODEX_INSTALL_QUIET=1
+${stepDeclarations}
+${functions}
+set_step 3 "running" "正在下载官方 ChatGPT 桌面应用安装包" 123 1000
+cat "$status_path"
+`;
+    const result = spawnSync("bash", ["-c", harness, "installer-progress-test", stateDir], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const status = JSON.parse(result.stdout);
+    assert.equal(status.currentStep, 3);
+    assert.deepEqual(status.steps[2], {
+      index: 3,
+      name: "步骤 3",
+      state: "running",
+      detail: "正在下载官方 ChatGPT 桌面应用安装包",
+      downloadedBytes: 123,
+      totalBytes: 1000,
+    });
+    assert.equal(status.steps[8].detail, "");
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("setup polling reconciles stable step rows and shows explicit download percentage", async () => {
+  const app = await readFile(join(root, "ui", "app.js"), "utf8");
+  const renderStart = app.indexOf("function renderSetupProgress()");
+  const monitorStart = app.indexOf("async function monitorSetup()", renderStart);
+  const renderSource = app.slice(renderStart, monitorStart);
+  assert.ok(renderStart >= 0 && monitorStart > renderStart);
+  assert.doesNotMatch(renderSource, /replaceChildren/);
+  assert.match(renderSource, /existing = new Map/);
+  assert.match(renderSource, /list\.insertBefore/);
+  assert.match(app, /总进度 \$\{progress\.percent\}%/);
+  assert.match(app, /formatBytes\(downloadedBytes\).*formatBytes\(totalBytes\).*\$\{percent\}%/s);
 });
 
 test("UI distinguishes retryable setup states from current failures", () => {

@@ -79,6 +79,8 @@ write_install_console() {
 }
 
 write_status() {
+  local index name state detail downloaded total status_temp
+  status_temp="$(mktemp "$state_dir/status.json.XXXXXX")"
   {
     printf '{\n'
     printf '  "title": "百积木正在安装 ChatGPT 桌面应用和 Codex",\n'
@@ -104,15 +106,17 @@ write_status() {
     done
     printf '  ]\n'
     printf '}\n'
-  } > "$status_path"
+  } > "$status_temp"
+  mv -f "$status_temp" "$status_path"
 }
 
 set_step() {
-  index="$1"
-  state="$2"
-  detail="${3:-}"
-  downloaded="${4:-}"
-  total="${5:-}"
+  local index="$1"
+  local state="$2"
+  local detail="${3:-}"
+  local downloaded="${4:-}"
+  local total="${5:-}"
+  local name console_label downloaded_mb total_mb
   current_step="$index"
   eval "step${index}_state=\$state"
   eval "step${index}_detail=\$detail"
@@ -121,21 +125,22 @@ set_step() {
   write_status
 
   eval "name=\${step${index}_name}"
-  label="[$index/$step_count] $name"
+  console_label="[$index/$step_count] $name"
   if [ -n "$downloaded" ] && [ -n "$total" ] && [ "$total" -gt 0 ] 2>/dev/null; then
     downloaded_mb="$(awk -v bytes="$downloaded" 'BEGIN { printf "%.1f", bytes / 1024 / 1024 }')"
     total_mb="$(awk -v bytes="$total" 'BEGIN { printf "%.1f", bytes / 1024 / 1024 }')"
-    write_install_console "$label  $state  ${downloaded_mb}MB / ${total_mb}MB"
+    write_install_console "$console_label  $state  ${downloaded_mb}MB / ${total_mb}MB"
   elif [ -n "$detail" ]; then
-    write_install_console "$label  $state  $detail"
+    write_install_console "$console_label  $state  $detail"
   else
-    write_install_console "$label  $state"
+    write_install_console "$console_label  $state"
   fi
 }
 
 complete_pending_steps() {
-  state="$1"
-  detail="$2"
+  local state="$1"
+  local detail="$2"
+  local index step_state
   for index in 1 2 3 4 5 6 7 8 9; do
     eval "step_state=\${step${index}_state}"
     if [ "$step_state" = "pending" ]; then
@@ -147,9 +152,9 @@ complete_pending_steps() {
 }
 
 finish_result() {
-  ok="$1"
-  error_message="${2:-}"
-  elapsed_ms="$(( ($(date +%s) - start_epoch) * 1000 ))"
+  local ok="$1"
+  local error_message="${2:-}"
+  local elapsed_ms="$(( ($(date +%s) - start_epoch) * 1000 ))"
   {
     printf '{\n'
     printf '  "ok": %s,\n' "$ok"
@@ -188,7 +193,7 @@ finish_result() {
 }
 
 fail_install() {
-  message="$1"
+  local message="$1"
   trap - ERR
   if [ "$current_step" -gt 0 ]; then
     set_step "$current_step" "failed" "$message" || true
@@ -203,16 +208,17 @@ fail_install() {
 trap 'fail_install "第 $LINENO 行发生意外错误"' ERR
 
 download_with_progress() {
-  url="$1"
-  output="$2"
-  step="$3"
-  label="$4"
-  total="${5:-}"
-  error_file="$state_dir/download-step-${step}.err"
+  local url="$1"
+  local output="$2"
+  local step="$3"
+  local detail="$4"
+  local total="${5:-}"
+  local error_file="$state_dir/download-step-${step}.err"
+  local curl_pid size curl_status error_detail
   rm -f "$output"
   rm -f "$error_file"
   : > "$output"
-  set_step "$step" "running" "$label" "" "$total"
+  set_step "$step" "running" "$detail" "" "$total"
   curl -fL --silent --show-error \
     --retry 5 --retry-all-errors --retry-delay 2 \
     --connect-timeout 15 --max-time 900 \
@@ -220,7 +226,7 @@ download_with_progress() {
   curl_pid="$!"
   while kill -0 "$curl_pid" 2>/dev/null; do
     size="$(stat -f '%z' "$output" 2>/dev/null || printf '0')"
-    set_step "$step" "running" "$label" "$size" "$total"
+    set_step "$step" "running" "$detail" "$size" "$total"
     sleep 1
   done
   curl_status=0
@@ -229,11 +235,11 @@ download_with_progress() {
     error_detail="$(tail -n 5 "$error_file" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
     rm -f "$error_file"
     [ -n "$error_detail" ] || error_detail="curl 未返回诊断信息"
-    fail_install "$label失败，下载地址：$url（curl 退出码 $curl_status）：$error_detail"
+    fail_install "$detail 失败，下载地址：$url（curl 退出码 $curl_status）：$error_detail"
   fi
   rm -f "$error_file"
   size="$(stat -f '%z' "$output" 2>/dev/null || printf '0')"
-  set_step "$step" "completed" "$label" "$size" "$total"
+  set_step "$step" "completed" "$detail" "$size" "$total"
 }
 
 installed_app_path() {
