@@ -99,7 +99,7 @@ impl SetupOutcome {
         }
     }
 
-    #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
+    #[cfg(any(target_os = "macos", test))]
     fn warning(&self) -> Option<&str> {
         match self {
             Self::DesktopOpenRequiresManualAction(warning) => Some(warning),
