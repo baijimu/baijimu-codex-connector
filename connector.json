@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.59",
+  "version": "1.2.60",
   "description": "初始化并配置 Codex，将全新用户的首个工作区绑定到默认 .codex，保护既有目录，并用所选工作区状态启动 Codex。",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.59"
+    "revision": "v1.2.60"
   },
   "runtime": {
     "type": "process",
@@ -128,8 +128,7 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "安装、启动和修复 Codex 前要求 Baijimu CLI 0.1.50 或更高版本，确保工作区 LLM credential 统一通过 /partner/v1/llm-credential/api 路径签发；Connector 仍不直接发送 Partner HTTP 请求。",
-    "版本说明改为只描述当前版本，不再把历史版本变更累计到 releaseNotes。"
+    "完成 ChatGPT/Codex 安装配置后，即使系统自动打开桌面应用失败，初始化仍会成功，并提醒用户从系统应用列表手动打开 ChatGPT（部分版本名称为 Codex）。"
   ],
   "configSchema": {
     "type": "object",

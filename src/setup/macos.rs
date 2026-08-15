@@ -1,7 +1,7 @@
 use super::contract::{InstallerStatus, InstallerStepState, MacosInstallerResult};
 use super::{
     atomic_write_private, compact_error, installer_state_dir, launch_desktop_after_setup,
-    set_private_directory,
+    set_private_directory, SetupOutcome,
 };
 use crate::{codex_binary, credential};
 use anyhow::{Context, Result};
@@ -25,7 +25,7 @@ pub(super) fn run_install(
     existing_codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
     native_script_path: &Path,
-) -> Result<()> {
+) -> Result<SetupOutcome> {
     let state_dir = installer_state_dir();
     fs::create_dir_all(&state_dir)
         .with_context(|| format!("创建安装状态目录失败: {}", state_dir.display()))?;
@@ -47,11 +47,11 @@ pub(super) fn run_install(
     let mut installer = MacosInstaller::new(request)?;
     let started = Instant::now();
     match installer.execute() {
-        Ok(()) => {
+        Ok(outcome) => {
             installer.result.ok = true;
             installer.result.elapsed_ms = started.elapsed().as_millis();
             installer.write_result()?;
-            Ok(())
+            Ok(outcome)
         }
         Err(error) => {
             let message = compact_error(&format!("{error:#}"));
@@ -123,7 +123,7 @@ impl<'a> MacosInstaller<'a> {
         })
     }
 
-    fn execute(&mut self) -> Result<()> {
+    fn execute(&mut self) -> Result<SetupOutcome> {
         self.ensure_desktop_app()?;
         self.ensure_codex_cli()?;
 
@@ -182,19 +182,24 @@ impl<'a> MacosInstaller<'a> {
             == credential::AuthMode::Baijimu
             && credential_state.active_workspace_id == Some(self.workspace_id)
             && Path::new(&credential_state.active_codex_home) == profile_home;
-        if workspace_profile_is_active {
-            launch_desktop_after_setup(&profile_home)?;
+        let outcome = if workspace_profile_is_active {
+            launch_desktop_after_setup(&profile_home)
+        } else {
+            SetupOutcome::completed_without_desktop_launch()
+        };
+        if let Some(warning) = outcome.warning() {
+            self.result.warnings.push(warning.to_string());
         }
         self.progress.set_step(
             9,
             InstallerStepState::Completed,
-            "安装配置已完成，桌面应用已按当前档案状态启动",
+            outcome.message(),
             None,
             None,
         )?;
         self.progress
             .complete_pending(InstallerStepState::Skipped, "安装已完成")?;
-        Ok(())
+        Ok(outcome)
     }
 
     fn ensure_desktop_app(&mut self) -> Result<()> {

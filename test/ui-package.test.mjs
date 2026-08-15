@@ -106,11 +106,10 @@ test("connector manifest declares the packaged embedded UI", async () => {
     requiredFor: ["install", "start"],
     executablePathEnv: "CODEX_CONNECTOR_BAIJIMU_BINARY",
   }]);
-  assert.equal(manifest.releaseNotes.length, 2);
+  assert.equal(manifest.releaseNotes.length, 1);
   assert.ok(manifest.releaseNotes.every((note) => typeof note === "string" && note.trim()));
-  assert.match(manifest.releaseNotes[0], /Baijimu CLI 0\.1\.50/);
-  assert.match(manifest.releaseNotes[0], /\/partner\/v1\/llm-credential\/api/);
-  assert.match(manifest.releaseNotes[1], /只描述当前版本/);
+  assert.match(manifest.releaseNotes[0], /自动打开桌面应用失败/);
+  assert.match(manifest.releaseNotes[0], /手动打开 ChatGPT/);
   assert.equal(manifest.configSchema.properties.codexBinary, undefined);
   assert.equal(manifest.configSchema.properties.baijimuBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
@@ -122,7 +121,8 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /auth-switch-modal/);
   assert.match(html, /error-retry-button/);
   assert.match(html, /restore-external-home-button/);
-  assert.match(html, /全新用户会把当前工作区绑定到默认 \.codex 并在验证后自动打开/);
+  assert.match(html, /验证后尝试自动打开/);
+  assert.match(html, /应用列表手动打开 ChatGPT/);
   assert.match(html, /id="management-active-panel"[^>]*hidden/);
   assert.match(html, /id="management-workspace-panel"[^>]*hidden/);
   assert.match(html, /id="setup-panel"/);
@@ -130,7 +130,8 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(app, /启动个人 Codex/);
   assert.match(app, /切换回百积木接管前的个人 Codex 状态目录重新启动/);
   assert.doesNotMatch(app, /接管前的个人状态目录/);
-  assert.match(app, /全新工作区配置已自动打开，既有个人配置保持不变/);
+  assert.match(app, /setupState\?\.message/);
+  assert.doesNotMatch(app, /全新工作区配置已自动打开，既有个人配置保持不变/);
   assert.match(app, /不会删除任何工作区目录/);
   assert.doesNotMatch(app, /window\.confirm/);
   assert.match(app, /openAuthSwitchModal/);

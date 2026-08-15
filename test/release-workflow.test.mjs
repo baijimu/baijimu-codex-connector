@@ -320,7 +320,7 @@ test("market publisher uses explicit immutable version creation and review submi
   assert.doesNotMatch(script, /codex-local-app-v|gitee\.com|zxflimit_admin/);
 });
 
-test("setup launches desktop after profile finalization without an installer control variable", async () => {
+test("setup treats desktop launch as a post-configuration convenience", async () => {
   const setup = await readFile(join(root, "src", "setup.rs"), "utf8");
   const desktop = await readFile(join(root, "src", "desktop.rs"), "utf8");
   const main = await readFile(join(root, "src", "main.rs"), "utf8");
@@ -334,9 +334,12 @@ test("setup launches desktop after profile finalization without an installer con
 
   assert.ok(activationIndex >= 0, "setup must finalize the selected profile");
   assert.ok(launchIndex > activationIndex, "desktop launch must follow profile finalization");
+  assert.match(setup, /SetupOutcome::from_desktop_launch/);
+  assert.match(setup, /手动找到并打开 ChatGPT/);
+  assert.doesNotMatch(setup, /launch_desktop_after_setup\(&profile_home\)\?/);
   assert.match(setup, /active_workspace_id == Some\(workspace_id\)/);
   assert.match(setup, /workspace_profile_is_active\.then_some\(profile_home\)/);
-  assert.match(setup, /if let Some\(profile_home\) = activated_profile_home/);
+  assert.match(setup, /Ok\(match activated_profile_home/);
   assert.doesNotMatch([setup, ...installers].join("\n"), /CODEX_INSTALL_[A-Z_]*DESKTOP/);
   assert.doesNotMatch(installers.join("\n"), /Test-VisibleWindow|verify_codex_window/);
   assert.doesNotMatch(main, /reconcile_active_user_codex_home/);

@@ -66,6 +66,48 @@ pub struct SetupStatus {
     pub installer_status: Option<InstallerStatus>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SetupOutcome {
+    DesktopOpened,
+    DesktopOpenRequiresManualAction(String),
+    PersonalProfilePreserved,
+}
+
+impl SetupOutcome {
+    fn completed_without_desktop_launch() -> Self {
+        Self::PersonalProfilePreserved
+    }
+
+    fn from_desktop_launch(result: Result<()>) -> Self {
+        match result {
+            Ok(()) => Self::DesktopOpened,
+            Err(error) => Self::DesktopOpenRequiresManualAction(format!(
+                    "ChatGPT/Codex 已完成安装配置，但未能自动打开桌面应用。请到系统应用列表中手动找到并打开 ChatGPT 应用（部分版本名称为 Codex）。自动打开错误：{}",
+                    compact_error(&format!("{error:#}"))
+                )),
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::DesktopOpened => "Codex 应用初始化已完成，当前工作区已自动打开。".to_string(),
+            Self::DesktopOpenRequiresManualAction(warning) => warning.clone(),
+            Self::PersonalProfilePreserved => {
+                "Codex 应用初始化已完成；检测到既有个人配置，未自动切换或打开工作区应用。"
+                    .to_string()
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
+    fn warning(&self) -> Option<&str> {
+        match self {
+            Self::DesktopOpenRequiresManualAction(warning) => Some(warning),
+            _ => None,
+        }
+    }
+}
+
 impl Default for SetupStatus {
     fn default() -> Self {
         Self {
@@ -195,13 +237,13 @@ impl SetupManager {
                 codex_cli.as_deref(),
                 verify_app_server_capability,
             ) {
-                Ok(()) => SetupStatus {
+                Ok(outcome) => SetupStatus {
                     schema_version: SETUP_STATUS_SCHEMA_VERSION,
                     attempt_id: background.attempt_id.clone(),
                     connector_version: Some(CONNECTOR_VERSION.to_string()),
                     status: "succeeded".to_string(),
                     workspace_id: Some(workspace_id),
-                    message: "Codex 应用初始化已完成".to_string(),
+                    message: outcome.message(),
                     error: None,
                     last_error: None,
                     error_code: None,
@@ -290,7 +332,7 @@ fn run_install(
     workspace_id: u64,
     codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
-) -> Result<()> {
+) -> Result<SetupOutcome> {
     #[cfg(target_os = "macos")]
     {
         let setup_dir = connector_home().join("setup");
@@ -330,7 +372,7 @@ fn run_windows_install(
     workspace_id: u64,
     codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
-) -> Result<()> {
+) -> Result<SetupOutcome> {
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
@@ -422,22 +464,21 @@ fn run_windows_install(
             );
         }
     }
-    if let Some(profile_home) = activated_profile_home {
-        launch_desktop_after_setup(&profile_home)?;
-    }
-    Ok(())
+    Ok(match activated_profile_home {
+        Some(profile_home) => launch_desktop_after_setup(&profile_home),
+        None => SetupOutcome::completed_without_desktop_launch(),
+    })
 }
 
-fn launch_desktop_after_setup(profile_home: &Path) -> Result<()> {
+fn launch_desktop_after_setup(profile_home: &Path) -> SetupOutcome {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        crate::desktop::launch_and_verify(profile_home)
-            .context("安装配置已完成，但自动打开 ChatGPT/Codex 桌面应用失败")
+        SetupOutcome::from_desktop_launch(crate::desktop::launch_and_verify(profile_home))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = profile_home;
-        Ok(())
+        SetupOutcome::completed_without_desktop_launch()
     }
 }
 
@@ -616,6 +657,32 @@ mod tests {
         assert_eq!(recovered.status, original.status);
         assert_eq!(recovered.error, original.error);
         assert_eq!(recovered.completed_at_epoch_seconds, Some(200));
+    }
+
+    #[test]
+    fn desktop_auto_launch_failure_keeps_setup_successful_and_requires_manual_open() {
+        let outcome = SetupOutcome::from_desktop_launch(Err(anyhow::anyhow!(
+            "operating system rejected automatic launch"
+        )));
+
+        assert!(matches!(
+            &outcome,
+            SetupOutcome::DesktopOpenRequiresManualAction(_)
+        ));
+        assert!(outcome.message().contains("已完成安装配置"));
+        assert!(outcome.message().contains("手动找到并打开 ChatGPT"));
+        assert!(outcome
+            .warning()
+            .is_some_and(|warning| warning.contains("operating system rejected automatic launch")));
+    }
+
+    #[test]
+    fn successful_desktop_auto_launch_reports_the_opened_workspace() {
+        let outcome = SetupOutcome::from_desktop_launch(Ok(()));
+
+        assert_eq!(outcome, SetupOutcome::DesktopOpened);
+        assert!(outcome.message().contains("当前工作区已自动打开"));
+        assert_eq!(outcome.warning(), None);
     }
 
     #[cfg(target_os = "macos")]
