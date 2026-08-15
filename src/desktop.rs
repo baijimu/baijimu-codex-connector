@@ -71,20 +71,57 @@ if (-not $packages) {
   $packages = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenAI.Codex*' -or ($_.Name -like 'OpenAI.ChatGPT*' -and $_.Name -notlike 'OpenAI.ChatGPT-Desktop*') })
 }
 if (-not $packages) { throw '当前用户尚未安装 ChatGPT/Codex 桌面应用包' }
-$roots = @($packages | ForEach-Object { $_.InstallLocation } | Where-Object { $_ })
+
+$startApps = @(Get-StartApps -ErrorAction SilentlyContinue)
 $entry = @($packages | ForEach-Object {
   $package = $_
-  [xml]$manifest = Get-Content -LiteralPath (Join-Path $package.InstallLocation 'AppxManifest.xml')
-  @($manifest.Package.Applications.Application | Where-Object { $_.Executable } | Select-Object -First 1) | ForEach-Object {
-    [pscustomobject]@{ package = $package; executable = (Join-Path $package.InstallLocation ([string]$_.Executable)) }
+  if (-not $package.InstallLocation) { return }
+  $manifestPath = Join-Path $package.InstallLocation 'AppxManifest.xml'
+  if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return }
+  [xml]$manifest = Get-Content -LiteralPath $manifestPath
+  $startApp = @($startApps | Where-Object { $_.AppID -like "$($package.PackageFamilyName)!*" } | Select-Object -First 1)
+  $applicationId = if ($startApp.Count -gt 0) {
+    ([string]$startApp[0].AppID).Substring(([string]$startApp[0].AppID).LastIndexOf('!') + 1)
+  } else {
+    $null
+  }
+  $applications = @($manifest.Package.Applications.Application | Where-Object {
+    if (-not $_.Executable) { return $false }
+    $entryPoint = [string]$_.EntryPoint
+    $isFullTrust = [string]::IsNullOrWhiteSpace($entryPoint) -or $entryPoint -eq 'Windows.FullTrustApplication'
+    return $isFullTrust -and (-not $applicationId -or ([string]$_.Id) -eq $applicationId)
+  })
+  if ($applications.Count -eq 0 -and $applicationId) { return }
+  @($applications | Select-Object -First 1) | ForEach-Object {
+    $relativeExecutable = [string]$_.Executable
+    if ([System.IO.Path]::IsPathRooted($relativeExecutable)) {
+      throw "ChatGPT/Codex 应用清单包含绝对可执行文件路径：$relativeExecutable"
+    }
+    $packageRoot = [System.IO.Path]::GetFullPath($package.InstallLocation).TrimEnd('\') + '\'
+    $executable = [System.IO.Path]::GetFullPath((Join-Path $packageRoot $relativeExecutable))
+    if (-not $executable.StartsWith($packageRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "ChatGPT/Codex 应用清单入口超出包目录：$relativeExecutable"
+    }
+    if ([System.IO.Path]::GetExtension($executable) -ne '.exe' -or -not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+      throw "ChatGPT/Codex 应用清单入口不可用：$executable"
+    }
+    [pscustomobject]@{
+      package = $package
+      packageRoot = $packageRoot
+      applicationId = [string]$_.Id
+      appUserModelId = if ($startApp.Count -gt 0) { [string]$startApp[0].AppID } else { $null }
+      executable = $executable
+    }
   }
 } | Select-Object -First 1)
-if (-not $entry -or -not (Test-Path -LiteralPath $entry[0].executable)) { throw 'ChatGPT/Codex 桌面应用包中的可执行文件不可用' }
+if (-not $entry) { throw 'ChatGPT/Codex 桌面应用包中没有与开始菜单匹配的 FullTrust 可执行入口' }
+
+$selectedRoot = $entry[0].packageRoot
 $existing = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
   try {
     $path = $_.Path
     if (-not $path) { return $false }
-    return ($roots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+    return $path.StartsWith($selectedRoot, [System.StringComparison]::OrdinalIgnoreCase)
   } catch { return $false }
 })
 if ($existing.Count -gt 0) {
@@ -96,20 +133,68 @@ if ($existing.Count -gt 0) {
   } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
   if ($remaining.Count -gt 0) { throw 'ChatGPT/Codex 桌面应用进程未在 15 秒内停止' }
 }
-Start-Process -FilePath $entry[0].executable -ErrorAction Stop
+
+if (-not ('BaijimuCodexVisibleWindowProbe' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public static class BaijimuCodexVisibleWindowProbe {
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    public static uint[] ProcessIds() {
+        var processIds = new HashSet<uint>();
+        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
+            if (IsWindowVisible(hWnd)) {
+                uint processId;
+                GetWindowThreadProcessId(hWnd, out processId);
+                if (processId != 0) processIds.Add(processId);
+            }
+            return true;
+        }, IntPtr.Zero);
+        var result = new uint[processIds.Count];
+        processIds.CopyTo(result);
+        return result;
+    }
+}
+'@
+}
+
+Start-Process -FilePath $entry[0].executable -WorkingDirectory ([System.IO.Path]::GetDirectoryName($entry[0].executable)) -ErrorAction Stop
 $deadline = (Get-Date).AddSeconds(45)
 do {
   $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
     try {
       $path = $_.Path
       if (-not $path) { return $false }
-      return ($roots | Where-Object { $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
+      return $path.StartsWith($selectedRoot, [System.StringComparison]::OrdinalIgnoreCase)
     } catch { return $false }
   })
-  if ($running.Count -eq 0) { Start-Sleep -Milliseconds 500 }
-} while ($running.Count -eq 0 -and (Get-Date) -lt $deadline)
-if ($running.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用未在 45 秒内启动' }
-[pscustomobject]@{ running = $true; processCount = $running.Count; executable = $entry[0].executable; codexHome = $codexHome } | ConvertTo-Json -Compress
+  $runningIds = @($running | ForEach-Object { [uint32]$_.Id })
+  $visibleIds = @([BaijimuCodexVisibleWindowProbe]::ProcessIds())
+  $visible = @($runningIds | Where-Object { $visibleIds -contains $_ })
+  if ($visible.Count -eq 0) { Start-Sleep -Milliseconds 500 }
+} while ($visible.Count -eq 0 -and (Get-Date) -lt $deadline)
+if ($running.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用未在 45 秒内启动进程' }
+if ($visible.Count -eq 0) { throw 'ChatGPT/Codex 桌面应用已启动进程，但未在 45 秒内显示可见窗口' }
+[pscustomobject]@{
+  running = $true
+  visibleWindow = $true
+  processCount = $running.Count
+  visibleWindowCount = $visible.Count
+  packageFullName = [string]$entry[0].package.PackageFullName
+  applicationId = $entry[0].applicationId
+  appUserModelId = $entry[0].appUserModelId
+  executable = $entry[0].executable
+  codexHome = $codexHome
+} | ConvertTo-Json -Compress
 "#;
 
     pub fn stop_for_codex_home_switch() -> Result<DesktopSwitch> {
