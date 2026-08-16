@@ -2,8 +2,8 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.65",
-  "description": "独立接入百积木 Connector，并在应用内按需安装和配置 Codex 运行环境；保护既有目录并支持工作区隔离。",
+  "version": "1.2.66",
+  "description": "接入百积木后自动初始化并配置 Codex 运行环境；保护既有目录并支持工作区隔离。",
   "publisher": {
     "name": "Baijimu",
     "homepage": "https://baijimu.com"
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.65"
+    "revision": "v1.2.66"
   },
   "runtime": {
     "type": "process",
@@ -128,7 +128,7 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "Connector 安装、启动和百积木能力注册不再触发 Codex 初始化；应用内新增百积木接入与 Codex 运行环境两个视图，只有用户明确操作时才安装或修复 Codex。"
+    "本地应用安装成功并自动打开后会立即幂等初始化 Codex，不再要求再次点击安装；只有初始化失败时才显示明确的修复操作。"
   ],
   "configSchema": {
     "type": "object",

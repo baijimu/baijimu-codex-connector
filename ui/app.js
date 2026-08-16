@@ -346,7 +346,7 @@ function renderSetupState() {
   elements["setup-message"].textContent = meta.showCurrentError
     ? setupState.error
     : setupState?.message || (status === "pending"
-      ? "Codex 尚未安装。Connector 已在线，可在需要会话能力时再安装。"
+      ? "正在确认当前授权工作区并准备自动初始化 Codex。"
       : "等待初始化");
   renderSetupProgress();
   renderIntegrationState();
@@ -479,6 +479,7 @@ async function ensureCodexReady() {
     case "ready":
       return;
     case "initializing":
+      selectView("runtime");
       setMessage("message", readiness?.message || "正在自动下载安装并配置本机 Codex。");
       void monitorSetup();
       return;
@@ -496,21 +497,6 @@ async function ensureCodexReady() {
       return;
     default:
       throw new Error(readiness?.message || "无法确认本机 Codex 初始化状态。");
-  }
-}
-
-async function startSetup() {
-  clearNotices();
-  setAccountBusy(true);
-  try {
-    await ensureCodexReady();
-  } catch (error) {
-    showError(errorMessage(error), {
-      action: startSetup,
-      label: "重新检查",
-    });
-  } finally {
-    if (setupState?.status !== "running") setAccountBusy(false);
   }
 }
 
@@ -568,12 +554,6 @@ async function retrySetup() {
   }
 }
 
-async function performSetupAction() {
-  const action = setupActionMeta(setupState);
-  if (action.operation === "ensure") await startSetup();
-  else if (action.operation === "retry") await retrySetup();
-}
-
 async function restoreExternalCodexHome() {
   clearNotices();
   setAccountBusy(true);
@@ -614,11 +594,11 @@ async function openCodex() {
 }
 
 elements["refresh-button"].addEventListener("click", () => void loadState({
-  ensureReady: false,
+  ensureReady: true,
   successMessage: "接入与运行环境状态已刷新。",
 }));
 elements["open-codex-button"].addEventListener("click", () => void openCodex());
-elements["setup-action-button"].addEventListener("click", () => void performSetupAction());
+elements["setup-action-button"].addEventListener("click", () => void retrySetup());
 elements["integration-tab"].addEventListener("click", () => selectView("integration"));
 elements["runtime-tab"].addEventListener("click", () => selectView("runtime"));
 elements["go-to-runtime-button"].addEventListener("click", () => selectView("runtime"));
@@ -637,4 +617,4 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && pendingCodexLaunch) closeAuthSwitchModal();
 });
 
-void loadState({ ensureReady: false });
+void loadState({ ensureReady: true });

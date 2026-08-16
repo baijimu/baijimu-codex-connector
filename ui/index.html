@@ -15,7 +15,7 @@
         <div class="hero-copy">
           <p class="eyebrow">Codex 本地应用</p>
           <h1 id="page-title">Codex 集成管理</h1>
-          <p id="page-description">Connector 接入与 Codex 运行环境相互独立；可先接入百积木，再按需安装 Codex。</p>
+          <p id="page-description">安装本地应用后会自动初始化 Codex；失败时可在这里查看准确步骤并修复。</p>
         </div>
         <button id="refresh-button" class="button secondary" type="button" hidden>刷新状态</button>
       </header>
@@ -75,9 +75,9 @@
             <p class="eyebrow">能力状态</p>
             <h2 id="capability-title">Codex 会话能力暂不可用</h2>
           </div>
-          <button id="go-to-runtime-button" class="button primary" type="button">前往安装 Codex</button>
+          <button id="go-to-runtime-button" class="button primary" type="button">查看初始化进度</button>
         </div>
-        <p id="capability-message" class="section-note capability-note">Connector 已在线，但需要安装 Codex 运行环境后才能查询会话或发起对话。</p>
+        <p id="capability-message" class="section-note capability-note">Connector 已在线；Codex 运行环境会自动初始化，完成后即可查询会话或发起对话。</p>
       </section>
 
       <section id="management-active-panel" class="panel active-panel" aria-labelledby="active-title" hidden>
@@ -164,10 +164,10 @@
           <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
         </div>
         <div id="setup-actions" class="form-actions">
-          <p>安装操作仅在这里由用户明确发起。全新用户会把当前工作区绑定到默认 .codex；已有个人 .codex 时保持原样，工作区使用隔离目录。</p>
+          <p>首次初始化会自动开始。全新用户会把当前工作区绑定到默认 .codex；已有个人 .codex 时保持原样，工作区使用隔离目录。只有失败后才需要手动修复。</p>
           <div class="setup-action-buttons">
             <button id="runtime-go-integration-button" class="button secondary" type="button" hidden>前往百积木接入</button>
-            <button id="setup-action-button" class="button primary" type="button" hidden>安装 Codex</button>
+            <button id="setup-action-button" class="button primary" type="button" hidden>重新安装并修复</button>
           </div>
         </div>
       </section>
