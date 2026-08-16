@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 
 const rl = createInterface({ input: process.stdin });
 let latestThreadId = null;
+let initializeCount = 0;
 
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
@@ -13,6 +14,7 @@ function send(message) {
 rl.on("line", (line) => {
   const message = JSON.parse(line);
   if (message.method === "initialize") {
+    initializeCount += 1;
     send({
       id: message.id,
       result: {
@@ -24,6 +26,32 @@ rl.on("line", (line) => {
     return;
   }
   if (message.method === "initialized") {
+    return;
+  }
+  if (message.method === "test/delay") {
+    setTimeout(() => send({
+      id: message.id,
+      result: { token: message.params.token, delayMs: message.params.delayMs },
+    }), message.params.delayMs);
+    return;
+  }
+  if (message.method === "test/silent") {
+    return;
+  }
+  if (message.method === "test/initializeCount") {
+    send({ id: message.id, result: { initializeCount } });
+    return;
+  }
+  if (message.method === "test/scheduleNotification") {
+    send({ id: message.id, result: { scheduled: true } });
+    setTimeout(() => send({
+      method: "test/idleNotification",
+      params: { marker: message.params.marker },
+    }), message.params.delayMs);
+    return;
+  }
+  if (message.method === "test/exit") {
+    setTimeout(() => process.exit(17), message.params.delayMs);
     return;
   }
   if (message.method === "thread/start") {

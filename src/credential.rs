@@ -10,6 +10,11 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::{baijimu_cli, user_environment};
 
+mod contract;
+pub use contract::*;
+mod store;
+use store::*;
+
 const METADATA_VERSION: u32 = 6;
 const METADATA_FILE: &str = "codex-credentials.json";
 const OWNERSHIP_MARKER_FILE: &str = ".baijimu-owner.json";
@@ -22,105 +27,6 @@ const OWNED_CONFIG_FILE: &str = "config.toml";
 const DEFAULT_MODEL: &str = "gpt-5.6-sol";
 const ROUTER_PROVIDER: &str = "baijimu-router";
 const ROUTER_BASE_URL: &str = "https://router.baijimu.com/api/claudecode/v1";
-
-#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
-pub fn default_model() -> &'static str {
-    DEFAULT_MODEL
-}
-
-#[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
-pub fn router_base_url() -> &'static str {
-    ROUTER_BASE_URL
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthMode {
-    #[default]
-    Chatgpt,
-    Baijimu,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CredentialProfile {
-    #[serde(default)]
-    pub profile_id: String,
-    #[serde(default = "default_environment")]
-    pub environment: String,
-    #[serde(default)]
-    pub user_id: Option<u64>,
-    #[serde(default)]
-    pub client_id: Option<String>,
-    pub workspace_id: u64,
-    pub workspace_name: String,
-    pub model: String,
-    pub activated_at_epoch_seconds: u64,
-    #[serde(default)]
-    pub codex_home: String,
-    #[serde(default)]
-    pub credential_status: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceOption {
-    pub workspace_id: u64,
-    pub name: String,
-    pub authorized: bool,
-    pub configured: bool,
-    pub user_ids: Vec<u64>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatGptProfileState {
-    pub available: bool,
-    pub configured: bool,
-    pub auth_mode: Option<String>,
-    pub account_id: Option<String>,
-    pub codex_home: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CredentialManagerState {
-    pub active_mode: AuthMode,
-    pub current_workspace_id: Option<u64>,
-    pub active_workspace_id: Option<u64>,
-    pub codex_configured: bool,
-    pub credential_status: String,
-    pub active_profile: Option<CredentialProfile>,
-    pub profiles: Vec<CredentialProfile>,
-    pub workspaces: Vec<WorkspaceOption>,
-    pub chatgpt: ChatGptProfileState,
-    pub discovery_warning: Option<String>,
-    pub original_codex_home_state: OriginalCodexHomeState,
-    pub original_codex_home: String,
-    pub active_codex_home: String,
-    pub external_codex_home: Option<String>,
-    pub legacy_global_codex_home: LegacyGlobalCodexHomeState,
-    pub codex_auth_path: String,
-    pub codex_config_path: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct PreparedWorkspaceProfile {
-    pub profile: CredentialProfile,
-    pub credential: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct ActiveHomeSnapshot {
-    metadata: CredentialMetadata,
-    pub codex_home: PathBuf,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingProfileHomeMigration {
-    pub active_home_before: Option<PathBuf>,
-    pub active_home_after: Option<PathBuf>,
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,16 +47,6 @@ struct CredentialMetadata {
     legacy_global_codex_home_restored_at_epoch_seconds: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyGlobalCodexHomeState {
-    pub restore_required: bool,
-    pub can_restore: bool,
-    pub current_value: Option<String>,
-    pub restore_value: Option<String>,
-    pub restored_at_epoch_seconds: Option<u64>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct CodexHomeOwnership {
@@ -169,17 +65,6 @@ struct CodexHomeReservation {
     owner: String,
     reserved_at_epoch_seconds: u64,
     profile_key: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct OriginalCodexHomeState {
-    #[serde(default)]
-    pub captured: bool,
-    #[serde(default)]
-    pub value: Option<String>,
-    #[serde(default)]
-    pub capture_source: String,
 }
 
 impl Default for CredentialMetadata {
@@ -693,66 +578,6 @@ fn merge_workspace_options(
         .collect()
 }
 
-fn load_metadata() -> Result<CredentialMetadata> {
-    let path = metadata_path();
-    let source = if path.exists() {
-        Some(path.clone())
-    } else if legacy_metadata_path().exists() {
-        Some(legacy_metadata_path())
-    } else {
-        None
-    };
-    let mut metadata = if let Some(source) = source.as_ref() {
-        let content = fs::read(source)
-            .with_context(|| format!("读取 Codex 凭证元数据失败: {}", source.display()))?;
-        crate::json_compat::from_slice::<CredentialMetadata>(&content)
-            .with_context(|| format!("解析 Codex 凭证元数据失败: {}", source.display()))?
-    } else {
-        CredentialMetadata::default()
-    };
-    let previous_version = metadata.version;
-    let needs_version_migration = previous_version < METADATA_VERSION;
-    for profile in &mut metadata.profiles {
-        normalize_profile(profile);
-    }
-    let legacy_profile_homes_migrated = migrate_legacy_profile_homes(&mut metadata)?;
-    let default_home_migrated_profile = migrate_active_profile_to_default_home(&mut metadata)?;
-    if previous_version < 2 && metadata.active_profile_id.is_none() {
-        metadata.active_profile_id = metadata.active_workspace_id.and_then(|id| {
-            metadata
-                .profiles
-                .iter()
-                .find(|p| p.workspace_id == id)
-                .map(|p| p.profile_id.clone())
-        });
-        if metadata.active_profile_id.is_some() {
-            metadata.active_mode = AuthMode::Baijimu;
-        }
-    }
-    let baseline_captured = capture_original_codex_home(&mut metadata)?;
-    metadata.version = METADATA_VERSION;
-    if source.as_ref() != Some(&path)
-        || needs_version_migration
-        || baseline_captured
-        || legacy_profile_homes_migrated
-        || default_home_migrated_profile.is_some()
-    {
-        save_metadata(&metadata)?;
-    }
-    if let Some(profile) = default_home_migrated_profile.as_ref() {
-        if read_codex_api_key(&Path::new(&profile.codex_home).join(OWNED_AUTH_FILE))?.is_some()
-            && managed_config_ready(&Path::new(&profile.codex_home).join(OWNED_CONFIG_FILE))
-        {
-            commit_default_home_ownership(profile)?;
-        }
-    }
-    if let Some(source) = source.filter(|source| source != &path) {
-        fs::remove_file(&source)
-            .with_context(|| format!("清理旧版元数据失败: {}", source.display()))?;
-    }
-    Ok(metadata)
-}
-
 pub fn pending_profile_home_migration() -> Result<Option<PendingProfileHomeMigration>> {
     let path = metadata_path();
     let source = if path.exists() {
@@ -913,11 +738,6 @@ fn legacy_global_codex_home_state(
         restore_value: metadata.original_codex_home_state.value.clone(),
         restored_at_epoch_seconds: metadata.legacy_global_codex_home_restored_at_epoch_seconds,
     }
-}
-
-fn save_metadata(metadata: &CredentialMetadata) -> Result<()> {
-    atomic_write_private(&metadata_path(), &serde_json::to_vec_pretty(metadata)?)?;
-    verify_private_file(&metadata_path())
 }
 
 fn normalize_profile(profile: &mut CredentialProfile) {
@@ -1341,94 +1161,6 @@ fn sanitize_path_segment(value: &str) -> String {
 
 fn default_environment() -> String {
     "prod".to_string()
-}
-
-fn legacy_config_dir() -> PathBuf {
-    if let Some(config_home) = std::env::var_os("BAIJIMU_CONFIG_HOME") {
-        return PathBuf::from(config_home).join("baijimu");
-    }
-    home_dir().join(".config").join("baijimu")
-}
-
-fn metadata_path() -> PathBuf {
-    connector_data_dir().join(METADATA_FILE)
-}
-fn legacy_metadata_path() -> PathBuf {
-    legacy_config_dir().join(METADATA_FILE)
-}
-fn connector_data_dir() -> PathBuf {
-    std::env::var_os("BAIJIMU_CONNECTOR_DATA_DIR")
-        .or_else(|| std::env::var_os("CODEX_CONNECTOR_HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))
-}
-fn home_dir() -> PathBuf {
-    #[cfg(windows)]
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
-        return PathBuf::from(profile);
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-fn now_epoch_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default()
-}
-
-fn atomic_write_private(path: &Path, content: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("创建目录失败: {}", parent.display()))?;
-        set_private_directory(parent)?;
-    }
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let temp = path.with_extension(format!("tmp-{}-{unique}", std::process::id()));
-    fs::write(&temp, content).with_context(|| format!("写入临时文件失败: {}", temp.display()))?;
-    set_private_file(&temp)?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    fs::rename(&temp, path).with_context(|| format!("替换文件失败: {}", path.display()))?;
-    set_private_file(path)?;
-    Ok(())
-}
-fn verify_private_file(path: &Path) -> Result<()> {
-    let metadata =
-        fs::metadata(path).with_context(|| format!("回读文件失败: {}", path.display()))?;
-    if !metadata.is_file() || metadata.len() == 0 {
-        anyhow::bail!("文件为空或不是普通文件: {}", path.display());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            anyhow::bail!("文件权限不是 600: {}", path.display());
-        }
-    }
-    Ok(())
-}
-fn set_private_directory(_path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(_path, fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
-}
-fn set_private_file(_path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(_path, fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
