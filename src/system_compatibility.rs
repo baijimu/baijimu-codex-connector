@@ -65,7 +65,7 @@ pub fn ensure_supported(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "windows"))]
 pub fn validate_version(value: &str) -> Result<()> {
     NumericVersion::parse(value).map(|_| ())
 }
