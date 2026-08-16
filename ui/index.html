@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Codex 工作区管理</title>
+    <title>Codex 集成管理</title>
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./app.js"></script>
   </head>
@@ -14,11 +14,16 @@
         <div class="brand-mark" aria-hidden="true">C</div>
         <div class="hero-copy">
           <p class="eyebrow">Codex 本地应用</p>
-          <h1 id="page-title">正在准备安装 Codex</h1>
-          <p id="page-description">正在检查本机环境并准备初始化，请保持此页面打开。</p>
+          <h1 id="page-title">Codex 集成管理</h1>
+          <p id="page-description">Connector 接入与 Codex 运行环境相互独立；可先接入百积木，再按需安装 Codex。</p>
         </div>
         <button id="refresh-button" class="button secondary" type="button" hidden>刷新状态</button>
       </header>
+
+      <nav class="view-tabs" role="tablist" aria-label="Codex 集成管理">
+        <button id="integration-tab" class="view-tab active" type="button" role="tab" aria-selected="true" aria-controls="integration-view">百积木接入</button>
+        <button id="runtime-tab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="runtime-view">Codex 运行环境</button>
+      </nav>
 
       <div id="message" class="message" role="status" aria-live="polite" hidden></div>
       <div id="error" class="message error error-with-action" role="alert" hidden>
@@ -46,6 +51,34 @@
           </div>
         </section>
       </div>
+
+      <div id="integration-view" class="view-panel" role="tabpanel" aria-labelledby="integration-tab">
+      <section class="panel integration-panel" aria-labelledby="integration-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">百积木接入</p>
+            <h2 id="integration-title">Connector 已独立接入</h2>
+          </div>
+          <span id="connector-status-badge" class="status-badge neutral">检查中</span>
+        </div>
+        <dl class="status-grid integration-status-grid">
+          <div><dt>Connector 进程</dt><dd id="connector-process-status">正在检查</dd></div>
+          <div><dt>平台能力注册</dt><dd id="connector-registration-status">正在检查</dd></div>
+          <div><dt>Codex 会话能力</dt><dd id="codex-capability-status">正在检查</dd></div>
+        </dl>
+        <p class="integration-note">Connector 安装成功后即可由百积木发现和管理；只有会话、线程和对话等 Codex 能力需要本机运行环境。</p>
+      </section>
+
+      <section id="integration-unavailable-panel" class="panel capability-panel" aria-labelledby="capability-title" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">能力状态</p>
+            <h2 id="capability-title">Codex 会话能力暂不可用</h2>
+          </div>
+          <button id="go-to-runtime-button" class="button primary" type="button">前往安装 Codex</button>
+        </div>
+        <p id="capability-message" class="section-note capability-note">Connector 已在线，但需要安装 Codex 运行环境后才能查询会话或发起对话。</p>
+      </section>
 
       <section id="management-active-panel" class="panel active-panel" aria-labelledby="active-title" hidden>
         <div class="section-heading active-heading">
@@ -96,13 +129,20 @@
         </div>
       </section>
 
+      <footer id="management-footer" class="privacy-note" hidden>
+        <strong>安全边界</strong>
+        <span>工作区选择、安装修复和桌面启动只通过本机管理令牌调用；Connector 的远程会话能力不会在此页面中重复展示。</span>
+      </footer>
+      </div>
+
+      <div id="runtime-view" class="view-panel" role="tabpanel" aria-labelledby="runtime-tab" hidden>
       <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title">
         <div class="section-heading">
           <div>
             <p class="eyebrow">安装与修复</p>
             <h2 id="setup-title">本机 Codex</h2>
           </div>
-          <p class="section-note">首次使用会自动安装并配置 Codex；失败时可查看准确步骤并重新修复。</p>
+          <span id="runtime-status-badge" class="status-badge neutral">检查中</span>
         </div>
         <p id="setup-message" class="section-note setup-message">正在读取初始化状态…</p>
         <div id="setup-progress" class="setup-progress" hidden>
@@ -123,16 +163,15 @@
           </div>
           <ol id="setup-step-list" class="setup-step-list" aria-label="Codex 初始化步骤"></ol>
         </div>
-        <div id="setup-actions" class="form-actions" hidden>
-          <p>全新用户会把当前工作区绑定到默认 .codex 并在验证后尝试自动打开；如系统未能自动打开，可从应用列表手动打开 ChatGPT。已有个人 .codex 时保持原样，工作区改用隔离目录。</p>
-          <button id="setup-retry-button" class="button primary" type="button" hidden>重新安装并修复</button>
+        <div id="setup-actions" class="form-actions">
+          <p>安装操作仅在这里由用户明确发起。全新用户会把当前工作区绑定到默认 .codex；已有个人 .codex 时保持原样，工作区使用隔离目录。</p>
+          <div class="setup-action-buttons">
+            <button id="runtime-go-integration-button" class="button secondary" type="button" hidden>前往百积木接入</button>
+            <button id="setup-action-button" class="button primary" type="button" hidden>安装 Codex</button>
+          </div>
         </div>
       </section>
-
-      <footer id="management-footer" class="privacy-note" hidden>
-        <strong>安全边界</strong>
-        <span>工作区选择、安装修复和桌面启动只通过本机管理令牌调用；Connector 的远程会话能力不会在此页面中重复展示。</span>
-      </footer>
+      </div>
     </main>
   </body>
 </html>

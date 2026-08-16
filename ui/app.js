@@ -1,22 +1,27 @@
 import {
   DEFAULT_MODEL,
+  codexCapabilityMeta,
   connectorStartupRetryable,
   credentialStatusMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
-  setupPageMeta,
+  setupActionMeta,
   setupStatusMeta,
   shouldShowSetupProgress,
 } from "./state.mjs";
 
 const elementIds = [
   "page-title", "page-description", "refresh-button", "open-codex-button",
+  "integration-tab", "runtime-tab", "integration-view", "runtime-view",
+  "connector-status-badge", "connector-process-status", "connector-registration-status",
+  "codex-capability-status", "integration-unavailable-panel", "capability-message",
+  "go-to-runtime-button", "runtime-go-integration-button", "runtime-status-badge",
   "message", "error", "error-text",
   "error-retry-button", "warning",
   "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
   "credential-badge", "active-workspace", "active-codex-home", "active-model",
   "codex-configured", "auth-mode", "auth-profile-list", "setup-status",
-  "setup-message", "setup-retry-button", "setup-progress", "setup-progress-label",
+  "setup-message", "setup-action-button", "setup-progress", "setup-progress-label",
   "setup-progress-percent", "setup-progress-track", "setup-progress-bar", "setup-step-list",
   "switch-progress", "switch-progress-message", "auth-switch-modal",
   "auth-switch-modal-title", "auth-switch-modal-message", "auth-switch-cancel",
@@ -32,6 +37,7 @@ let setupMonitorGeneration = 0;
 let pendingCodexLaunch = null;
 let accountBusy = false;
 let errorRetryAction = null;
+let activeView = "integration";
 const STARTUP_RETRY_ATTEMPTS = 20;
 
 function bridge() {
@@ -76,25 +82,54 @@ function clearNotices() {
   showError("");
 }
 
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error || "操作失败");
+function selectView(view) {
+  activeView = view === "runtime" ? "runtime" : "integration";
+  renderView();
 }
 
-function setupRetryLabel() {
-  return ({
-    interrupted: "立即重试",
-    needs_retry: "重新验证",
-  })[String(setupState?.status || "")] || "重新安装并修复";
+function renderView() {
+  const integrationActive = activeView === "integration";
+  const capability = codexCapabilityMeta(setupState);
+  elements["integration-tab"].classList.toggle("active", integrationActive);
+  elements["integration-tab"].setAttribute("aria-selected", String(integrationActive));
+  elements["runtime-tab"].classList.toggle("active", !integrationActive);
+  elements["runtime-tab"].setAttribute("aria-selected", String(!integrationActive));
+  elements["integration-view"].hidden = !integrationActive;
+  elements["runtime-view"].hidden = integrationActive;
+  elements["management-active-panel"].hidden = !integrationActive || !capability.available;
+  elements["management-workspace-panel"].hidden = !integrationActive || !capability.available;
+  elements["management-footer"].hidden = !integrationActive || !capability.available;
+  elements["integration-unavailable-panel"].hidden = !integrationActive || capability.available;
+}
+
+function renderIntegrationState() {
+  const capability = codexCapabilityMeta(setupState);
+  elements["connector-status-badge"].textContent = "在线";
+  elements["connector-status-badge"].className = "status-badge success";
+  elements["connector-process-status"].textContent = "运行中";
+  elements["connector-registration-status"].textContent = "已注册";
+  elements["codex-capability-status"].textContent = capability.label;
+  elements["capability-message"].textContent = capability.message;
+  elements["runtime-status-badge"].textContent = capability.label;
+  elements["runtime-status-badge"].className = `status-badge ${capability.tone}`;
+  elements["runtime-go-integration-button"].hidden = !capability.available;
+  elements["refresh-button"].hidden = false;
+  renderView();
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error || "操作失败");
 }
 
 function setAccountBusy(value) {
   accountBusy = value;
   elements["refresh-button"].disabled = value;
   elements["open-codex-button"].disabled = value;
-  elements["setup-retry-button"].disabled = value;
+  elements["setup-action-button"].disabled = value;
   elements["error-retry-button"].disabled = value || !errorRetryAction;
   elements["restore-external-home-button"].disabled = value;
-  elements["setup-retry-button"].textContent = value ? "正在处理…" : setupRetryLabel();
+  const action = setupActionMeta(setupState);
+  elements["setup-action-button"].textContent = value ? "正在处理…" : action.label;
   document.querySelectorAll(".auth-switch").forEach((button) => {
     button.disabled = value || button.dataset.profileDisabled === "true";
   });
@@ -305,30 +340,20 @@ async function launchCodex(request, progressMessage) {
 
 function renderSetupState() {
   const meta = setupStatusMeta(setupState);
-  renderPageMode();
+  const action = setupActionMeta(setupState);
   const status = meta.status;
   elements["setup-status"].textContent = meta.label;
   elements["setup-message"].textContent = meta.showCurrentError
     ? setupState.error
-    : setupState?.message || "等待初始化";
+    : setupState?.message || (status === "pending"
+      ? "Codex 尚未安装。Connector 已在线，可在需要会话能力时再安装。"
+      : "等待初始化");
   renderSetupProgress();
+  renderIntegrationState();
   setAccountBusy(status === "running");
-  elements["setup-actions"].hidden = !meta.retryable;
-  elements["setup-retry-button"].hidden = !meta.retryable;
-  elements["setup-retry-button"].textContent = setupRetryLabel();
-}
-
-function renderPageMode() {
-  const page = setupPageMeta(setupState);
-  const setupVisible = page.mode === "setup";
-  document.body.dataset.pageMode = page.mode;
-  elements["page-title"].textContent = page.title;
-  elements["page-description"].textContent = page.description;
-  elements["refresh-button"].hidden = setupVisible;
-  elements["management-active-panel"].hidden = setupVisible;
-  elements["management-workspace-panel"].hidden = setupVisible;
-  elements["management-footer"].hidden = setupVisible;
-  elements["setup-panel"].hidden = !setupVisible;
+  elements["setup-actions"].hidden = false;
+  elements["setup-action-button"].hidden = !action.visible;
+  elements["setup-action-button"].textContent = action.label;
 }
 
 function formatBytes(value) {
@@ -474,6 +499,21 @@ async function ensureCodexReady() {
   }
 }
 
+async function startSetup() {
+  clearNotices();
+  setAccountBusy(true);
+  try {
+    await ensureCodexReady();
+  } catch (error) {
+    showError(errorMessage(error), {
+      action: startSetup,
+      label: "重新检查",
+    });
+  } finally {
+    if (setupState?.status !== "running") setAccountBusy(false);
+  }
+}
+
 async function loadState({ ensureReady = false, monitor = true, successMessage = "" } = {}) {
   clearNotices();
   setAccountBusy(true);
@@ -490,6 +530,10 @@ async function loadState({ ensureReady = false, monitor = true, successMessage =
     else if (monitor && setupState?.status === "running") void monitorSetup();
     if (successMessage) setMessage("message", successMessage);
   } catch (error) {
+    elements["connector-status-badge"].textContent = "检查失败";
+    elements["connector-status-badge"].className = "status-badge danger";
+    elements["connector-process-status"].textContent = "无法确认";
+    elements["connector-registration-status"].textContent = "无法确认";
     showError(errorMessage(error), {
       action: () => loadState({ ensureReady, monitor, successMessage }),
       label: "重新加载",
@@ -522,6 +566,12 @@ async function retrySetup() {
       label: "重试修复",
     });
   }
+}
+
+async function performSetupAction() {
+  const action = setupActionMeta(setupState);
+  if (action.operation === "ensure") await startSetup();
+  else if (action.operation === "retry") await retrySetup();
 }
 
 async function restoreExternalCodexHome() {
@@ -564,11 +614,15 @@ async function openCodex() {
 }
 
 elements["refresh-button"].addEventListener("click", () => void loadState({
-  ensureReady: true,
-  successMessage: "工作区状态已刷新。",
+  ensureReady: false,
+  successMessage: "接入与运行环境状态已刷新。",
 }));
 elements["open-codex-button"].addEventListener("click", () => void openCodex());
-elements["setup-retry-button"].addEventListener("click", () => void retrySetup());
+elements["setup-action-button"].addEventListener("click", () => void performSetupAction());
+elements["integration-tab"].addEventListener("click", () => selectView("integration"));
+elements["runtime-tab"].addEventListener("click", () => selectView("runtime"));
+elements["go-to-runtime-button"].addEventListener("click", () => selectView("runtime"));
+elements["runtime-go-integration-button"].addEventListener("click", () => selectView("integration"));
 elements["restore-external-home-button"].addEventListener("click", () => void restoreExternalCodexHome());
 elements["error-retry-button"].addEventListener("click", () => {
   const action = errorRetryAction;
@@ -583,4 +637,4 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && pendingCodexLaunch) closeAuthSwitchModal();
 });
 
-void loadState({ ensureReady: true });
+void loadState({ ensureReady: false });

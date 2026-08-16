@@ -2,8 +2,8 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.64",
-  "description": "初始化并配置 Codex，将全新用户的首个工作区绑定到默认 .codex，保护既有目录，并用所选工作区状态启动 Codex。",
+  "version": "1.2.65",
+  "description": "独立接入百积木 Connector，并在应用内按需安装和配置 Codex 运行环境；保护既有目录并支持工作区隔离。",
   "publisher": {
     "name": "Baijimu",
     "homepage": "https://baijimu.com"
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.64"
+    "revision": "v1.2.65"
   },
   "runtime": {
     "type": "process",
@@ -124,11 +124,11 @@
   "ui": {
     "type": "embedded",
     "entry": "ui/index.html",
-    "title": "Codex 工作区管理",
+    "title": "Codex 集成管理",
     "defaultView": true
   },
   "releaseNotes": [
-    "安装和工作区配置成功后仍自动打开并校验 ChatGPT/Codex 桌面窗口；自动打开校验失败只提示用户手动打开，不回滚已完成的安装。显式切换工作区时，启动、可见窗口或 CODEX_HOME 校验失败仍会恢复原有档案。"
+    "Connector 安装、启动和百积木能力注册不再触发 Codex 初始化；应用内新增百积木接入与 Codex 运行环境两个视图，只有用户明确操作时才安装或修复 Codex。"
   ],
   "configSchema": {
     "type": "object",
