@@ -48,9 +48,11 @@ test("connector owns its application release and upstream artifact sync workflow
   assert.doesNotMatch(workflow, /release-codex-local-app/);
   assert.doesNotMatch(workflow, /Jenkins/i);
   assert.doesNotMatch(workflow, /gitee\.com|zxflimit_admin/);
-  assert.match(workflow, /BAIJIMU_CLI_VERSION: "0\.1\.50"/);
-  assert.match(workflow, /41b688119de97f48be68a7a33e5c60134464a32a19ec19bd5c120976cbdd5b14/);
-  assert.match(workflow, /managed-tool-artifacts\/baijimu-cli\/releases\/v0\.1\.50/);
+  assert.match(workflow, /BAIJIMU_CLI_VERSION: "0\.1\.51"/);
+  assert.match(workflow, /d2300f0f79760de152310b7a390daeea69c0e5543dad3b8acca54056606d2cf7/);
+  assert.match(workflow, /managed-tool-artifacts\/baijimu-cli\/releases\/v0\.1\.51/);
+  assert.match(workflow, /hostVersion=0\.2\.95/);
+  assert.match(workflow, /connector\.presentation\.icon\.v1/);
   assert.doesNotMatch(workflow, /bridge-agent\/releases/);
   assert.match(workflow, /git merge-base --is-ancestor "\$sha" origin\/main/);
   assert.match(workflow, /needs\.validate\.outputs\.verify == 'true'/);
@@ -339,6 +341,8 @@ test("market publisher uses explicit immutable version creation and review submi
   assert.match(script, /local-app submit codex "\$version"/);
   assert.doesNotMatch(script, /local-app publish codex/);
   assert.match(script, /momoplan\/baijimu-connector-codex/);
+  assert.match(script, /minimumVersion == "0\.2\.95"/);
+  assert.match(script, /connector\.presentation\.icon\.v1/);
   assert.doesNotMatch(script, /codex-local-app-v|gitee\.com|zxflimit_admin/);
 });
 

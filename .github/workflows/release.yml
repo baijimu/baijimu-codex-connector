@@ -25,9 +25,9 @@ permissions:
   contents: read
 
 env:
-  BAIJIMU_CLI_VERSION: "0.1.50"
-  BAIJIMU_CLI_LINUX_SHA256: "41b688119de97f48be68a7a33e5c60134464a32a19ec19bd5c120976cbdd5b14"
-  BAIJIMU_CLI_LINUX_URL: "https://download.baijimu.com/managed-tool-artifacts/baijimu-cli/releases/v0.1.50/41b688119de97f48be68a7a33e5c60134464a32a19ec19bd5c120976cbdd5b14/baijimu-cli-0.1.50-linux-x64.zip"
+  BAIJIMU_CLI_VERSION: "0.1.51"
+  BAIJIMU_CLI_LINUX_SHA256: "d2300f0f79760de152310b7a390daeea69c0e5543dad3b8acca54056606d2cf7"
+  BAIJIMU_CLI_LINUX_URL: "https://download.baijimu.com/managed-tool-artifacts/baijimu-cli/releases/v0.1.51/d2300f0f79760de152310b7a390daeea69c0e5543dad3b8acca54056606d2cf7/baijimu-cli-0.1.51-linux-x64.zip"
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
@@ -651,7 +651,7 @@ jobs:
             PUBLISHED)
               for target in 'macos&arch=aarch64' 'windows&arch=x86_64' 'linux&arch=x86_64'; do
                 curl -fsS --retry 5 --retry-all-errors --retry-delay 3 \
-                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex?platform=${target}&hostVersion=0.2.82&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1" \
+                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex?platform=${target}&hostVersion=0.2.95&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
                   | jq -e --arg version "$VERSION" '
                     (.data // .).latestVersion.version == $version and
                     (.data // .).latestVersion.compatibility.compatible == true and
@@ -759,8 +759,8 @@ jobs:
               'https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex' \
               --data-urlencode "platform=$platform" \
               --data-urlencode "arch=$arch" \
-              --data-urlencode 'hostVersion=0.2.82' \
-              --data-urlencode 'hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1' \
+              --data-urlencode 'hostVersion=0.2.95' \
+              --data-urlencode 'hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1' \
               -o "$response"
             jq -e --arg version "$VERSION" --arg platform "$platform" --arg arch "$arch" \
               --slurpfile connector connector.json \
@@ -776,8 +776,9 @@ jobs:
                 } and
                 .latestVersion.manifest.runtime.processOwnership == "host" and
                 .latestVersion.manifest.runtime.args == ["start"] and
-                .latestVersion.manifest.hostRequirements.minimumVersion == "0.2.82" and
+                .latestVersion.manifest.hostRequirements.minimumVersion == "0.2.95" and
                 (.latestVersion.manifest.hostRequirements.capabilities | index("connector.managed-tool-dependencies.v1") != null) and
+                (.latestVersion.manifest.hostRequirements.capabilities | index("connector.presentation.icon.v1") != null) and
                 .latestVersion.manifest.managedToolDependencies == $connector[0].managedToolDependencies and
                 any(.latestVersion.manifest.artifacts[];
                   .platform == $platform and
