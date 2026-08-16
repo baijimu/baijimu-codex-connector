@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.62",
+  "version": "1.2.63",
   "description": "初始化并配置 Codex，将全新用户的首个工作区绑定到默认 .codex，保护既有目录，并用所选工作区状态启动 Codex。",
   "publisher": {
     "name": "Baijimu",
@@ -11,7 +11,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.62"
+    "revision": "v1.2.63"
   },
   "runtime": {
     "type": "process",
@@ -128,7 +128,7 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "安装前从百积木上游制品清单读取桌面应用声明的最低系统版本，并对已安装应用再次读取原生包元数据；系统不兼容时以 UNSUPPORTED_OS_VERSION 失败关闭，不下载、不切换工作区档案，也不建议无效重试。"
+    "安装和工作区配置成功后仍自动打开并校验 ChatGPT/Codex 桌面窗口；自动打开校验失败只提示用户手动打开，不回滚已完成的安装。显式切换工作区时，启动、可见窗口或 CODEX_HOME 校验失败仍会恢复原有档案。"
   ],
   "configSchema": {
     "type": "object",

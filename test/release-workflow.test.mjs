@@ -361,7 +361,7 @@ test("setup treats desktop launch as a post-configuration convenience", async ()
 
   assert.ok(activationIndex >= 0, "setup must finalize the selected profile");
   assert.ok(launchIndex > activationIndex, "desktop launch must follow profile finalization");
-  assert.match(setup, /SetupOutcome::from_desktop_launch/);
+  assert.match(setup, /SetupCompletion::from_desktop_launch/);
   assert.match(setup, /UNSUPPORTED_OS_VERSION/);
   assert.match(setup, /retryable: false/);
   assert.match(compatibilityModule, /pub const ERROR_CODE_UNSUPPORTED_OS_VERSION/);
@@ -382,6 +382,9 @@ test("setup treats desktop launch as a post-configuration convenience", async ()
   assert.match(setup, /"Text"/);
   assert.match(setup, /\[Console\]::OutputEncoding/);
   assert.match(desktop, /Start-Process -FilePath \$entry\[0\]\.executable/);
+  assert.match(desktop, /BaijimuCodexVisibleWindowProbe/);
+  assert.match(desktop, /kCGWindowListOptionOnScreenOnly/);
+  assert.match(desktop, /未在 45 秒内显示可见窗口/);
   assert.doesNotMatch(desktop, /shell:AppsFolder/);
   assert.match(desktop, /Get-StartApps/);
   assert.match(desktop, /PackageFamilyName/);
