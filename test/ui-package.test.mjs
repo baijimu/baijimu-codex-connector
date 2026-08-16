@@ -102,7 +102,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   ]);
   assert.equal(manifest.setup, undefined);
   assert.deepEqual(manifest.hostRequirements, {
-    minimumVersion: "0.2.94",
+    minimumVersion: "0.2.95",
     capabilities: [
       "connector.process.host-managed.v1",
       "connector.managed-tool-dependencies.v1",
