@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 pub const ERROR_CODE_UNSUPPORTED_OS_VERSION: &str = "UNSUPPORTED_OS_VERSION";
@@ -64,6 +65,7 @@ pub fn ensure_supported(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 pub fn validate_version(value: &str) -> Result<()> {
     NumericVersion::parse(value).map(|_| ())
 }
@@ -78,6 +80,7 @@ pub fn message_is_unsupported_os_version(message: &str) -> bool {
     message.contains(ERROR_CODE_UNSUPPORTED_OS_VERSION)
 }
 
+#[cfg(target_os = "macos")]
 pub fn current_macos_version() -> Result<String> {
     let output = Command::new("/usr/bin/sw_vers")
         .arg("-productVersion")
