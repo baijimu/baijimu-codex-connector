@@ -4,11 +4,12 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  codexCapabilityMeta,
   connectorStartupRetryable,
   credentialStatusMeta,
   normalizeCredentialState,
   normalizeSetupProgress,
-  setupPageMeta,
+  setupActionMeta,
   setupStatusMeta,
   shouldShowSetupProgress,
 } from "../ui/state.mjs";
@@ -71,7 +72,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.deepEqual(manifest.ui, {
     type: "embedded",
     entry: "ui/index.html",
-    title: "Codex 工作区管理",
+    title: "Codex 集成管理",
     defaultView: true,
   });
   assert.deepEqual(Object.keys(manifest.management.operations).sort(), [
@@ -108,9 +109,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
   }]);
   assert.equal(manifest.releaseNotes.length, 1);
   assert.ok(manifest.releaseNotes.every((note) => typeof note === "string" && note.trim()));
-  assert.match(manifest.releaseNotes[0], /自动打开并校验/);
-  assert.match(manifest.releaseNotes[0], /不回滚已完成的安装/);
-  assert.match(manifest.releaseNotes[0], /显式切换工作区/);
+  assert.match(manifest.releaseNotes[0], /不再触发 Codex 初始化/);
+  assert.match(manifest.releaseNotes[0], /百积木接入与 Codex 运行环境/);
+  assert.match(manifest.releaseNotes[0], /用户明确操作/);
   assert.equal(manifest.configSchema.properties.codexBinary, undefined);
   assert.equal(manifest.configSchema.properties.baijimuBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
@@ -119,11 +120,14 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/i);
   assert.doesNotMatch(html, /项目 ID|确认设备/);
   assert.match(html, /选择工作区并启动 Codex/);
+  assert.match(html, /id="integration-tab"/);
+  assert.match(html, /id="runtime-tab"/);
+  assert.match(html, /Connector 已独立接入/);
+  assert.match(html, /前往安装 Codex/);
   assert.match(html, /auth-switch-modal/);
   assert.match(html, /error-retry-button/);
   assert.match(html, /restore-external-home-button/);
-  assert.match(html, /验证后尝试自动打开/);
-  assert.match(html, /应用列表手动打开 ChatGPT/);
+  assert.match(html, /安装操作仅在这里由用户明确发起/);
   assert.match(html, /id="management-active-panel"[^>]*hidden/);
   assert.match(html, /id="management-workspace-panel"[^>]*hidden/);
   assert.match(html, /id="setup-panel"/);
@@ -146,28 +150,41 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(app, /重新检查/);
   assert.match(app, /connectorStartupRetryable/);
   assert.match(app, /restoreExternalCodexHome/);
-  assert.match(app, /setupPageMeta/);
+  assert.match(app, /codexCapabilityMeta/);
+  assert.match(app, /setupActionMeta/);
+  assert.match(app, /void loadState\(\{ ensureReady: false \}\)/);
+  assert.doesNotMatch(app, /void loadState\(\{ ensureReady: true \}\)/);
   assert.match(app, /management-workspace-panel/);
   assert.doesNotMatch(app, /Promise\.all\(\[loadSessions\(\), loadState\(\)\]\)/);
   await readFile(join(root, "ui", "state.mjs"), "utf8");
   await readFile(join(root, "ui", "styles.css"), "utf8");
 });
 
-test("UI keeps setup isolated until initialization succeeds", () => {
-  assert.deepEqual(setupPageMeta({ status: "pending" }), {
-    mode: "setup",
-    title: "正在准备安装 Codex",
-    description: "正在检查本机环境并准备初始化，请保持此页面打开。",
+test("UI keeps Connector registration independent from Codex runtime readiness", () => {
+  assert.deepEqual(codexCapabilityMeta({ status: "pending" }), {
+    available: false,
+    label: "尚未安装",
+    tone: "neutral",
+    message: "Connector 已在线；按需安装 Codex 后即可使用会话能力。",
   });
-  assert.equal(setupPageMeta({ status: "running" }).mode, "setup");
-  assert.equal(setupPageMeta({ status: "failed" }).mode, "setup");
-  assert.equal(setupPageMeta({ status: "interrupted" }).mode, "setup");
-  assert.equal(setupPageMeta({ status: "needs_retry" }).mode, "setup");
-  assert.deepEqual(setupPageMeta({ status: "succeeded" }), {
-    mode: "management",
-    title: "Codex 工作区管理",
-    description: "选择百积木工作区并启动 Codex；默认 .codex 只绑定一个工作区，其他工作区使用隔离目录。",
+  assert.equal(codexCapabilityMeta({ status: "running" }).available, false);
+  assert.equal(codexCapabilityMeta({ status: "failed" }).label, "安装失败");
+  assert.equal(codexCapabilityMeta({ status: "interrupted" }).available, false);
+  assert.equal(codexCapabilityMeta({ status: "needs_retry" }).available, false);
+  assert.deepEqual(codexCapabilityMeta({ status: "succeeded" }), {
+    available: true,
+    label: "可用",
+    tone: "success",
+    message: "Codex 运行环境已就绪，可以查询会话、读取线程并发起对话。",
   });
+  assert.deepEqual(setupActionMeta({ status: "pending" }), {
+    visible: true,
+    operation: "ensure",
+    label: "安装 Codex",
+  });
+  assert.equal(setupActionMeta({ status: "failed" }).operation, "retry");
+  assert.equal(setupActionMeta({ status: "running" }).visible, false);
+  assert.equal(setupActionMeta({ status: "succeeded" }).visible, false);
 });
 
 test("UI retries only the bounded Connector startup response", () => {

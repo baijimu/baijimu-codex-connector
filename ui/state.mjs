@@ -130,33 +130,60 @@ export function setupStatusMeta(value) {
   };
 }
 
-export function setupPageMeta(value) {
+export function codexCapabilityMeta(value) {
   const status = String(value?.status || "pending");
   if (status === "succeeded") {
     return {
-      mode: "management",
-      title: "Codex 工作区管理",
-      description: "选择百积木工作区并启动 Codex；默认 .codex 只绑定一个工作区，其他工作区使用隔离目录。",
-    };
-  }
-  if (["failed", "interrupted", "needs_retry"].includes(status)) {
-    return {
-      mode: "setup",
-      title: "Codex 安装需要处理",
-      description: "查看安装结果并完成修复；成功前不会展示工作区和环境操作。",
+      available: true,
+      label: "可用",
+      tone: "success",
+      message: "Codex 运行环境已就绪，可以查询会话、读取线程并发起对话。",
     };
   }
   if (status === "running") {
     return {
-      mode: "setup",
-      title: "正在安装 Codex",
-      description: "正在为当前授权工作区安装并配置本机 Codex，请保持此页面打开。",
+      available: false,
+      label: "安装中",
+      tone: "warning",
+      message: "Connector 已在线；Codex 正在安装，完成前会话能力暂不可用。",
+    };
+  }
+  if (["failed", "interrupted", "needs_retry"].includes(status)) {
+    return {
+      available: false,
+      label: status === "failed" ? "安装失败" : "需要处理",
+      tone: "danger",
+      message: "Connector 已在线；Codex 运行环境需要修复，会话能力暂不可用。",
     };
   }
   return {
-    mode: "setup",
-    title: "正在准备安装 Codex",
-    description: "正在检查本机环境并准备初始化，请保持此页面打开。",
+    available: false,
+    label: "尚未安装",
+    tone: "neutral",
+    message: "Connector 已在线；按需安装 Codex 后即可使用会话能力。",
+  };
+}
+
+export function setupActionMeta(value) {
+  const meta = setupStatusMeta(value);
+  if (meta.status === "pending") {
+    return { visible: true, operation: "ensure", label: "安装 Codex" };
+  }
+  if (meta.retryable) {
+    const labels = {
+      interrupted: "立即重试",
+      needs_retry: "重新验证",
+    };
+    return {
+      visible: true,
+      operation: "retry",
+      label: labels[meta.status] || "重新安装并修复",
+    };
+  }
+  return {
+    visible: false,
+    operation: null,
+    label: meta.status === "running" ? "正在处理…" : "安装 Codex",
   };
 }
 
