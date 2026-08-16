@@ -35,6 +35,13 @@ test("connector manifest declares the packaged embedded UI", async () => {
     assert.match(description, /[\u3400-\u9fff]/, `连接器描述必须面向中文用户：${description}`);
   }
   assert.equal(manifest.version, packageManifest.version);
+  assert.equal(manifest.icon.mediaType, "image/png");
+  const iconBytes = Buffer.from(manifest.icon.data, "base64");
+  assert.deepEqual(iconBytes.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.equal(iconBytes.readUInt32BE(16), 256);
+  assert.equal(iconBytes.readUInt32BE(20), 256);
+  assert.ok(iconBytes.length <= 128 * 1024);
+  assert.equal(iconBytes.toString("base64"), manifest.icon.data);
   assert.equal(manifest.source.type, "github");
   assert.equal(manifest.source.repo, "momoplan/baijimu-connector-codex");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
@@ -72,7 +79,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.deepEqual(manifest.ui, {
     type: "embedded",
     entry: "ui/index.html",
-    title: "Codex 集成管理",
+    title: "管理",
     defaultView: true,
   });
   assert.deepEqual(Object.keys(manifest.management.operations).sort(), [
@@ -95,10 +102,11 @@ test("connector manifest declares the packaged embedded UI", async () => {
   ]);
   assert.equal(manifest.setup, undefined);
   assert.deepEqual(manifest.hostRequirements, {
-    minimumVersion: "0.2.82",
+    minimumVersion: "0.2.94",
     capabilities: [
       "connector.process.host-managed.v1",
       "connector.managed-tool-dependencies.v1",
+      "connector.presentation.icon.v1",
     ],
   });
   assert.deepEqual(manifest.managedToolDependencies, [{
@@ -109,9 +117,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
   }]);
   assert.equal(manifest.releaseNotes.length, 1);
   assert.ok(manifest.releaseNotes.every((note) => typeof note === "string" && note.trim()));
-  assert.match(manifest.releaseNotes[0], /自动打开后会立即幂等初始化/);
-  assert.match(manifest.releaseNotes[0], /不再要求再次点击安装/);
-  assert.match(manifest.releaseNotes[0], /失败时才显示明确的修复操作/);
+  assert.match(manifest.releaseNotes[0], /Bridge Agent 统一展示的本地应用图标/);
+  assert.match(manifest.releaseNotes[0], /移除重复的应用基础信息和二级页签/);
+  assert.match(manifest.releaseNotes[0], /连续的业务分区/);
   assert.equal(manifest.configSchema.properties.codexBinary, undefined);
   assert.equal(manifest.configSchema.properties.baijimuBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
@@ -120,8 +128,8 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/i);
   assert.doesNotMatch(html, /项目 ID|确认设备/);
   assert.match(html, /选择工作区并启动 Codex/);
-  assert.match(html, /id="integration-tab"/);
-  assert.match(html, /id="runtime-tab"/);
+  assert.doesNotMatch(html, /brand-mark|Codex 本地应用|Codex 集成管理/);
+  assert.doesNotMatch(html, /role="tablist"|role="tab"|role="tabpanel"/);
   assert.match(html, /Connector 已独立接入/);
   assert.match(html, /查看初始化进度/);
   assert.match(html, /auth-switch-modal/);
@@ -131,6 +139,7 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /id="management-active-panel"[^>]*hidden/);
   assert.match(html, /id="management-workspace-panel"[^>]*hidden/);
   assert.match(html, /id="setup-panel"/);
+  assert.ok(html.indexOf("integration-panel") < html.indexOf("setup-panel"));
   const app = await readFile(join(root, "ui", "app.js"), "utf8");
   assert.match(app, /启动个人 Codex/);
   assert.match(app, /切换回百积木接管前的个人 Codex 状态目录重新启动/);
@@ -153,7 +162,8 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(app, /codexCapabilityMeta/);
   assert.match(app, /setupActionMeta/);
   assert.match(app, /void loadState\(\{ ensureReady: true \}\)/);
-  assert.match(app, /case "initializing":\s+selectView\("runtime"\)/);
+  assert.match(app, /case "initializing":\s+elements\["setup-panel"\]\.scrollIntoView/);
+  assert.doesNotMatch(app, /selectView|activeView|renderView/);
   assert.doesNotMatch(app, /performSetupAction|startSetup/);
   assert.match(app, /management-workspace-panel/);
   assert.doesNotMatch(app, /Promise\.all\(\[loadSessions\(\), loadState\(\)\]\)/);

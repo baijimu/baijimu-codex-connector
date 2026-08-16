@@ -4,27 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Codex 集成管理</title>
+    <title>管理</title>
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./app.js"></script>
   </head>
   <body>
     <main class="app-shell">
-      <header class="hero">
-        <div class="brand-mark" aria-hidden="true">C</div>
-        <div class="hero-copy">
-          <p class="eyebrow">Codex 本地应用</p>
-          <h1 id="page-title">Codex 集成管理</h1>
-          <p id="page-description">安装本地应用后会自动初始化 Codex；失败时可在这里查看准确步骤并修复。</p>
-        </div>
-        <button id="refresh-button" class="button secondary" type="button" hidden>刷新状态</button>
-      </header>
-
-      <nav class="view-tabs" role="tablist" aria-label="Codex 集成管理">
-        <button id="integration-tab" class="view-tab active" type="button" role="tab" aria-selected="true" aria-controls="integration-view">百积木接入</button>
-        <button id="runtime-tab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="runtime-view">Codex 运行环境</button>
-      </nav>
-
       <div id="message" class="message" role="status" aria-live="polite" hidden></div>
       <div id="error" class="message error error-with-action" role="alert" hidden>
         <span id="error-text"></span>
@@ -52,14 +37,16 @@
         </section>
       </div>
 
-      <div id="integration-view" class="view-panel" role="tabpanel" aria-labelledby="integration-tab">
       <section class="panel integration-panel" aria-labelledby="integration-title">
         <div class="section-heading">
           <div>
             <p class="eyebrow">百积木接入</p>
             <h2 id="integration-title">Connector 已独立接入</h2>
           </div>
-          <span id="connector-status-badge" class="status-badge neutral">检查中</span>
+          <div class="section-heading-actions">
+            <span id="connector-status-badge" class="status-badge neutral">检查中</span>
+            <button id="refresh-button" class="button secondary compact" type="button" hidden>刷新状态</button>
+          </div>
         </div>
         <dl class="status-grid integration-status-grid">
           <div><dt>Connector 进程</dt><dd id="connector-process-status">正在检查</dd></div>
@@ -133,10 +120,7 @@
         <strong>安全边界</strong>
         <span>工作区选择、安装修复和桌面启动只通过本机管理令牌调用；Connector 的远程会话能力不会在此页面中重复展示。</span>
       </footer>
-      </div>
-
-      <div id="runtime-view" class="view-panel" role="tabpanel" aria-labelledby="runtime-tab" hidden>
-      <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title">
+      <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title" tabindex="-1">
         <div class="section-heading">
           <div>
             <p class="eyebrow">安装与修复</p>
@@ -166,12 +150,10 @@
         <div id="setup-actions" class="form-actions">
           <p>首次初始化会自动开始。全新用户会把当前工作区绑定到默认 .codex；已有个人 .codex 时保持原样，工作区使用隔离目录。只有失败后才需要手动修复。</p>
           <div class="setup-action-buttons">
-            <button id="runtime-go-integration-button" class="button secondary" type="button" hidden>前往百积木接入</button>
             <button id="setup-action-button" class="button primary" type="button" hidden>重新安装并修复</button>
           </div>
         </div>
       </section>
-      </div>
     </main>
   </body>
 </html>

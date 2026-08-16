@@ -11,11 +11,10 @@ import {
 } from "./state.mjs";
 
 const elementIds = [
-  "page-title", "page-description", "refresh-button", "open-codex-button",
-  "integration-tab", "runtime-tab", "integration-view", "runtime-view",
+  "refresh-button", "open-codex-button",
   "connector-status-badge", "connector-process-status", "connector-registration-status",
   "codex-capability-status", "integration-unavailable-panel", "capability-message",
-  "go-to-runtime-button", "runtime-go-integration-button", "runtime-status-badge",
+  "go-to-runtime-button", "runtime-status-badge",
   "message", "error", "error-text",
   "error-retry-button", "warning",
   "legacy-home-migration", "legacy-home-message", "restore-external-home-button",
@@ -37,7 +36,6 @@ let setupMonitorGeneration = 0;
 let pendingCodexLaunch = null;
 let accountBusy = false;
 let errorRetryAction = null;
-let activeView = "integration";
 const STARTUP_RETRY_ATTEMPTS = 20;
 
 function bridge() {
@@ -82,24 +80,12 @@ function clearNotices() {
   showError("");
 }
 
-function selectView(view) {
-  activeView = view === "runtime" ? "runtime" : "integration";
-  renderView();
-}
-
-function renderView() {
-  const integrationActive = activeView === "integration";
+function renderContentVisibility() {
   const capability = codexCapabilityMeta(setupState);
-  elements["integration-tab"].classList.toggle("active", integrationActive);
-  elements["integration-tab"].setAttribute("aria-selected", String(integrationActive));
-  elements["runtime-tab"].classList.toggle("active", !integrationActive);
-  elements["runtime-tab"].setAttribute("aria-selected", String(!integrationActive));
-  elements["integration-view"].hidden = !integrationActive;
-  elements["runtime-view"].hidden = integrationActive;
-  elements["management-active-panel"].hidden = !integrationActive || !capability.available;
-  elements["management-workspace-panel"].hidden = !integrationActive || !capability.available;
-  elements["management-footer"].hidden = !integrationActive || !capability.available;
-  elements["integration-unavailable-panel"].hidden = !integrationActive || capability.available;
+  elements["management-active-panel"].hidden = !capability.available;
+  elements["management-workspace-panel"].hidden = !capability.available;
+  elements["management-footer"].hidden = !capability.available;
+  elements["integration-unavailable-panel"].hidden = capability.available;
 }
 
 function renderIntegrationState() {
@@ -112,9 +98,8 @@ function renderIntegrationState() {
   elements["capability-message"].textContent = capability.message;
   elements["runtime-status-badge"].textContent = capability.label;
   elements["runtime-status-badge"].className = `status-badge ${capability.tone}`;
-  elements["runtime-go-integration-button"].hidden = !capability.available;
   elements["refresh-button"].hidden = false;
-  renderView();
+  renderContentVisibility();
 }
 
 function errorMessage(error) {
@@ -479,7 +464,7 @@ async function ensureCodexReady() {
     case "ready":
       return;
     case "initializing":
-      selectView("runtime");
+      elements["setup-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
       setMessage("message", readiness?.message || "正在自动下载安装并配置本机 Codex。");
       void monitorSetup();
       return;
@@ -599,10 +584,10 @@ elements["refresh-button"].addEventListener("click", () => void loadState({
 }));
 elements["open-codex-button"].addEventListener("click", () => void openCodex());
 elements["setup-action-button"].addEventListener("click", () => void retrySetup());
-elements["integration-tab"].addEventListener("click", () => selectView("integration"));
-elements["runtime-tab"].addEventListener("click", () => selectView("runtime"));
-elements["go-to-runtime-button"].addEventListener("click", () => selectView("runtime"));
-elements["runtime-go-integration-button"].addEventListener("click", () => selectView("integration"));
+elements["go-to-runtime-button"].addEventListener("click", () => {
+  elements["setup-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
+  elements["setup-panel"].focus({ preventScroll: true });
+});
 elements["restore-external-home-button"].addEventListener("click", () => void restoreExternalCodexHome());
 elements["error-retry-button"].addEventListener("click", () => {
   const action = errorRetryAction;
