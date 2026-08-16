@@ -334,6 +334,14 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
 mod platform {
     use super::*;
     use anyhow::Context;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+    use core_graphics::window::{
+        copy_window_info, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
+        kCGWindowListOptionOnScreenOnly, kCGWindowOwnerPID,
+    };
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
     use std::thread;
@@ -398,16 +406,24 @@ mod platform {
         )?;
 
         let started = Instant::now();
+        let mut running_process_seen = false;
         while started.elapsed() < LAUNCH_TIMEOUT {
             let info = application_info(&bundle_id)?;
             if has_running_process(&info) {
+                running_process_seen = true;
                 verify_application_codex_home(&info, codex_home)?;
-                return Ok(());
+                let pid = application_pid(&info).context("无法读取 ChatGPT/Codex 桌面进程 PID")?;
+                if has_visible_window(pid)? {
+                    return Ok(());
+                }
             }
             thread::sleep(POLL_INTERVAL);
         }
 
-        anyhow::bail!("ChatGPT/Codex 桌面应用未在 45 秒内启动");
+        if running_process_seen {
+            anyhow::bail!("ChatGPT/Codex 桌面应用已启动进程，但未在 45 秒内显示可见窗口");
+        }
+        anyhow::bail!("ChatGPT/Codex 桌面应用未在 45 秒内启动进程");
     }
 
     fn installed_application_path() -> Option<PathBuf> {
@@ -483,6 +499,31 @@ mod platform {
         })
     }
 
+    fn has_visible_window(pid: u32) -> Result<bool> {
+        let expected_pid =
+            i32::try_from(pid).context("ChatGPT/Codex 桌面进程 PID 超出系统窗口接口范围")?;
+        let windows = copy_window_info(
+            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )
+        .context("读取 macOS 可见窗口列表失败")?;
+        let owner_pid_key = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) };
+
+        for value in windows.get_all_values() {
+            let dictionary = unsafe {
+                CFDictionary::<CFString, CFType>::wrap_under_get_rule(value as CFDictionaryRef)
+            };
+            let owner_pid = dictionary
+                .find(&owner_pid_key)
+                .and_then(|value| value.downcast::<CFNumber>())
+                .and_then(|value| value.to_i32());
+            if owner_pid == Some(expected_pid) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn verify_application_codex_home(info: &str, codex_home: &Path) -> Result<()> {
         let pid = application_pid(info).context("无法读取 ChatGPT/Codex 桌面进程 PID")?;
         let output = Command::new("/bin/ps")
@@ -535,13 +576,24 @@ mod platform {
         use super::*;
 
         #[test]
-        fn parses_lsappinfo_process_state_without_requiring_a_window() {
+        fn parses_lsappinfo_process_state_independently_from_window_verification() {
             let hidden = "\"pid\"=682\n\"visible\"=[ NULL ]\n\"windows\"=[ NULL ]\n";
             assert!(has_running_process(hidden));
             assert_eq!(application_pid(hidden), Some(682));
 
             let missing = "Application not found\n";
             assert!(!has_running_process(missing));
+        }
+
+        #[test]
+        #[ignore = "requires a running ChatGPT/Codex app with an on-screen window"]
+        fn detects_a_real_visible_codex_window() {
+            let app_path = installed_application_path().expect("desktop app must be installed");
+            let bundle_id = application_bundle_id(&app_path).unwrap();
+            let info = application_info(&bundle_id).unwrap();
+            let pid = application_pid(&info).expect("desktop app must be running");
+
+            assert!(has_visible_window(pid).unwrap());
         }
     }
 }

@@ -1,7 +1,7 @@
 use super::contract::{InstallerStatus, InstallerStepState, MacosInstallerResult};
 use super::{
     atomic_write_private, compact_error, installer_state_dir, launch_desktop_after_setup,
-    set_private_directory, SetupOutcome,
+    set_private_directory, SetupCompletion,
 };
 use crate::{codex_binary, credential};
 use anyhow::{Context, Result};
@@ -25,7 +25,7 @@ pub(super) fn run_install(
     existing_codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
     native_script_path: &Path,
-) -> Result<SetupOutcome> {
+) -> Result<SetupCompletion> {
     let state_dir = installer_state_dir();
     fs::create_dir_all(&state_dir)
         .with_context(|| format!("创建安装状态目录失败: {}", state_dir.display()))?;
@@ -123,7 +123,7 @@ impl<'a> MacosInstaller<'a> {
         })
     }
 
-    fn execute(&mut self) -> Result<SetupOutcome> {
+    fn execute(&mut self) -> Result<SetupCompletion> {
         self.ensure_desktop_app()?;
         self.ensure_codex_cli()?;
 
@@ -185,7 +185,7 @@ impl<'a> MacosInstaller<'a> {
         let outcome = if workspace_profile_is_active {
             launch_desktop_after_setup(&profile_home)
         } else {
-            SetupOutcome::completed_without_desktop_launch()
+            SetupCompletion::completed_without_desktop_launch()
         };
         if let Some(warning) = outcome.warning() {
             self.result.warnings.push(warning.to_string());

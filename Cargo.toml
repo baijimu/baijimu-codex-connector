@@ -1,6 +1,6 @@
 [package]
 name = "baijimu-connector-codex"
-version = "1.2.62"
+version = "1.2.63"
 edition = "2021"
 license = "MIT"
 description = "Baijimu Local connector for Codex app-server."
@@ -23,3 +23,7 @@ toml_edit = "0.22"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 winreg = "0.55"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10.1"
+core-graphics = "0.25.0"

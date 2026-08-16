@@ -67,10 +67,10 @@ pub struct SetupStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SetupOutcome {
-    DesktopOpened,
-    DesktopOpenRequiresManualAction(String),
-    PersonalProfilePreserved,
+enum SetupCompletion {
+    DesktopLaunchVerified,
+    DesktopLaunchWarning(String),
+    DesktopLaunchNotRequested,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,16 +98,16 @@ fn classify_setup_failure(error: &anyhow::Error) -> SetupFailureClassification {
     }
 }
 
-impl SetupOutcome {
+impl SetupCompletion {
     fn completed_without_desktop_launch() -> Self {
-        Self::PersonalProfilePreserved
+        Self::DesktopLaunchNotRequested
     }
 
     fn from_desktop_launch(result: Result<()>) -> Self {
         match result {
-            Ok(()) => Self::DesktopOpened,
-            Err(error) => Self::DesktopOpenRequiresManualAction(format!(
-                    "ChatGPT/Codex 已完成安装配置，但未能自动打开桌面应用。请到系统应用列表中手动找到并打开 ChatGPT 应用（部分版本名称为 Codex）。自动打开错误：{}",
+            Ok(()) => Self::DesktopLaunchVerified,
+            Err(error) => Self::DesktopLaunchWarning(format!(
+                    "ChatGPT/Codex 已完成安装配置，但自动打开桌面窗口的校验未通过。请到系统应用列表中手动找到并打开 ChatGPT 应用（部分版本名称为 Codex）。自动打开校验错误：{}",
                     compact_error(&format!("{error:#}"))
                 )),
         }
@@ -115,9 +115,11 @@ impl SetupOutcome {
 
     fn message(&self) -> String {
         match self {
-            Self::DesktopOpened => "Codex 应用初始化已完成，当前工作区已自动打开。".to_string(),
-            Self::DesktopOpenRequiresManualAction(warning) => warning.clone(),
-            Self::PersonalProfilePreserved => {
+            Self::DesktopLaunchVerified => {
+                "Codex 应用初始化已完成，并已确认当前工作区桌面窗口打开。".to_string()
+            }
+            Self::DesktopLaunchWarning(warning) => warning.clone(),
+            Self::DesktopLaunchNotRequested => {
                 "Codex 应用初始化已完成；检测到既有个人配置，未自动切换或打开工作区应用。"
                     .to_string()
             }
@@ -127,7 +129,7 @@ impl SetupOutcome {
     #[cfg(any(target_os = "macos", test))]
     fn warning(&self) -> Option<&str> {
         match self {
-            Self::DesktopOpenRequiresManualAction(warning) => Some(warning),
+            Self::DesktopLaunchWarning(warning) => Some(warning),
             _ => None,
         }
     }
@@ -358,7 +360,7 @@ fn run_install(
     workspace_id: u64,
     codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
-) -> Result<SetupOutcome> {
+) -> Result<SetupCompletion> {
     #[cfg(target_os = "macos")]
     {
         let setup_dir = connector_home().join("setup");
@@ -398,7 +400,7 @@ fn run_windows_install(
     workspace_id: u64,
     codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
-) -> Result<SetupOutcome> {
+) -> Result<SetupCompletion> {
     let setup_dir = connector_home().join("setup");
     fs::create_dir_all(&setup_dir)
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
@@ -492,19 +494,19 @@ fn run_windows_install(
     }
     Ok(match activated_profile_home {
         Some(profile_home) => launch_desktop_after_setup(&profile_home),
-        None => SetupOutcome::completed_without_desktop_launch(),
+        None => SetupCompletion::completed_without_desktop_launch(),
     })
 }
 
-fn launch_desktop_after_setup(profile_home: &Path) -> SetupOutcome {
+fn launch_desktop_after_setup(profile_home: &Path) -> SetupCompletion {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        SetupOutcome::from_desktop_launch(crate::desktop::launch_and_verify(profile_home))
+        SetupCompletion::from_desktop_launch(crate::desktop::launch_and_verify(profile_home))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = profile_home;
-        SetupOutcome::completed_without_desktop_launch()
+        SetupCompletion::completed_without_desktop_launch()
     }
 }
 
@@ -687,15 +689,13 @@ mod tests {
 
     #[test]
     fn desktop_auto_launch_failure_keeps_setup_successful_and_requires_manual_open() {
-        let outcome = SetupOutcome::from_desktop_launch(Err(anyhow::anyhow!(
+        let outcome = SetupCompletion::from_desktop_launch(Err(anyhow::anyhow!(
             "operating system rejected automatic launch"
         )));
 
-        assert!(matches!(
-            &outcome,
-            SetupOutcome::DesktopOpenRequiresManualAction(_)
-        ));
+        assert!(matches!(&outcome, SetupCompletion::DesktopLaunchWarning(_)));
         assert!(outcome.message().contains("已完成安装配置"));
+        assert!(outcome.message().contains("桌面窗口的校验未通过"));
         assert!(outcome.message().contains("手动找到并打开 ChatGPT"));
         assert!(outcome
             .warning()
@@ -737,10 +737,10 @@ mod tests {
 
     #[test]
     fn successful_desktop_auto_launch_reports_the_opened_workspace() {
-        let outcome = SetupOutcome::from_desktop_launch(Ok(()));
+        let outcome = SetupCompletion::from_desktop_launch(Ok(()));
 
-        assert_eq!(outcome, SetupOutcome::DesktopOpened);
-        assert!(outcome.message().contains("当前工作区已自动打开"));
+        assert_eq!(outcome, SetupCompletion::DesktopLaunchVerified);
+        assert!(outcome.message().contains("已确认当前工作区桌面窗口打开"));
         assert_eq!(outcome.warning(), None);
     }
 
