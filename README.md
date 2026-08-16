@@ -135,6 +135,19 @@ npm run test:rust
 The integration tests use a fake app-server process and do not require Codex
 credentials.
 
+### Rust architecture
+
+- `main.rs` is the composition root and loopback HTTP/management boundary.
+- `cli.rs` parses commands; `process_runtime.rs` owns daemon, PID, health, and process-control behavior.
+- `app_server.rs` owns the Codex child-process session. One dedicated reader continuously drains stdout, routes responses by request ID to an in-memory pending-request table, and records notifications even when no request is active. Request timeouts use waiter deadlines rather than a blocking stdout read. Profile switches, shutdown, and child exit fail all pending requests and clear the process-owned session state.
+- `app_server/event_store.rs` owns the bounded in-memory notification history and one bounded event-delivery worker. Neither pending requests nor event queues are persisted.
+- `invoke.rs` owns the Codex RPC projection and project/session aggregation use cases.
+- `credential/contract.rs` defines credential-management DTOs, while `credential/store.rs` owns metadata paths, migration loading, private permissions, and atomic persistence. `credential.rs` remains the profile lifecycle service.
+- `setup/contract.rs` defines the closed setup/progress contract; platform installers remain adapters under `setup/`.
+
+Raw `serde_json::Value` is intentionally retained at the opaque Codex JSON-RPC
+boundary. Connector-owned credential and setup state uses typed contracts.
+
 ## Release
 
 This repository is the source of truth for both Codex local-app delivery paths,

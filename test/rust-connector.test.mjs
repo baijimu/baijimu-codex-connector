@@ -400,14 +400,17 @@ test("rust connector forwards Codex app-server calls", async () => {
     assert.ok(events.data.events.some((event) => event.method === "item/agentMessage/delta"));
 
     const eventDeadline = Date.now() + 5_000;
-    while (turnCompletedAttempts < 2 && Date.now() < eventDeadline) {
+    while (turnCompletedAttempts < 3 && Date.now() < eventDeadline) {
       await delay(25);
     }
-    assert.equal(turnCompletedAttempts, 2, JSON.stringify(emittedEvents));
+    assert.equal(turnCompletedAttempts, 3, JSON.stringify(emittedEvents));
     const domainAttempts = emittedEvents.filter(
       (event) => event.event === "codexTurnCompleted",
     );
-    assert.equal(domainAttempts[0].eventId, domainAttempts[1].eventId);
+    assert.equal(domainAttempts.length, 3);
+    assert.ok(domainAttempts.every(
+      (event) => event.eventId === domainAttempts[0].eventId,
+    ));
     assert.deepEqual(domainAttempts[1].payload, {
       schemaVersion: 1,
       threadId: "thr_test",
@@ -425,6 +428,80 @@ test("rust connector forwards Codex app-server calls", async () => {
   } finally {
     await stopConnector(proc, port);
     await new Promise((resolvePromise) => eventServer.close(resolvePromise));
+    await rm(connectorHome, { recursive: true, force: true });
+  }
+});
+
+test("rust app-server transport dispatches concurrent responses and idle notifications", async () => {
+  execFileSync("cargo", ["build"], { cwd: root, stdio: "inherit" });
+  const port = await freePort();
+  const connectorHome = await mkdtemp(join(tmpdir(), "codex-app-server-io-"));
+  const proc = spawn(cli, [
+    "start",
+    "--port",
+    String(port),
+    "--codex-args",
+    JSON.stringify([fakeCodex]),
+  ], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      BAIJIMU_CONNECTOR_DATA_DIR: connectorHome,
+      CODEX_CONNECTOR_ENABLE_TEST_SHUTDOWN: "1",
+    },
+  });
+  const invoke = (method, params = {}, timeoutMs = 2_000) => fetch(
+    `http://127.0.0.1:${port}/invoke/request`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ method, params, timeoutMs }),
+    },
+  );
+
+  try {
+    await waitForHealth(port);
+    await waitForReadiness(port);
+
+    const concurrentStartedAt = Date.now();
+    const concurrentResponses = await Promise.all([
+      invoke("test/delay", { token: "first", delayMs: 300 }).then((response) => response.json()),
+      invoke("test/delay", { token: "second", delayMs: 300 }).then((response) => response.json()),
+    ]);
+    const concurrentElapsedMs = Date.now() - concurrentStartedAt;
+    assert.ok(concurrentElapsedMs < 550, `requests were serialized (${concurrentElapsedMs}ms)`);
+    assert.deepEqual(
+      concurrentResponses.map((response) => response.data.result.token).sort(),
+      ["first", "second"],
+    );
+
+    const initialization = await (await invoke("test/initializeCount")).json();
+    assert.equal(initialization.data.result.initializeCount, 1);
+
+    const scheduled = await invoke("test/scheduleNotification", { marker: "idle", delayMs: 30 });
+    assert.equal(scheduled.status, 200);
+    await delay(100);
+    const events = await postJson(port, "/invoke/recentEvents", { afterSequence: 0 });
+    assert.ok(events.data.events.some(
+      (event) => event.method === "test/idleNotification" && event.params.marker === "idle",
+    ));
+
+    const timeoutStartedAt = Date.now();
+    const timedOut = await invoke("test/silent", {}, 100);
+    const timeoutElapsedMs = Date.now() - timeoutStartedAt;
+    assert.equal(timedOut.status, 500);
+    assert.match((await timedOut.json()).error.message, /timed out/);
+    assert.ok(timeoutElapsedMs < 500, `timeout was not enforced (${timeoutElapsedMs}ms)`);
+
+    const exitStartedAt = Date.now();
+    const exited = await invoke("test/exit", { delayMs: 30 }, 2_000);
+    const exitElapsedMs = Date.now() - exitStartedAt;
+    assert.equal(exited.status, 500);
+    assert.match((await exited.json()).error.message, /exited/);
+    assert.ok(exitElapsedMs < 500, `child exit did not fail pending request (${exitElapsedMs}ms)`);
+  } finally {
+    await stopConnector(proc, port);
     await rm(connectorHome, { recursive: true, force: true });
   }
 });

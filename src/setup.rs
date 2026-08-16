@@ -68,9 +68,9 @@ pub struct SetupStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SetupCompletion {
-    DesktopLaunchVerified,
-    DesktopLaunchWarning(String),
-    DesktopLaunchNotRequested,
+    Verified,
+    Warning(String),
+    NotRequested,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,13 +100,13 @@ fn classify_setup_failure(error: &anyhow::Error) -> SetupFailureClassification {
 
 impl SetupCompletion {
     fn completed_without_desktop_launch() -> Self {
-        Self::DesktopLaunchNotRequested
+        Self::NotRequested
     }
 
     fn from_desktop_launch(result: Result<()>) -> Self {
         match result {
-            Ok(()) => Self::DesktopLaunchVerified,
-            Err(error) => Self::DesktopLaunchWarning(format!(
+            Ok(()) => Self::Verified,
+            Err(error) => Self::Warning(format!(
                     "ChatGPT/Codex 已完成安装配置，但自动打开桌面窗口的校验未通过。请到系统应用列表中手动找到并打开 ChatGPT 应用（部分版本名称为 Codex）。自动打开校验错误：{}",
                     compact_error(&format!("{error:#}"))
                 )),
@@ -115,11 +115,11 @@ impl SetupCompletion {
 
     fn message(&self) -> String {
         match self {
-            Self::DesktopLaunchVerified => {
+            Self::Verified => {
                 "Codex 应用初始化已完成，并已确认当前工作区桌面窗口打开。".to_string()
             }
-            Self::DesktopLaunchWarning(warning) => warning.clone(),
-            Self::DesktopLaunchNotRequested => {
+            Self::Warning(warning) => warning.clone(),
+            Self::NotRequested => {
                 "Codex 应用初始化已完成；检测到既有个人配置，未自动切换或打开工作区应用。"
                     .to_string()
             }
@@ -129,7 +129,7 @@ impl SetupCompletion {
     #[cfg(any(target_os = "macos", test))]
     fn warning(&self) -> Option<&str> {
         match self {
-            Self::DesktopLaunchWarning(warning) => Some(warning),
+            Self::Warning(warning) => Some(warning),
             _ => None,
         }
     }
@@ -693,7 +693,7 @@ mod tests {
             "operating system rejected automatic launch"
         )));
 
-        assert!(matches!(&outcome, SetupCompletion::DesktopLaunchWarning(_)));
+        assert!(matches!(&outcome, SetupCompletion::Warning(_)));
         assert!(outcome.message().contains("已完成安装配置"));
         assert!(outcome.message().contains("桌面窗口的校验未通过"));
         assert!(outcome.message().contains("手动找到并打开 ChatGPT"));
@@ -739,7 +739,7 @@ mod tests {
     fn successful_desktop_auto_launch_reports_the_opened_workspace() {
         let outcome = SetupCompletion::from_desktop_launch(Ok(()));
 
-        assert_eq!(outcome, SetupCompletion::DesktopLaunchVerified);
+        assert_eq!(outcome, SetupCompletion::Verified);
         assert!(outcome.message().contains("已确认当前工作区桌面窗口打开"));
         assert_eq!(outcome.warning(), None);
     }
