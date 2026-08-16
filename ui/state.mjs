@@ -158,17 +158,14 @@ export function codexCapabilityMeta(value) {
   }
   return {
     available: false,
-    label: "尚未安装",
+    label: "准备中",
     tone: "neutral",
-    message: "Connector 已在线；按需安装 Codex 后即可使用会话能力。",
+    message: "Connector 已在线；正在准备自动初始化 Codex 运行环境。",
   };
 }
 
 export function setupActionMeta(value) {
   const meta = setupStatusMeta(value);
-  if (meta.status === "pending") {
-    return { visible: true, operation: "ensure", label: "安装 Codex" };
-  }
   if (meta.retryable) {
     const labels = {
       interrupted: "立即重试",
@@ -183,7 +180,9 @@ export function setupActionMeta(value) {
   return {
     visible: false,
     operation: null,
-    label: meta.status === "running" ? "正在处理…" : "安装 Codex",
+    label: meta.status === "running" || meta.status === "pending"
+      ? "正在处理…"
+      : "重新安装并修复",
   };
 }
 

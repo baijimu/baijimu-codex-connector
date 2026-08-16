@@ -109,9 +109,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
   }]);
   assert.equal(manifest.releaseNotes.length, 1);
   assert.ok(manifest.releaseNotes.every((note) => typeof note === "string" && note.trim()));
-  assert.match(manifest.releaseNotes[0], /不再触发 Codex 初始化/);
-  assert.match(manifest.releaseNotes[0], /百积木接入与 Codex 运行环境/);
-  assert.match(manifest.releaseNotes[0], /用户明确操作/);
+  assert.match(manifest.releaseNotes[0], /自动打开后会立即幂等初始化/);
+  assert.match(manifest.releaseNotes[0], /不再要求再次点击安装/);
+  assert.match(manifest.releaseNotes[0], /失败时才显示明确的修复操作/);
   assert.equal(manifest.configSchema.properties.codexBinary, undefined);
   assert.equal(manifest.configSchema.properties.baijimuBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");
@@ -123,11 +123,11 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(html, /id="integration-tab"/);
   assert.match(html, /id="runtime-tab"/);
   assert.match(html, /Connector 已独立接入/);
-  assert.match(html, /前往安装 Codex/);
+  assert.match(html, /查看初始化进度/);
   assert.match(html, /auth-switch-modal/);
   assert.match(html, /error-retry-button/);
   assert.match(html, /restore-external-home-button/);
-  assert.match(html, /安装操作仅在这里由用户明确发起/);
+  assert.match(html, /首次初始化会自动开始/);
   assert.match(html, /id="management-active-panel"[^>]*hidden/);
   assert.match(html, /id="management-workspace-panel"[^>]*hidden/);
   assert.match(html, /id="setup-panel"/);
@@ -152,8 +152,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
   assert.match(app, /restoreExternalCodexHome/);
   assert.match(app, /codexCapabilityMeta/);
   assert.match(app, /setupActionMeta/);
-  assert.match(app, /void loadState\(\{ ensureReady: false \}\)/);
-  assert.doesNotMatch(app, /void loadState\(\{ ensureReady: true \}\)/);
+  assert.match(app, /void loadState\(\{ ensureReady: true \}\)/);
+  assert.match(app, /case "initializing":\s+selectView\("runtime"\)/);
+  assert.doesNotMatch(app, /performSetupAction|startSetup/);
   assert.match(app, /management-workspace-panel/);
   assert.doesNotMatch(app, /Promise\.all\(\[loadSessions\(\), loadState\(\)\]\)/);
   await readFile(join(root, "ui", "state.mjs"), "utf8");
@@ -163,9 +164,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
 test("UI keeps Connector registration independent from Codex runtime readiness", () => {
   assert.deepEqual(codexCapabilityMeta({ status: "pending" }), {
     available: false,
-    label: "尚未安装",
+    label: "准备中",
     tone: "neutral",
-    message: "Connector 已在线；按需安装 Codex 后即可使用会话能力。",
+    message: "Connector 已在线；正在准备自动初始化 Codex 运行环境。",
   });
   assert.equal(codexCapabilityMeta({ status: "running" }).available, false);
   assert.equal(codexCapabilityMeta({ status: "failed" }).label, "安装失败");
@@ -178,9 +179,9 @@ test("UI keeps Connector registration independent from Codex runtime readiness",
     message: "Codex 运行环境已就绪，可以查询会话、读取线程并发起对话。",
   });
   assert.deepEqual(setupActionMeta({ status: "pending" }), {
-    visible: true,
-    operation: "ensure",
-    label: "安装 Codex",
+    visible: false,
+    operation: null,
+    label: "正在处理…",
   });
   assert.equal(setupActionMeta({ status: "failed" }).operation, "retry");
   assert.equal(setupActionMeta({ status: "running" }).visible, false);
