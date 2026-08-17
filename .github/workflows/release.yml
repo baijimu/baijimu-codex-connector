@@ -359,8 +359,8 @@ jobs:
             test "$(printf '%s' "$release_json" | jq -r .tagName)" = "$RELEASE_TAG"
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" \
-              --draft --title "Codex Connector $VERSION" \
-              --notes "Signed codex-connector local application release $VERSION."
+              --draft --title "Codex 外部连接器 $VERSION" \
+              --notes "Codex 外部连接器 $VERSION 三平台签名发布。"
             release_is_draft=true
           fi
           existing="$RUNNER_TEMP/existing-release-assets"
