@@ -1,6 +1,6 @@
-# 百积木 Codex 外部连接器
+# 百积木 Codex 远程连接器
 
-`com.baijimu.connector.codex-connector` 是面向百积木 Relay 的独立 Codex CLI 外部连接器。它只负责：
+`com.baijimu.connector.codex-connector` 是面向百积木 Relay 的独立 Codex CLI 远程连接器。它只负责：
 
 - 安装、发现并验证官方 Codex CLI 与 `app-server` 能力；
 - 接收 Relay 鉴权后传入的可信 `workspaceId`；
@@ -8,7 +8,7 @@
 - 提供 `session/thread/turn/event` 和原始 app-server 请求接口；
 - 按工作区隔离 app-server 进程、凭证、任务状态和已读状态。
 
-它不安装或启动 ChatGPT/Codex 桌面应用，也不管理桌面当前工作区。桌面安装与工作区切换由继承线上身份的 `com.baijimu.connector.codex`（Codex 桌面管理器）负责。`com.baijimu.connector.codex-completion`（Codex 补全服务）继续独立提供 OpenAI 兼容补全接口，不并入本应用。
+它不安装或启动 ChatGPT/Codex 桌面应用，也不管理桌面当前工作区。桌面安装与工作区切换由继承线上身份的 `com.baijimu.connector.codex`（Codex 桌面管理器）负责。`com.baijimu.connector.codex-completion`（Codex 模型接口服务）继续独立提供 OpenAI 兼容模型接口，不并入本应用。
 
 ## 调用上下文
 

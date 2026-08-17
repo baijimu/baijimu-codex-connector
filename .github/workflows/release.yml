@@ -297,7 +297,7 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "connector.json"), "utf8"));
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
           if (manifest.source?.type !== "github" || manifest.source?.repo !== "momoplan/baijimu-codex-connector" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
-          if (manifest.id !== "com.baijimu.connector.codex-connector") throw new Error("connector identity mismatch");
+          if (manifest.id !== "com.baijimu.connector.codex-connector" || manifest.name !== "Codex 远程连接器") throw new Error("connector identity mismatch");
           if (manifest.schemaVersion !== "2.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || typeof manifest.transport !== "object" || !Array.isArray(manifest.methods) || !Array.isArray(manifest.events) || manifest.ui !== undefined) throw new Error("connector package contract is invalid");
           NODE
           binary_name=baijimu-connector-codex
@@ -359,8 +359,8 @@ jobs:
             test "$(printf '%s' "$release_json" | jq -r .tagName)" = "$RELEASE_TAG"
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" \
-              --draft --title "Codex 外部连接器 $VERSION" \
-              --notes "Codex 外部连接器 $VERSION 三平台签名发布。"
+              --draft --title "Codex 远程连接器 $VERSION" \
+              --notes "Codex 远程连接器 $VERSION 三平台签名发布。"
             release_is_draft=true
           fi
           existing="$RUNNER_TEMP/existing-release-assets"

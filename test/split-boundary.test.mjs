@@ -10,7 +10,7 @@ const read = (path) => readFile(join(root, path), "utf8");
 test("Connector manifest exposes only CLI and remote app-server responsibilities", async () => {
   const manifest = JSON.parse(await read("connector.json"));
   assert.equal(manifest.id, "com.baijimu.connector.codex-connector");
-  assert.equal(manifest.name, "Codex 外部连接器");
+  assert.equal(manifest.name, "Codex 远程连接器");
   assert.equal(manifest.version, "1.0.0");
   assert.equal(manifest.source.repo, "momoplan/baijimu-codex-connector");
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
@@ -32,7 +32,7 @@ test("Connector requires trusted workspace context and owns isolated profiles", 
   assert.match(main, /WORKSPACE_CONTEXT_REQUIRED/);
   assert.match(profile, /workspace-profiles/);
   assert.match(profile, /environment: String/);
-  assert.match(readme, /codex-completion`（Codex 补全服务）继续独立/);
+  assert.match(readme, /codex-completion`（Codex 模型接口服务）继续独立/);
 });
 
 test("Connector setup executes CLI installation from its own artifact catalog", async () => {
