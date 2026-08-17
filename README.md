@@ -1,6 +1,6 @@
 # Baijimu Codex Connector
 
-`com.baijimu.connector.codex` 是面向百积木 Relay 的 Codex CLI Connector。它只负责：
+`com.baijimu.connector.codex-connector` 是面向百积木 Relay 的独立 Codex CLI Connector。它只负责：
 
 - 安装、发现并验证官方 Codex CLI 与 `app-server` 能力；
 - 接收 Relay 鉴权后传入的可信 `workspaceId`；
@@ -8,7 +8,7 @@
 - 提供 `session/thread/turn/event` 和原始 app-server 请求接口；
 - 按工作区隔离 app-server 进程、凭证、任务状态和已读状态。
 
-它不安装或启动 ChatGPT/Codex 桌面应用，也不管理桌面当前工作区。桌面安装与工作区切换由独立的 `com.baijimu.connector.codex-desktop` 本地应用负责。`com.baijimu.connector.codex-completion` 继续独立提供直接使用底层 Codex 能力的 OpenAI 兼容补全接口。
+它不安装或启动 ChatGPT/Codex 桌面应用，也不管理桌面当前工作区。桌面安装与工作区切换由继承线上身份的 `com.baijimu.connector.codex`（Codex Desktop Manager）负责。`com.baijimu.connector.codex-completion` 继续独立提供 OpenAI 兼容补全接口，不并入本应用。
 
 ## 调用上下文
 
@@ -24,7 +24,7 @@ cargo run -- status
 cargo run -- stop
 ```
 
-默认监听 `127.0.0.1:18110`。Bridge Agent 会注入：
+默认监听 `127.0.0.1:18111`。Bridge Agent 会注入：
 
 - `BAIJIMU_CONNECTOR_DATA_DIR`：应用私有状态目录；
 - `CODEX_CONNECTOR_BAIJIMU_BINARY`：平台管理的 Baijimu CLI 绝对路径。
@@ -38,4 +38,4 @@ cargo test
 npm test
 ```
 
-发布由独立发布任务执行；本仓库的标签、制品、签名和市场版本必须保持同一版本号。
+本仓库是 `codex-connector` 客户端本地应用的唯一发布单元；源码主线为 `momoplan/baijimu-codex-connector/main`，标签、制品、签名和市场版本必须保持同一版本号。

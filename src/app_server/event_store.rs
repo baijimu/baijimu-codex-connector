@@ -199,7 +199,7 @@ impl PublisherWorker {
 
     fn publish(&self, job: PublishJob) {
         let request = json!({
-            "connectorId": "com.baijimu.connector.codex",
+            "connectorId": "com.baijimu.connector.codex-connector",
             "event": job.event_name,
             "eventId": job.event_id,
             "payload": job.payload,

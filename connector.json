@@ -1,8 +1,8 @@
 {
   "schemaVersion": "2.0",
-  "id": "com.baijimu.connector.codex",
-  "name": "Codex",
-  "version": "1.3.0",
+  "id": "com.baijimu.connector.codex-connector",
+  "name": "Codex Connector",
+  "version": "1.0.0",
   "description": "安装并托管 Codex CLI，按可信工作区上下文提供 app-server 会话、线程、轮次和事件接口。",
   "icon": {
     "mediaType": "image/png",
@@ -14,8 +14,8 @@
   },
   "source": {
     "type": "github",
-    "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.3.0"
+    "repo": "momoplan/baijimu-codex-connector",
+    "revision": "v1.0.0"
   },
   "runtime": {
     "type": "process",
@@ -29,14 +29,14 @@
     "processOwnership": "host",
     "healthCheck": {
       "type": "http",
-      "url": "http://127.0.0.1:18110/healthz",
+      "url": "http://127.0.0.1:18111/healthz",
       "timeoutSecs": 2,
       "expectStatus": 200
     }
   },
   "management": {
     "type": "http",
-    "baseUrl": "http://127.0.0.1:18110",
+    "baseUrl": "http://127.0.0.1:18111",
     "auth": {
       "type": "connector_token"
     },
@@ -79,14 +79,14 @@
     }
   ],
   "releaseNotes": [
-    "将桌面安装和工作区切换迁移到独立的 Codex 桌面环境应用；Connector 只安装 Codex CLI，并按 Relay 鉴权得到的 workspaceId 隔离 app-server 档案。"
+    "作为新的独立应用安装 Codex CLI，并按 Relay 鉴权得到的 workspaceId 隔离 app-server 档案；桌面安装和工作区切换继续由 codex 应用负责。"
   ],
   "configSchema": {
     "type": "object",
     "properties": {
       "port": {
         "type": "integer",
-        "default": 18110,
+        "default": 18111,
         "minimum": 1024,
         "maximum": 65535
       },
@@ -140,7 +140,7 @@
   ],
   "transport": {
     "type": "http",
-    "baseUrl": "http://127.0.0.1:18110"
+    "baseUrl": "http://127.0.0.1:18111"
   },
   "methods": [
     {

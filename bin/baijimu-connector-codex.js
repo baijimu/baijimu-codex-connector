@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const VERSION = "1.2.68";
 const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = 18110;
+const DEFAULT_PORT = 18111;
 const DEFAULT_LISTEN = "stdio://";
 const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
 const MAX_EVENTS = 1000;
@@ -1381,13 +1381,13 @@ function printHelp() {
   console.log(`baijimu-connector-codex ${VERSION}
 
 Usage:
-  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--listen stdio://] [--daemon]
+  baijimu-connector-codex start [--host 127.0.0.1] [--port 18111] [--listen stdio://] [--daemon]
   baijimu-connector-codex status
   baijimu-connector-codex stop
   baijimu-connector-codex --version
 
 Environment:
-  CODEX_CONNECTOR_PORT=18110
+  CODEX_CONNECTOR_PORT=18111
   CODEX_CONNECTOR_CODEX_ARGS='["app-server","--listen","stdio://"]'
 `);
 }

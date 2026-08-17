@@ -38,7 +38,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 18110;
+const DEFAULT_PORT: u16 = 18111;
 const DEFAULT_LISTEN: &str = "stdio://";
 const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 120_000;
 const MAX_EVENTS: usize = 1000;
@@ -540,7 +540,7 @@ fn handle_management(
             410,
             "该管理能力已从 Connector 移出；桌面安装和工作区切换请使用 Codex 桌面环境应用",
             "CODEX_DESKTOP_MANAGEMENT_MOVED",
-            json!({"targetConnectorId": "com.baijimu.connector.codex-desktop"}),
+            json!({"targetConnectorId": "com.baijimu.connector.codex"}),
         ));
     }
     match (method, path) {
@@ -988,7 +988,7 @@ fn parse_content_length(headers: &[u8]) -> Option<usize> {
 
 fn print_help() {
     println!(
-        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18110] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex checkout-project --workspace-id <id> --project-id <id> [--branch <name>]\n  baijimu-connector-codex --version"
+        "baijimu-connector-codex {VERSION}\n\nUsage:\n  baijimu-connector-codex start [--host 127.0.0.1] [--port 18111] [--listen stdio://] [--daemon]\n  baijimu-connector-codex status\n  baijimu-connector-codex stop\n  baijimu-connector-codex checkout-project --workspace-id <id> --project-id <id> [--branch <name>]\n  baijimu-connector-codex --version"
     );
 }
 

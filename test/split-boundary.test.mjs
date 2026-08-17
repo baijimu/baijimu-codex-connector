@@ -9,7 +9,10 @@ const read = (path) => readFile(join(root, path), "utf8");
 
 test("Connector manifest exposes only CLI and remote app-server responsibilities", async () => {
   const manifest = JSON.parse(await read("connector.json"));
-  assert.equal(manifest.id, "com.baijimu.connector.codex");
+  assert.equal(manifest.id, "com.baijimu.connector.codex-connector");
+  assert.equal(manifest.version, "1.0.0");
+  assert.equal(manifest.source.repo, "momoplan/baijimu-codex-connector");
+  assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
   assert.equal(manifest.hostRequirements.minimumVersion, "0.3.0");
   assert.equal(manifest.ui, undefined);
   assert.equal(manifest.management.operations.credentialState, undefined);
@@ -40,6 +43,5 @@ test("Connector setup executes CLI installation from its own artifact catalog", 
   assert.match(execute, /ensure_codex_cli/);
   assert.doesNotMatch(execute, /ensure_desktop_app/);
   assert.doesNotMatch(execute, /launch_desktop/);
-  assert.match(artifactSource, /codex-cli-artifacts\/v1/);
-  assert.doesNotMatch(artifactSource, /codex-desktop-artifacts/);
+  assert.match(artifactSource, /codex-artifacts\/v4/);
 });
