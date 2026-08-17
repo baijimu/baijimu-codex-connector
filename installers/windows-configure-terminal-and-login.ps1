@@ -1170,13 +1170,23 @@ function Test-CodexCli([string]$codexExe) {
 }
 
 try {
-  Ensure-CodexApp
-  Write-CodexConfig
-  Test-Router
-  $codexExe = Resolve-CodexCli
-  Invoke-AppServerProfileSetup $codexExe
-  Test-CodexCli $codexExe
-  Set-InstallStep 10 "completed" "安装配置已完成，桌面启动由 Connector 按档案状态处理"
+  if ($env:CODEX_CLI_ONLY -eq "1") {
+    $codexExe = Resolve-CodexCli
+    $versionResult = Invoke-CodexProcess $codexExe "--version" 20
+    if ($versionResult.timedOut -or $versionResult.exitCode -ne 0) {
+      throw "codex --version 执行失败：$($versionResult.stderr)"
+    }
+    $script:result.cliVersion = ($versionResult.stdout + $versionResult.stderr).Trim()
+    Set-InstallStep 10 "completed" "Codex CLI 安装和 app-server 能力检查已完成"
+  } else {
+    Ensure-CodexApp
+    Write-CodexConfig
+    Test-Router
+    $codexExe = Resolve-CodexCli
+    Invoke-AppServerProfileSetup $codexExe
+    Test-CodexCli $codexExe
+    Set-InstallStep 10 "completed" "安装配置已完成，桌面启动由桌面管理器按档案状态处理"
+  }
 } catch {
   Add-Error $_.Exception.Message
   if ($script:CurrentStepIndex -gt 0) {

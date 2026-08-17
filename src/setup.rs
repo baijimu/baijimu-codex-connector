@@ -1,6 +1,5 @@
 #[cfg(target_os = "windows")]
 use crate::codex_binary;
-use crate::credential;
 use anyhow::{Context, Result};
 #[cfg(any(target_os = "windows", test))]
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -67,11 +66,7 @@ pub struct SetupStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum SetupCompletion {
-    Verified,
-    Warning(String),
-    NotRequested,
-}
+struct SetupCompletion;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SetupFailureClassification {
@@ -81,57 +76,21 @@ struct SetupFailureClassification {
 }
 
 fn classify_setup_failure(error: &anyhow::Error) -> SetupFailureClassification {
-    let unsupported_os = crate::system_compatibility::unsupported_os_version(error).is_some()
-        || crate::system_compatibility::message_is_unsupported_os_version(&error.to_string());
-    if unsupported_os {
-        SetupFailureClassification {
-            message: "当前系统版本不支持 ChatGPT/Codex 桌面应用",
-            error_code: crate::system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION,
-            retryable: false,
-        }
-    } else {
-        SetupFailureClassification {
-            message: "Codex 应用初始化失败",
-            error_code: ERROR_CODE_FAILED,
-            retryable: true,
-        }
+    let _ = error;
+    SetupFailureClassification {
+        message: "Codex CLI 初始化失败",
+        error_code: ERROR_CODE_FAILED,
+        retryable: true,
     }
 }
 
 impl SetupCompletion {
     fn completed_without_desktop_launch() -> Self {
-        Self::NotRequested
-    }
-
-    fn from_desktop_launch(result: Result<()>) -> Self {
-        match result {
-            Ok(()) => Self::Verified,
-            Err(error) => Self::Warning(format!(
-                    "ChatGPT/Codex 已完成安装配置，但自动打开桌面窗口的校验未通过。请到系统应用列表中手动找到并打开 ChatGPT 应用（部分版本名称为 Codex）。自动打开校验错误：{}",
-                    compact_error(&format!("{error:#}"))
-                )),
-        }
+        Self
     }
 
     fn message(&self) -> String {
-        match self {
-            Self::Verified => {
-                "Codex 应用初始化已完成，并已确认当前工作区桌面窗口打开。".to_string()
-            }
-            Self::Warning(warning) => warning.clone(),
-            Self::NotRequested => {
-                "Codex 应用初始化已完成；检测到既有个人配置，未自动切换或打开工作区应用。"
-                    .to_string()
-            }
-        }
-    }
-
-    #[cfg(any(target_os = "macos", test))]
-    fn warning(&self) -> Option<&str> {
-        match self {
-            Self::Warning(warning) => Some(warning),
-            _ => None,
-        }
+        "Codex CLI 安装与 app-server 能力检查已完成。".to_string()
     }
 }
 
@@ -223,7 +182,6 @@ impl SetupManager {
                 && codex_cli.is_some()
                 && current.status == "succeeded"
                 && current.workspace_id == Some(workspace_id)
-                && credential::codex_ready_for_workspace(workspace_id)
             {
                 return Ok(current.clone());
             }
@@ -244,7 +202,7 @@ impl SetupManager {
             connector_version: Some(CONNECTOR_VERSION.to_string()),
             status: "running".to_string(),
             workspace_id: Some(workspace_id),
-            message: "正在初始化 Codex 应用".to_string(),
+            message: "正在安装并验证 Codex CLI".to_string(),
             error: None,
             last_error: None,
             error_code: None,
@@ -406,15 +364,10 @@ fn run_windows_install(
         .with_context(|| format!("创建安装目录失败: {}", setup_dir.display()))?;
     set_private_directory(&setup_dir)?;
     let unique = format!("{}-{}", std::process::id(), now_epoch_seconds());
-    let secret_path = setup_dir.join(format!("credential-{unique}"));
     let script_path = setup_dir.join(format!("install-{unique}.ps1"));
-    let auto_activate = credential::should_auto_activate_workspace_after_setup()?;
 
-    let install_result = (|| -> Result<Option<PathBuf>> {
-        let prepared = credential::prepare_workspace_profile(workspace_id)?;
-        let profile_home = PathBuf::from(&prepared.profile.codex_home);
-        atomic_write_private(&secret_path, prepared.credential.as_bytes())?;
-
+    let install_result = (|| -> Result<()> {
+        let profile_home = setup_dir.join("cli-profile");
         atomic_write_private(&script_path, &windows_install_script_bytes())?;
         let state_dir = installer_state_dir();
         fs::create_dir_all(&state_dir)?;
@@ -426,10 +379,11 @@ fn run_windows_install(
         command
             .env("CODEX_WORKSPACE_ID", workspace_id.to_string())
             .env("CODEX_ARTIFACT_MANIFEST_URL", source::manifest_url()?)
-            .env("CODEX_LLM_CREDENTIAL_FILE", &secret_path)
             .env("CODEX_INSTALL_STATE_DIR", &state_dir)
             .env("CODEX_INSTALL_QUIET", "1")
+            .env("CODEX_CLI_ONLY", "1")
             .env("CODEX_HOME", &profile_home)
+            .env_remove("CODEX_LLM_CREDENTIAL_FILE")
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
@@ -464,21 +418,11 @@ fn run_windows_install(
                 .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).to_string());
             anyhow::bail!("官方安装脚本执行失败: {}", compact_error(&errors));
         }
-        credential::finalize_workspace_setup(&prepared.profile, auto_activate)?;
-        let credential_state = credential::state()?;
-        let workspace_profile_is_active = credential_state.active_mode
-            == credential::AuthMode::Baijimu
-            && credential_state.active_workspace_id == Some(workspace_id)
-            && Path::new(&credential_state.active_codex_home) == profile_home;
-        Ok(workspace_profile_is_active.then_some(profile_home))
+        Ok(())
     })();
-    let _ = fs::remove_file(&secret_path);
     let _ = fs::remove_file(&script_path);
-    let activated_profile_home = install_result?;
+    install_result?;
 
-    if !credential::codex_ready_for_workspace(workspace_id) {
-        anyhow::bail!("安装脚本执行成功，但独立工作区凭证归属回查失败");
-    }
     let resolution = codex_binary::resolve()
         .map_err(|error| anyhow::anyhow!("安装脚本执行成功，但 Codex CLI 回查失败：{error}"))?;
     if verify_app_server_capability {
@@ -492,22 +436,7 @@ fn run_windows_install(
             );
         }
     }
-    Ok(match activated_profile_home {
-        Some(profile_home) => launch_desktop_after_setup(&profile_home),
-        None => SetupCompletion::completed_without_desktop_launch(),
-    })
-}
-
-fn launch_desktop_after_setup(profile_home: &Path) -> SetupCompletion {
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    {
-        SetupCompletion::from_desktop_launch(crate::desktop::launch_and_verify(profile_home))
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = profile_home;
-        SetupCompletion::completed_without_desktop_launch()
-    }
+    Ok(SetupCompletion::completed_without_desktop_launch())
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -688,60 +617,24 @@ mod tests {
     }
 
     #[test]
-    fn desktop_auto_launch_failure_keeps_setup_successful_and_requires_manual_open() {
-        let outcome = SetupCompletion::from_desktop_launch(Err(anyhow::anyhow!(
-            "operating system rejected automatic launch"
-        )));
-
-        assert!(matches!(&outcome, SetupCompletion::Warning(_)));
-        assert!(outcome.message().contains("已完成安装配置"));
-        assert!(outcome.message().contains("桌面窗口的校验未通过"));
-        assert!(outcome.message().contains("手动找到并打开 ChatGPT"));
-        assert!(outcome
-            .warning()
-            .is_some_and(|warning| warning.contains("operating system rejected automatic launch")));
-    }
-
-    #[test]
-    fn unsupported_os_setup_failure_has_a_stable_non_retryable_code() {
-        let error = crate::system_compatibility::ensure_supported(
-            "macOS",
-            "12.2.1",
-            "14.0",
-            "ChatGPT/Codex",
-        )
-        .unwrap_err();
+    fn cli_setup_failures_remain_retryable() {
+        let error = anyhow::anyhow!("Codex CLI is unavailable on this host");
         let classification = classify_setup_failure(&error);
 
-        assert_eq!(
-            classification.error_code,
-            crate::system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION
-        );
-        assert!(!classification.retryable);
-        assert!(classification.message.contains("系统版本不支持"));
+        assert_eq!(classification.error_code, ERROR_CODE_FAILED);
+        assert!(classification.retryable);
+        assert!(classification.message.contains("CLI 初始化失败"));
     }
 
     #[test]
-    fn windows_installer_marker_maps_to_the_same_unsupported_os_code() {
+    fn windows_cli_installer_failures_use_the_generic_retryable_code() {
         let error = anyhow::anyhow!(
             "官方安装脚本执行失败: UNSUPPORTED_OS_VERSION: current Windows is too old"
         );
         let classification = classify_setup_failure(&error);
 
-        assert_eq!(
-            classification.error_code,
-            crate::system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION
-        );
-        assert!(!classification.retryable);
-    }
-
-    #[test]
-    fn successful_desktop_auto_launch_reports_the_opened_workspace() {
-        let outcome = SetupCompletion::from_desktop_launch(Ok(()));
-
-        assert_eq!(outcome, SetupCompletion::Verified);
-        assert!(outcome.message().contains("已确认当前工作区桌面窗口打开"));
-        assert_eq!(outcome.warning(), None);
+        assert_eq!(classification.error_code, ERROR_CODE_FAILED);
+        assert!(classification.retryable);
     }
 
     #[cfg(target_os = "macos")]

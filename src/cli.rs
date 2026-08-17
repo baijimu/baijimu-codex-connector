@@ -46,16 +46,6 @@ pub(crate) fn run(args: Vec<String>) -> Result<(), String> {
             println!("{}", json!({"ok": true, "stopped": true, "pid": pid}));
             Ok(())
         }
-        "credential-state" => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &credential::state().map_err(|error| error.to_string())?
-                )
-                .map_err(|error| error.to_string())?
-            );
-            Ok(())
-        }
         "checkout-project" => {
             let request = project_checkout::CheckoutRequest {
                 workspace_id: required_u64_arg(&parsed, "workspaceId")?,

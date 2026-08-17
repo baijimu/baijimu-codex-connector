@@ -2,8 +2,8 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.68",
-  "description": "接入百积木后自动初始化并配置 Codex 运行环境；保护既有目录并支持工作区隔离。",
+  "version": "1.3.0",
+  "description": "安装并托管 Codex CLI，按可信工作区上下文提供 app-server 会话、线程、轮次和事件接口。",
   "icon": {
     "mediaType": "image/png",
     "data": "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"
@@ -15,7 +15,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.68"
+    "revision": "v1.3.0"
   },
   "runtime": {
     "type": "process",
@@ -53,62 +53,14 @@
         "method": "POST",
         "path": "/management/v1/setup/ensure-ready"
       },
-      "credentialState": {
-        "method": "GET",
-        "path": "/management/v1/credential-state"
-      },
-      "launchCodex": {
-        "method": "POST",
-        "path": "/management/v1/codex/launch"
-      },
-      "restoreExternalCodexHome": {
-        "method": "POST",
-        "path": "/management/v1/codex/restore-external-home"
-      },
       "checkoutPlatformProject": {
         "method": "POST",
         "path": "/management/v1/projects/checkout"
-      },
-      "listCodexProjects": {
-        "method": "POST",
-        "path": "/management/v1/codex/projects"
-      },
-      "listCodexSessions": {
-        "method": "POST",
-        "path": "/management/v1/codex/sessions"
-      },
-      "readCodexSession": {
-        "method": "POST",
-        "path": "/management/v1/codex/sessions/read"
-      },
-      "setCodexThreadReadState": {
-        "method": "POST",
-        "path": "/management/v1/codex/sessions/read-state"
-      },
-      "startCodexSession": {
-        "method": "POST",
-        "path": "/management/v1/codex/sessions/start"
-      },
-      "listCodexTurns": {
-        "method": "POST",
-        "path": "/management/v1/codex/turns"
-      },
-      "startCodexTurn": {
-        "method": "POST",
-        "path": "/management/v1/codex/turns/start"
-      },
-      "interruptCodexTurn": {
-        "method": "POST",
-        "path": "/management/v1/codex/turns/interrupt"
-      },
-      "recentCodexEvents": {
-        "method": "POST",
-        "path": "/management/v1/codex/events"
       }
     }
   },
   "hostRequirements": {
-    "minimumVersion": "0.2.95",
+    "minimumVersion": "0.3.0",
     "capabilities": [
       "connector.process.host-managed.v1",
       "connector.managed-tool-dependencies.v1",
@@ -126,14 +78,8 @@
       "executablePathEnv": "CODEX_CONNECTOR_BAIJIMU_BINARY"
     }
   ],
-  "ui": {
-    "type": "embedded",
-    "entry": "ui/index.html",
-    "title": "管理",
-    "defaultView": true
-  },
   "releaseNotes": [
-    "修复 Windows 普通用户从工作区隔离 CODEX_HOME 启动 Codex 时，因打包应用安装目录访问受限而报 Access is denied 的问题；保留工作区 router 档案注入、进程归属与可见窗口验证。"
+    "将桌面安装和工作区切换迁移到独立的 Codex 桌面环境应用；Connector 只安装 Codex CLI，并按 Relay 鉴权得到的 workspaceId 隔离 app-server 档案。"
   ],
   "configSchema": {
     "type": "object",
@@ -159,7 +105,7 @@
     {
       "name": "codex.project.read",
       "risk": "medium",
-      "description": "从 Codex 桌面状态、可信项目配置和任务工作目录元数据中读取本地 Codex 项目根目录。"
+      "description": "从当前可信工作区的 Codex 状态、项目配置和任务元数据中读取项目根目录。"
     },
     {
       "name": "codex.thread.read",
@@ -295,7 +241,7 @@
     },
     {
       "name": "listProjects",
-      "description": "根据 Codex 桌面状态、可信项目配置和任务工作目录元数据列出本地 Codex 项目。",
+      "description": "根据当前可信工作区的 Codex 状态、项目配置和任务元数据列出项目。",
       "path": "/invoke/listProjects",
       "httpMethod": "POST",
       "timeoutSecs": 30,

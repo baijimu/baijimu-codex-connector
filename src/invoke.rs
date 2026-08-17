@@ -77,7 +77,7 @@ pub(crate) fn handle_invoke(
             }
             client.refresh_active_home();
             let result = thread_state::set_thread_read_state(
-                &connector_home(),
+                client.state_dir(),
                 &client.active_codex_home(),
                 &thread_id,
                 has_unread_turn,
@@ -206,7 +206,7 @@ fn list_threads(body: &Value, client: &CodexClient) -> Result<Value, HttpError> 
             *item = normalize_thread_list_item(item.clone());
         }
         client.refresh_active_home();
-        thread_state::enrich_thread_list(&connector_home(), &client.active_codex_home(), data)
+        thread_state::enrich_thread_list(client.state_dir(), &client.active_codex_home(), data)
             .map_err(HttpError::internal)?;
     }
     Ok(json!({"result": result}))

@@ -1,13 +1,11 @@
 use anyhow::{bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const BAIJIMU_BINARY_ENV: &str = "CODEX_CONNECTOR_BAIJIMU_BINARY";
-const WORKSPACE_PAGE_SIZE: u64 = 200;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthStatus {
@@ -53,49 +51,10 @@ impl<T> PlatformEnvelope<T> {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkspaceListContract {
-    current_workspace_id: Option<u64>,
-    data: WorkspaceListDataContract,
-    error_code: String,
-    value: Option<String>,
-}
-
-impl WorkspaceListContract {
-    fn into_page(self) -> Result<WorkspacePage> {
-        if self.error_code != "0" {
-            bail!(
-                "baijimu CLI workspace list 失败（{}）：{}",
-                self.error_code,
-                self.value.as_deref().unwrap_or("平台操作失败")
-            );
-        }
-        Ok(WorkspacePage {
-            current_workspace_id: self.current_workspace_id,
-            items: self.data.list,
-            total_pages: self.data.total_pages,
-        })
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkspaceListDataContract {
-    list: Vec<WorkspaceContract>,
-    total_pages: u64,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 struct WorkspaceContract {
     id: u64,
     name: String,
-}
-
-struct WorkspacePage {
-    current_workspace_id: Option<u64>,
-    items: Vec<WorkspaceContract>,
-    total_pages: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,55 +82,6 @@ pub fn auth_status() -> Result<AuthStatus> {
         current_workspace_id: contract.current_workspace_id.filter(|id| *id > 0),
         workspace_ids: positive_unique_ids(contract.workspace_ids, "auth status.workspaceIds")?,
     })
-}
-
-pub fn list_workspaces() -> Result<Vec<Workspace>> {
-    let mut page = 1_u64;
-    let mut expected_current_workspace = None;
-    let mut workspaces = BTreeMap::new();
-    loop {
-        let page_text = page.to_string();
-        let page_size_text = WORKSPACE_PAGE_SIZE.to_string();
-        let contract: WorkspaceListContract = run_json(
-            "workspace list",
-            &[
-                "workspace",
-                "list",
-                "--json",
-                "--page",
-                &page_text,
-                "--page-size",
-                &page_size_text,
-            ],
-        )?;
-        let result = contract.into_page()?;
-        match expected_current_workspace {
-            None => expected_current_workspace = result.current_workspace_id,
-            Some(expected) if result.current_workspace_id != Some(expected) => {
-                bail!("baijimu CLI workspace list 分页期间当前工作区发生变化")
-            }
-            _ => {}
-        }
-        for workspace in result.items {
-            if workspace.id == 0 {
-                bail!("baijimu CLI workspace list 返回了非法工作区 ID");
-            }
-            let name = required_text(workspace.name, "workspace list.data.list[].name")?;
-            workspaces.insert(
-                workspace.id,
-                Workspace {
-                    id: workspace.id,
-                    name,
-                },
-            );
-        }
-        let total_pages = result.total_pages.max(1);
-        if page >= total_pages {
-            break;
-        }
-        page += 1;
-    }
-    Ok(workspaces.into_values().collect())
 }
 
 pub fn get_workspace(workspace_id: u64) -> Result<Workspace> {

@@ -25,6 +25,7 @@ struct ClientRuntime {
 
 pub(crate) struct CodexClient {
     pub(crate) options: ServerOptions,
+    state_dir: PathBuf,
     runtime: Mutex<ClientRuntime>,
     lifecycle: Mutex<()>,
     events: Arc<EventStore>,
@@ -70,8 +71,21 @@ impl RpcFailure {
 
 impl CodexClient {
     pub(crate) fn new(options: ServerOptions) -> Self {
+        let connector_home = crate::process_runtime::connector_home();
+        Self::new_with_home(
+            options,
+            connector_home.join("default-profile"),
+            connector_home,
+        )
+    }
+
+    pub(crate) fn new_with_home(
+        options: ServerOptions,
+        codex_home: PathBuf,
+        state_dir: PathBuf,
+    ) -> Self {
         let mut runtime = ClientRuntime {
-            active_codex_home: crate::credential::active_codex_home(),
+            active_codex_home: codex_home,
             session: None,
             last_exit: None,
             codex_binary_resolution: None,
@@ -81,6 +95,7 @@ impl CodexClient {
         refresh_codex_binary_resolution(&mut runtime);
         Self {
             options,
+            state_dir,
             runtime: Mutex::new(runtime),
             lifecycle: Mutex::new(()),
             events: Arc::new(EventStore::new()),
@@ -162,10 +177,6 @@ impl CodexClient {
         )
     }
 
-    pub(crate) fn ensure_started(&self) -> Result<(), HttpError> {
-        self.ensure_session().map(|_| ())
-    }
-
     fn ensure_session(&self) -> Result<Arc<ProcessSession>, HttpError> {
         if let Some(session) = self.current_ready_session() {
             return Ok(session);
@@ -209,31 +220,12 @@ impl CodexClient {
     }
 
     fn current_ready_session(&self) -> Option<Arc<ProcessSession>> {
-        self.current_live_session().filter(|session| {
-            session.initialized.load(Ordering::Acquire)
-                && self
-                    .runtime
-                    .lock()
-                    .map(|runtime| {
-                        runtime.active_codex_home == crate::credential::active_codex_home()
-                    })
-                    .unwrap_or(false)
-        })
+        self.current_live_session()
+            .filter(|session| session.initialized.load(Ordering::Acquire))
     }
 
     fn refresh_active_home_locked(&self) {
-        let desired_home = crate::credential::active_codex_home();
-        let changed = self
-            .runtime
-            .lock()
-            .map(|runtime| runtime.active_codex_home != desired_home)
-            .unwrap_or(true);
-        if changed {
-            self.shutdown_locked();
-            if let Ok(mut runtime) = self.runtime.lock() {
-                runtime.active_codex_home = desired_home;
-            }
-        }
+        // Each client is permanently bound to one trusted workspace profile.
     }
 
     pub(crate) fn refresh_active_home(&self) {
@@ -246,16 +238,11 @@ impl CodexClient {
         self.runtime
             .lock()
             .map(|runtime| runtime.active_codex_home.clone())
-            .unwrap_or_else(|_| crate::credential::active_codex_home())
+            .unwrap_or_default()
     }
 
-    pub(crate) fn switch_to_active_profile(&self) {
-        if let Ok(_lifecycle) = self.lifecycle.lock() {
-            self.shutdown_locked();
-            if let Ok(mut runtime) = self.runtime.lock() {
-                runtime.active_codex_home = crate::credential::active_codex_home();
-            }
-        }
+    pub(crate) fn state_dir(&self) -> &PathBuf {
+        &self.state_dir
     }
 
     fn start_process_locked(&self) -> Result<Arc<ProcessSession>, HttpError> {
