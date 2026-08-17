@@ -6,6 +6,7 @@ pub fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
     bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes)
 }
 
+#[cfg(test)]
 pub fn strip_utf8_bom_str(text: &str) -> &str {
     text.strip_prefix('\u{feff}').unwrap_or(text)
 }

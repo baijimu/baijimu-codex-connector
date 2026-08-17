@@ -10,7 +10,6 @@ mod process_runtime;
 mod project_checkout;
 mod setup;
 mod thread_state;
-mod user_environment;
 mod workspace_profile;
 
 #[cfg(test)]
