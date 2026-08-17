@@ -79,7 +79,7 @@
     }
   ],
   "releaseNotes": [
-    "作为新的独立应用安装 Codex CLI，并按 Relay 鉴权得到的 workspaceId 隔离 app-server 档案；桌面安装和工作区切换继续由 codex 应用负责。"
+    "作为新的独立应用安装 Codex CLI，并按 Relay 鉴权得到的 workspaceId 隔离 app-server 档案；桌面安装和工作区切换继续由 Codex 桌面管理器负责。"
   ],
   "configSchema": {
     "type": "object",
