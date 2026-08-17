@@ -16,6 +16,11 @@ on:
         required: true
         default: false
         type: boolean
+      verify_credentials:
+        description: "Verify Apple and SSL.com signing credentials without publishing"
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: codex-connector-local-app-release-${{ github.event_name == 'push' && github.ref_name || inputs.release_ref }}
@@ -34,6 +39,7 @@ jobs:
   validate:
     runs-on: ubuntu-22.04
     outputs:
+      credentials: ${{ steps.release.outputs.credentials }}
       publish: ${{ steps.release.outputs.publish }}
       ref: ${{ steps.release.outputs.ref }}
       sha: ${{ steps.release.outputs.sha }}
@@ -53,10 +59,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          CREDENTIALS_REQUESTED: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_credentials || false }}
           RELEASE_REF: ${{ github.event_name == 'push' && github.ref_name || inputs.release_ref }}
           PUBLISH_REQUESTED: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
           set -euo pipefail
+          if [ "$PUBLISH_REQUESTED" = "true" ] && [ "$CREDENTIALS_REQUESTED" = "true" ]; then
+            echo "verify_credentials cannot be combined with publish" >&2
+            exit 1
+          fi
           version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
           test -n "$version"
           test "$(jq -r .version connector.json)" = "$version"
@@ -70,6 +81,10 @@ jobs:
           publish=false
           tag="v$version"
           verify=false
+          credentials=false
+          if [ "$CREDENTIALS_REQUESTED" = "true" ]; then
+            credentials=true
+          fi
           if [ "$PUBLISH_REQUESTED" = "true" ]; then
             publish=true
             test "$RELEASE_REF" = "$tag"
@@ -100,6 +115,7 @@ jobs:
             fi
           fi
           {
+            echo "credentials=$credentials"
             echo "publish=$publish"
             echo "ref=$RELEASE_REF"
             echo "sha=$sha"
@@ -323,6 +339,113 @@ jobs:
             ${{ runner.temp }}/baijimu-codex-connector-${{ needs.validate.outputs.version }}-${{ matrix.name }}.zip.sha256
           if-no-files-found: error
           retention-days: 7
+
+  verify-macos-signing-credentials:
+    if: needs.validate.outputs.credentials == 'true'
+    needs: [validate, build]
+    runs-on: macos-15-intel
+    steps:
+      - name: Check out validated source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+
+      - name: Download unsigned macOS artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: codex-connector-release-macos-universal
+          path: ${{ runner.temp }}/credential-validation
+
+      - name: Import certificate, sign, and verify macOS binary
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Xiaofeng Zhang (H82D8SYZ94)"
+        run: |
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+            test -n "${!name}" || { echo "Missing $name" >&2; exit 1; }
+          done
+          validation_dir="$RUNNER_TEMP/credential-validation"
+          archive="$(find "$validation_dir" -maxdepth 1 -name '*-macos-universal.zip' -type f -print -quit)"
+          test -n "$archive"
+          package_dir="$RUNNER_TEMP/credential-validation-package"
+          certificate_path="$RUNNER_TEMP/credential-validation-certificate.p12"
+          keychain_path="$RUNNER_TEMP/credential-validation-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          cleanup() {
+            security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
+            rm -f "$certificate_path"
+          }
+          trap cleanup EXIT
+          mkdir -p "$package_dir"
+          unzip -q "$archive" -d "$package_dir"
+          binary="$package_dir/bin/macos/baijimu-connector-codex"
+          test -x "$binary"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -k "$keychain_path" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$keychain_path" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
+          security find-identity -v -p codesigning "$keychain_path" | grep -F "$APPLE_SIGNING_IDENTITY"
+          bash tools/release/sign-macos-with-retry.sh "$binary" "$APPLE_SIGNING_IDENTITY"
+          codesign --verify --strict --verbose=2 "$binary"
+          codesign -d --verbose=4 "$binary" 2>&1 | grep -F 'Timestamp='
+
+  verify-windows-signing-credentials:
+    if: needs.validate.outputs.credentials == 'true'
+    needs: [validate, build]
+    runs-on: windows-latest
+    steps:
+      - name: Check out validated source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+
+      - name: Download unsigned Windows artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: codex-connector-release-windows-x64
+          path: ${{ runner.temp }}/credential-validation
+
+      - name: Sign and verify Windows binary
+        shell: pwsh
+        env:
+          SSL_COM_USERNAME: ${{ secrets.SSL_COM_USERNAME }}
+          SSL_COM_PASSWORD: ${{ secrets.SSL_COM_PASSWORD }}
+          SSL_COM_CREDENTIAL_ID: ${{ secrets.SSL_COM_CREDENTIAL_ID }}
+          SSL_COM_TOTP_SECRET: ${{ secrets.SSL_COM_TOTP_SECRET }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($name in @("SSL_COM_USERNAME", "SSL_COM_PASSWORD", "SSL_COM_CREDENTIAL_ID", "SSL_COM_TOTP_SECRET")) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "Missing $name" }
+          }
+          $validationDir = Join-Path $env:RUNNER_TEMP "credential-validation"
+          $archive = Get-ChildItem -LiteralPath $validationDir -Filter "*-windows-x64.zip" -File | Select-Object -First 1
+          if (-not $archive) { throw "Windows release archive was not found" }
+          $packageDir = Join-Path $env:RUNNER_TEMP "credential-validation-package"
+          Expand-Archive -Force -LiteralPath $archive.FullName -DestinationPath $packageDir
+          $binary = Join-Path $packageDir "bin\windows-x86_64\baijimu-connector-codex.exe"
+          if (-not (Test-Path -LiteralPath $binary)) { throw "Windows connector binary was not found" }
+          $zipPath = Join-Path $env:RUNNER_TEMP "CodeSignTool.zip"
+          $extractPath = Join-Path $env:RUNNER_TEMP "CodeSignTool"
+          Invoke-WebRequest -Uri "https://ssl.com/wp-content/uploads/2024/10/CodeSignTool-v1.3.1-windows.zip" `
+            -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GitHub-Actions" `
+            -MaximumRetryCount 3 -RetryIntervalSec 5 -OutFile $zipPath
+          $expected = "e45a9e6c2aac4cae16c114eb590a2196406681357eb587507c65cd3646b5330d"
+          if ((Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLowerInvariant() -ne $expected) { throw "CodeSignTool checksum mismatch" }
+          Expand-Archive -Force -Path $zipPath -DestinationPath $extractPath
+          $tool = Get-ChildItem -Path $extractPath -Filter "CodeSignTool.bat" -Recurse -File | Select-Object -First 1
+          if (-not $tool) { throw "Unable to locate CodeSignTool.bat" }
+          $env:CODESIGN_TOOL_PATH = $tool.FullName
+          & "tools/release/sign-windows-artifact.ps1" -FilePath $binary
+          $signature = Get-AuthenticodeSignature -LiteralPath $binary
+          if ($signature.Status -ne "Valid") { throw "Invalid Windows signature: $($signature.Status)" }
+          if (-not $signature.TimeStamperCertificate) { throw "Windows signature does not contain a trusted timestamp" }
 
   prepare-release:
     if: needs.validate.outputs.publish == 'true' && needs.validate.outputs.verify != 'true'
