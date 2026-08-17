@@ -101,7 +101,7 @@ class CodexAppServerClient {
     this.requestTimeoutMs = options.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS;
     this.clientInfo = options.clientInfo || {
       name: "baijimu_connector_codex",
-      title: "百积木 Codex 外部连接器",
+      title: "百积木 Codex 远程连接器",
       version: VERSION,
     };
     this.experimentalApi = options.experimentalApi ?? true;
