@@ -386,6 +386,7 @@ test("setup treats desktop launch as a post-configuration convenience", async ()
   assert.match(setup, /"Text"/);
   assert.match(setup, /\[Console\]::OutputEncoding/);
   assert.match(desktop, /Start-Process -FilePath \$entry\[0\]\.executable/);
+  assert.doesNotMatch(desktop, /Start-Process[^\r\n]*-WorkingDirectory/);
   assert.match(desktop, /BaijimuCodexVisibleWindowProbe/);
   assert.match(desktop, /kCGWindowListOptionOnScreenOnly/);
   assert.match(desktop, /未在 45 秒内显示可见窗口/);

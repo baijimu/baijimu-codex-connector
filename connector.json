@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex",
   "name": "Codex",
-  "version": "1.2.67",
+  "version": "1.2.68",
   "description": "接入百积木后自动初始化并配置 Codex 运行环境；保护既有目录并支持工作区隔离。",
   "icon": {
     "mediaType": "image/png",
@@ -15,7 +15,7 @@
   "source": {
     "type": "github",
     "repo": "momoplan/baijimu-connector-codex",
-    "revision": "v1.2.67"
+    "revision": "v1.2.68"
   },
   "runtime": {
     "type": "process",
@@ -133,7 +133,7 @@
     "defaultView": true
   },
   "releaseNotes": [
-    "新增由 Bridge Agent 统一展示的本地应用图标；管理主页移除重复的应用基础信息和二级页签，改为连续的业务分区，并保留自动初始化与失败修复流程。"
+    "修复 Windows 普通用户从工作区隔离 CODEX_HOME 启动 Codex 时，因打包应用安装目录访问受限而报 Access is denied 的问题；保留工作区 router 档案注入、进程归属与可见窗口验证。"
   ],
   "configSchema": {
     "type": "object",

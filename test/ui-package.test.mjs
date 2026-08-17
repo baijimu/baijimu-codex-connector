@@ -117,9 +117,9 @@ test("connector manifest declares the packaged embedded UI", async () => {
   }]);
   assert.equal(manifest.releaseNotes.length, 1);
   assert.ok(manifest.releaseNotes.every((note) => typeof note === "string" && note.trim()));
-  assert.match(manifest.releaseNotes[0], /Bridge Agent 统一展示的本地应用图标/);
-  assert.match(manifest.releaseNotes[0], /移除重复的应用基础信息和二级页签/);
-  assert.match(manifest.releaseNotes[0], /连续的业务分区/);
+  assert.match(manifest.releaseNotes[0], /Windows 普通用户/);
+  assert.match(manifest.releaseNotes[0], /Access is denied/);
+  assert.match(manifest.releaseNotes[0], /工作区 router 档案注入/);
   assert.equal(manifest.configSchema.properties.codexBinary, undefined);
   assert.equal(manifest.configSchema.properties.baijimuBinary, undefined);
   const html = await readFile(join(root, manifest.ui.entry), "utf8");

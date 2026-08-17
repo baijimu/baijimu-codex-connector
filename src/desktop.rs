@@ -179,7 +179,7 @@ public static class BaijimuCodexVisibleWindowProbe {
 '@
 }
 
-Start-Process -FilePath $entry[0].executable -WorkingDirectory ([System.IO.Path]::GetDirectoryName($entry[0].executable)) -ErrorAction Stop
+Start-Process -FilePath $entry[0].executable -ErrorAction Stop
 $deadline = (Get-Date).AddSeconds(45)
 do {
   $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
@@ -326,6 +326,13 @@ $minimum = @($minimumVersions | ForEach-Object { [version]$_ } | Sort-Object -De
                     String::from_utf8_lossy(&output.stderr)
                 );
             }
+        }
+
+        #[test]
+        fn packaged_app_launch_does_not_use_the_protected_install_directory_as_cwd() {
+            assert!(LAUNCH_AND_VERIFY_SCRIPT
+                .contains("Start-Process -FilePath $entry[0].executable -ErrorAction Stop"));
+            assert!(!LAUNCH_AND_VERIFY_SCRIPT.contains("-WorkingDirectory"));
         }
     }
 }
