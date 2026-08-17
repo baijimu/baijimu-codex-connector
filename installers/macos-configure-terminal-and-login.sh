@@ -81,7 +81,7 @@ install_cli() {
   profile="$HOME/.zshrc"
   line='export PATH="$HOME/.local/bin:$PATH"'
   if [ ! -f "$profile" ] || ! grep -Fq '.local/bin' "$profile"; then
-    printf '\n# Added by Baijimu Codex installer\n%s\n' "$line" >> "$profile"
+    printf '\n# 由百积木 Codex 安装器添加\n%s\n' "$line" >> "$profile"
   fi
   rm -rf "$work_dir"
   trap - EXIT

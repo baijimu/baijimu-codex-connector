@@ -1,7 +1,7 @@
 {
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex-connector",
-  "name": "Codex Connector",
+  "name": "Codex 外部连接器",
   "version": "1.0.0",
   "description": "安装并托管 Codex CLI，按可信工作区上下文提供 app-server 会话、线程、轮次和事件接口。",
   "icon": {
