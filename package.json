@@ -1,7 +1,7 @@
 {
   "name": "@baijimu/connector-codex",
   "version": "1.0.0",
-  "description": "Baijimu Codex CLI connector for workspace-scoped external app-server access.",
+  "description": "面向可信工作区、对外提供 Codex CLI 与 app-server 能力的百积木连接器。",
   "type": "module",
   "bin": {
     "baijimu-connector-codex": "./bin/baijimu-connector-codex.js"

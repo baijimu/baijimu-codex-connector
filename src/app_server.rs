@@ -199,7 +199,7 @@ impl CodexClient {
                 json!({
                     "clientInfo": {
                         "name": "baijimu_connector_codex",
-                        "title": "Baijimu Codex Connector",
+                        "title": "百积木 Codex 外部连接器",
                         "version": VERSION,
                     },
                     "capabilities": { "experimentalApi": true }
