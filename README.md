@@ -38,4 +38,4 @@ cargo test
 npm test
 ```
 
-本仓库是 `codex-connector` 客户端本地应用的唯一发布单元；源码主线为 `momoplan/baijimu-codex-connector/main`，标签、制品、签名和市场版本必须保持同一版本号。
+本仓库是 `codex-connector` 客户端本地应用的唯一发布单元；源码主线为 `baijimu/baijimu-codex-connector/main`，标签、制品、签名和市场版本必须保持同一版本号。
