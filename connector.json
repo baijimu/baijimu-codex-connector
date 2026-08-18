@@ -14,7 +14,7 @@
   },
   "source": {
     "type": "github",
-    "repo": "momoplan/baijimu-codex-connector",
+    "repo": "baijimu/baijimu-codex-connector",
     "revision": "v1.0.0"
   },
   "runtime": {

@@ -12,7 +12,7 @@ test("Connector manifest exposes only CLI and remote app-server responsibilities
   assert.equal(manifest.id, "com.baijimu.connector.codex-connector");
   assert.equal(manifest.name, "Codex 远程连接器");
   assert.equal(manifest.version, "1.0.0");
-  assert.equal(manifest.source.repo, "momoplan/baijimu-codex-connector");
+  assert.equal(manifest.source.repo, "baijimu/baijimu-codex-connector");
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
   assert.equal(manifest.hostRequirements.minimumVersion, "0.3.0");
   assert.equal(manifest.ui, undefined);

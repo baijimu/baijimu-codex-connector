@@ -75,7 +75,7 @@ jobs:
           test "$(jq -r .version package-lock.json)" = "$version"
           test "$(jq -r '.packages[""].version' package-lock.json)" = "$version"
           test "$(jq -r .source.type connector.json)" = github
-          test "$(jq -r .source.repo connector.json)" = momoplan/baijimu-codex-connector
+          test "$(jq -r .source.repo connector.json)" = baijimu/baijimu-codex-connector
           test "$(jq -r .source.revision connector.json)" = "v$version"
           sha="$(git rev-parse HEAD)"
           publish=false
@@ -312,7 +312,7 @@ jobs:
           const [packageDir, expectedVersion] = process.argv.slice(2);
           const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "connector.json"), "utf8"));
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
-          if (manifest.source?.type !== "github" || manifest.source?.repo !== "momoplan/baijimu-codex-connector" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
+          if (manifest.source?.type !== "github" || manifest.source?.repo !== "baijimu/baijimu-codex-connector" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
           if (manifest.id !== "com.baijimu.connector.codex-connector" || manifest.name !== "Codex 远程连接器") throw new Error("connector identity mismatch");
           if (manifest.schemaVersion !== "2.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || typeof manifest.transport !== "object" || !Array.isArray(manifest.methods) || !Array.isArray(manifest.events) || manifest.ui !== undefined) throw new Error("connector package contract is invalid");
           NODE
