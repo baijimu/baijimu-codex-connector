@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex-connector",
   "name": "Codex 远程连接器",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "安装并托管 Codex CLI，按可信工作区上下文提供 app-server 会话、线程、轮次和事件接口。",
   "icon": {
     "mediaType": "image/png",
@@ -15,7 +15,7 @@
   "source": {
     "type": "github",
     "repo": "baijimu/baijimu-codex-connector",
-    "revision": "v1.0.0"
+    "revision": "v1.0.1"
   },
   "runtime": {
     "type": "process",
@@ -79,7 +79,7 @@
     }
   ],
   "releaseNotes": [
-    "作为新的独立应用安装 Codex CLI，并按 Relay 鉴权得到的 workspaceId 隔离 app-server 档案；桌面安装和工作区切换继续由 Codex 桌面管理器负责。"
+    "支持先选择设备，再枚举该设备上当前账号可用的 Codex 工作区档案，并按所选档案隔离 app-server 会话。"
   ],
   "configSchema": {
     "type": "object",
@@ -143,6 +143,17 @@
     "baseUrl": "http://127.0.0.1:18111"
   },
   "methods": [
+    {
+      "name": "listWorkspaceProfiles",
+      "description": "列出当前设备已初始化且本机百积木账号仍有权访问的 Codex 工作区档案。",
+      "path": "/invoke/listWorkspaceProfiles",
+      "httpMethod": "POST",
+      "timeoutSecs": 15,
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false
+      }
+    },
     {
       "name": "status",
       "description": "返回连接器和 Codex app-server 的连接状态。",
