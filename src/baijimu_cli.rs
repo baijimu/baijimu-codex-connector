@@ -12,7 +12,7 @@ pub struct AuthStatus {
     pub authenticated: bool,
     pub base_url: String,
     pub current_workspace_id: Option<u64>,
-    pub workspace_ids: Vec<u64>,
+    pub credential_workspace_ids: Vec<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,7 +87,10 @@ pub fn auth_status() -> Result<AuthStatus> {
         authenticated: contract.authenticated,
         base_url: required_text(contract.base_url, "auth status.baseUrl")?,
         current_workspace_id: contract.current_workspace_id.filter(|id| *id > 0),
-        workspace_ids: positive_unique_ids(contract.workspace_ids, "auth status.workspaceIds")?,
+        credential_workspace_ids: positive_unique_ids(
+            contract.workspace_ids,
+            "auth status.workspaceIds",
+        )?,
     })
 }
 
@@ -275,9 +278,10 @@ mod tests {
             authenticated: contract.authenticated,
             base_url: required_text(contract.base_url, "baseUrl").unwrap(),
             current_workspace_id: contract.current_workspace_id,
-            workspace_ids: positive_unique_ids(contract.workspace_ids, "workspaceIds").unwrap(),
+            credential_workspace_ids: positive_unique_ids(contract.workspace_ids, "workspaceIds")
+                .unwrap(),
         };
-        assert_eq!(status.workspace_ids, vec![642, 1390]);
+        assert_eq!(status.credential_workspace_ids, vec![642, 1390]);
         assert_eq!(status.current_workspace_id, Some(642));
     }
 

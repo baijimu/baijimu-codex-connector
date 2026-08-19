@@ -35,17 +35,8 @@ pub(crate) fn list() -> Result<Vec<WorkspaceProfileMetadata>> {
     if !auth.authenticated {
         bail!("当前设备尚未登录百积木")
     }
-    let listed_workspaces = baijimu_cli::list_workspaces().context("读取可访问工作区列表失败")?;
-    let mut authorized_workspaces = Vec::with_capacity(auth.workspace_ids.len());
-    for workspace_id in &auth.workspace_ids {
-        let workspace = listed_workspaces
-            .iter()
-            .find(|workspace| workspace.id == *workspace_id)
-            .with_context(|| {
-                format!("baijimu CLI 授权状态中的工作区 {workspace_id} 未出现在工作区目录中")
-            })?;
-        authorized_workspaces.push(workspace.clone());
-    }
+    let authorized_workspaces =
+        baijimu_cli::list_workspaces().context("读取可访问工作区列表失败")?;
     list_from_root(
         &connector_home().join("workspace-profiles"),
         &auth.base_url,
@@ -103,8 +94,8 @@ pub(crate) fn ensure(workspace_id: u64) -> Result<PreparedProfile> {
         bail!("workspaceId 必须是正整数");
     }
     let auth = baijimu_cli::auth_status().context("读取 baijimu CLI 授权状态失败")?;
-    if !auth.authenticated || !auth.workspace_ids.contains(&workspace_id) {
-        bail!("当前设备授权不包含工作区 {workspace_id}");
+    if !auth.authenticated {
+        bail!("当前设备尚未登录百积木");
     }
     let workspace =
         baijimu_cli::get_workspace(workspace_id).context("无法确认远程调用所属工作区")?;
