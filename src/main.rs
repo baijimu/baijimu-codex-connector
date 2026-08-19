@@ -437,6 +437,26 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             } else {
                 serde_json::from_slice(&request.body).map_err(|error| error.to_string())?
             };
+            if path == "/invoke/listWorkspaceProfiles" {
+                return match workspace_profile::list() {
+                    Ok(profiles) => write_json(
+                        &mut stream,
+                        200,
+                        &json!({"ok": true, "data": {"profiles": profiles}}),
+                    ),
+                    Err(error) => write_json(
+                        &mut stream,
+                        409,
+                        &json!({
+                            "ok": false,
+                            "error": {
+                                "code": "CODEX_WORKSPACE_PROFILE_LIST_UNAVAILABLE",
+                                "message": error.to_string()
+                            }
+                        }),
+                    ),
+                };
+            }
             let Some(workspace_id) = request.workspace_id else {
                 return write_json(
                     &mut stream,

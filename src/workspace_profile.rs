@@ -19,15 +19,79 @@ struct WorkspaceProfileConfig {
     router_base_url: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WorkspaceProfileMetadata {
+pub(crate) struct WorkspaceProfileMetadata {
     schema_version: u32,
     environment: String,
     workspace_id: u64,
     workspace_name: String,
     created_at_epoch_seconds: u64,
     updated_at_epoch_seconds: u64,
+}
+
+pub(crate) fn list() -> Result<Vec<WorkspaceProfileMetadata>> {
+    let auth = baijimu_cli::auth_status().context("读取 baijimu CLI 授权状态失败")?;
+    if !auth.authenticated {
+        bail!("当前设备尚未登录百积木")
+    }
+    list_from_root(
+        &connector_home().join("workspace-profiles"),
+        &auth.base_url,
+        &auth.workspace_ids,
+    )
+}
+
+fn list_from_root(
+    root: &Path,
+    environment: &str,
+    authorized_workspace_ids: &[u64],
+) -> Result<Vec<WorkspaceProfileMetadata>> {
+    let environment_directory = root.join(hex_encode(environment.as_bytes()));
+    let mut profiles = Vec::new();
+    let entries = match fs::read_dir(&environment_directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(profiles),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "读取 Connector 工作区档案目录失败: {}",
+                    environment_directory.display()
+                )
+            })
+        }
+    };
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let Some(directory_workspace_id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|value| *value > 0)
+        else {
+            continue;
+        };
+        if !authorized_workspace_ids.contains(&directory_workspace_id) {
+            continue;
+        }
+        let Some(metadata) = read_metadata(&entry.path().join("profile.json")) else {
+            continue;
+        };
+        if metadata_matches_value(&metadata, environment, directory_workspace_id) {
+            profiles.push(metadata);
+        }
+    }
+    profiles.sort_by(|left, right| {
+        right
+            .updated_at_epoch_seconds
+            .cmp(&left.updated_at_epoch_seconds)
+            .then_with(|| left.workspace_name.cmp(&right.workspace_name))
+            .then_with(|| left.workspace_id.cmp(&right.workspace_id))
+    });
+    Ok(profiles)
 }
 
 pub(crate) struct PreparedProfile {
@@ -115,11 +179,18 @@ fn profile_home(environment: &str, workspace_id: u64) -> PathBuf {
 }
 
 fn metadata_matches(path: &Path, environment: &str, workspace_id: u64) -> bool {
-    read_metadata(path).is_some_and(|metadata| {
-        metadata.schema_version == PROFILE_SCHEMA_VERSION
-            && metadata.environment == environment
-            && metadata.workspace_id == workspace_id
-    })
+    read_metadata(path)
+        .is_some_and(|metadata| metadata_matches_value(&metadata, environment, workspace_id))
+}
+
+fn metadata_matches_value(
+    metadata: &WorkspaceProfileMetadata,
+    environment: &str,
+    workspace_id: u64,
+) -> bool {
+    metadata.schema_version == PROFILE_SCHEMA_VERSION
+        && metadata.environment == environment
+        && metadata.workspace_id == workspace_id
 }
 
 fn read_metadata(path: &Path) -> Option<WorkspaceProfileMetadata> {
@@ -190,6 +261,67 @@ fn workspace_config(config: &WorkspaceProfileConfig) -> String {
     provider["wire_api"] = value("responses");
     provider["requires_openai_auth"] = value(true);
     document.to_string()
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    #[test]
+    fn list_profiles_returns_only_authorized_current_environment_profiles() {
+        let root = std::env::temp_dir().join(format!(
+            "baijimu-codex-workspace-profiles-{}-{}",
+            std::process::id(),
+            now_epoch_seconds()
+        ));
+        let environment = "https://api.baijimu.test";
+        for (workspace_id, name, updated_at) in [
+            (642, "Workspace 642", 30),
+            (1390, "Workspace 1390", 20),
+            (2000, "Unauthorized", 40),
+        ] {
+            let directory = root
+                .join(hex_encode(environment.as_bytes()))
+                .join(workspace_id.to_string());
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(
+                directory.join("profile.json"),
+                serde_json::to_vec(&WorkspaceProfileMetadata {
+                    schema_version: PROFILE_SCHEMA_VERSION,
+                    environment: environment.to_string(),
+                    workspace_id,
+                    workspace_name: name.to_string(),
+                    created_at_epoch_seconds: 1,
+                    updated_at_epoch_seconds: updated_at,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let other_environment_directory = root
+            .join(hex_encode(b"https://other.baijimu.test"))
+            .join("642");
+        fs::create_dir_all(&other_environment_directory).unwrap();
+        fs::write(
+            other_environment_directory.join("profile.json"),
+            br#"{"schemaVersion":1,"environment":"https://other.baijimu.test","workspaceId":642,"workspaceName":"Other","createdAtEpochSeconds":1,"updatedAtEpochSeconds":99}"#,
+        )
+        .unwrap();
+
+        let profiles = list_from_root(&root, environment, &[1390, 642]).unwrap();
+
+        assert_eq!(
+            profiles
+                .into_iter()
+                .map(|profile| (profile.workspace_id, profile.workspace_name))
+                .collect::<Vec<_>>(),
+            vec![
+                (642, "Workspace 642".to_string()),
+                (1390, "Workspace 1390".to_string())
+            ]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 fn atomic_write_private(path: &Path, content: &[u8]) -> Result<()> {
