@@ -59,6 +59,13 @@ struct WorkspaceContract {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct WorkspaceListContract {
+    list: Vec<WorkspaceContract>,
+    total_pages: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LlmCredentialContract {
     created: bool,
     key_type: String,
@@ -102,6 +109,50 @@ pub fn get_workspace(workspace_id: u64) -> Result<Workspace> {
         id: workspace.id,
         name: required_text(workspace.name, "workspace get.data.name")?,
     })
+}
+
+pub fn list_workspaces() -> Result<Vec<Workspace>> {
+    const PAGE_SIZE: u64 = 100;
+    let mut page = 1_u64;
+    let mut workspaces = Vec::new();
+    loop {
+        let page_text = page.to_string();
+        let page_size_text = PAGE_SIZE.to_string();
+        let envelope: PlatformEnvelope<WorkspaceListContract> = run_json(
+            "workspace list",
+            &[
+                "workspace",
+                "list",
+                "--page",
+                &page_text,
+                "--page-size",
+                &page_size_text,
+                "--json",
+            ],
+        )?;
+        let data = envelope.into_data("workspace list")?;
+        if data.total_pages == 0 {
+            bail!("baijimu CLI workspace list 返回非法 totalPages");
+        }
+        for workspace in data.list {
+            require_workspace_id(workspace.id)?;
+            if workspaces
+                .iter()
+                .any(|existing: &Workspace| existing.id == workspace.id)
+            {
+                bail!("baijimu CLI workspace list 返回重复工作区 {}", workspace.id);
+            }
+            workspaces.push(Workspace {
+                id: workspace.id,
+                name: required_text(workspace.name, "workspace list.data.list[].name")?,
+            });
+        }
+        if page >= data.total_pages {
+            break;
+        }
+        page += 1;
+    }
+    Ok(workspaces)
 }
 
 pub fn create_llm_credential(workspace_id: u64) -> Result<String> {
@@ -243,6 +294,30 @@ mod tests {
         .unwrap();
         let error = envelope.into_data("workspace get").unwrap_err();
         assert!(error.to_string().contains("PAT 无效或已过期"));
+    }
+
+    #[test]
+    fn workspace_list_contract_owns_pagination_and_workspace_identity() {
+        let envelope: PlatformEnvelope<WorkspaceListContract> = crate::json_compat::from_slice(
+            br#"{
+                    "errorCode": "0",
+                    "value": "success",
+                    "data": {
+                        "list": [
+                            {"id": 642, "name": "Workspace 642"},
+                            {"id": 1390, "name": "Workspace 1390"}
+                        ],
+                        "total": 2,
+                        "totalPages": 1
+                    }
+                }"#,
+        )
+        .unwrap();
+        let page = envelope.into_data("workspace list").unwrap();
+        assert_eq!(page.total_pages, 1);
+        assert_eq!(page.list.len(), 2);
+        assert_eq!(page.list[0].id, 642);
+        assert_eq!(page.list[1].name, "Workspace 1390");
     }
 
     #[test]

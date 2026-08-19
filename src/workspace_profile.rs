@@ -35,54 +35,52 @@ pub(crate) fn list() -> Result<Vec<WorkspaceProfileMetadata>> {
     if !auth.authenticated {
         bail!("当前设备尚未登录百积木")
     }
+    let listed_workspaces = baijimu_cli::list_workspaces().context("读取可访问工作区列表失败")?;
+    let mut authorized_workspaces = Vec::with_capacity(auth.workspace_ids.len());
+    for workspace_id in &auth.workspace_ids {
+        let workspace = listed_workspaces
+            .iter()
+            .find(|workspace| workspace.id == *workspace_id)
+            .with_context(|| {
+                format!("baijimu CLI 授权状态中的工作区 {workspace_id} 未出现在工作区目录中")
+            })?;
+        authorized_workspaces.push(workspace.clone());
+    }
     list_from_root(
         &connector_home().join("workspace-profiles"),
         &auth.base_url,
-        &auth.workspace_ids,
+        &authorized_workspaces,
     )
 }
 
 fn list_from_root(
     root: &Path,
     environment: &str,
-    authorized_workspace_ids: &[u64],
+    authorized_workspaces: &[baijimu_cli::Workspace],
 ) -> Result<Vec<WorkspaceProfileMetadata>> {
     let environment_directory = root.join(hex_encode(environment.as_bytes()));
     let mut profiles = Vec::new();
-    let entries = match fs::read_dir(&environment_directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(profiles),
-        Err(error) => {
-            return Err(error).with_context(|| {
-                format!(
-                    "读取 Connector 工作区档案目录失败: {}",
-                    environment_directory.display()
-                )
-            })
-        }
-    };
-    for entry in entries {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let Some(directory_workspace_id) = entry
-            .file_name()
-            .to_str()
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|value| *value > 0)
-        else {
-            continue;
-        };
-        if !authorized_workspace_ids.contains(&directory_workspace_id) {
-            continue;
-        }
-        let Some(metadata) = read_metadata(&entry.path().join("profile.json")) else {
-            continue;
-        };
-        if metadata_matches_value(&metadata, environment, directory_workspace_id) {
-            profiles.push(metadata);
-        }
+    for workspace in authorized_workspaces {
+        let metadata_path = environment_directory
+            .join(workspace.id.to_string())
+            .join("codex-home")
+            .join("profile.json");
+        let existing = read_metadata(&metadata_path)
+            .filter(|metadata| metadata_matches_value(metadata, environment, workspace.id));
+        profiles.push(WorkspaceProfileMetadata {
+            schema_version: PROFILE_SCHEMA_VERSION,
+            environment: environment.to_string(),
+            workspace_id: workspace.id,
+            workspace_name: workspace.name.clone(),
+            created_at_epoch_seconds: existing
+                .as_ref()
+                .map(|metadata| metadata.created_at_epoch_seconds)
+                .unwrap_or_default(),
+            updated_at_epoch_seconds: existing
+                .as_ref()
+                .map(|metadata| metadata.updated_at_epoch_seconds)
+                .unwrap_or_default(),
+        });
     }
     profiles.sort_by(|left, right| {
         right
@@ -275,14 +273,13 @@ mod list_tests {
             now_epoch_seconds()
         ));
         let environment = "https://api.baijimu.test";
-        for (workspace_id, name, updated_at) in [
-            (642, "Workspace 642", 30),
-            (1390, "Workspace 1390", 20),
-            (2000, "Unauthorized", 40),
-        ] {
+        for (workspace_id, name, updated_at) in
+            [(642, "Stale Workspace 642", 30), (2000, "Unauthorized", 40)]
+        {
             let directory = root
                 .join(hex_encode(environment.as_bytes()))
-                .join(workspace_id.to_string());
+                .join(workspace_id.to_string())
+                .join("codex-home");
             fs::create_dir_all(&directory).unwrap();
             fs::write(
                 directory.join("profile.json"),
@@ -308,7 +305,21 @@ mod list_tests {
         )
         .unwrap();
 
-        let profiles = list_from_root(&root, environment, &[1390, 642]).unwrap();
+        let profiles = list_from_root(
+            &root,
+            environment,
+            &[
+                baijimu_cli::Workspace {
+                    id: 1390,
+                    name: "Workspace 1390".to_string(),
+                },
+                baijimu_cli::Workspace {
+                    id: 642,
+                    name: "Renamed Workspace 642".to_string(),
+                },
+            ],
+        )
+        .unwrap();
 
         assert_eq!(
             profiles
@@ -316,7 +327,7 @@ mod list_tests {
                 .map(|profile| (profile.workspace_id, profile.workspace_name))
                 .collect::<Vec<_>>(),
             vec![
-                (642, "Workspace 642".to_string()),
+                (642, "Renamed Workspace 642".to_string()),
                 (1390, "Workspace 1390".to_string())
             ]
         );
