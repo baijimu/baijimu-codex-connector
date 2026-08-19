@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex-connector",
   "name": "Codex 远程连接器",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "安装并托管 Codex CLI，按可信工作区上下文提供 app-server 会话、线程、轮次和事件接口。",
   "icon": {
     "mediaType": "image/png",
