@@ -221,13 +221,15 @@ enum SetupReadinessDecision {
 fn decide_setup_readiness(
     setup: &setup::SetupStatus,
     current_workspace_id: Option<u64>,
-    current_workspace_authorized: bool,
+    current_workspace_credential_available: bool,
     cli_ready: bool,
 ) -> SetupReadinessDecision {
     if setup.status == "running" {
         return SetupReadinessDecision::Initializing;
     }
-    let Some(workspace_id) = current_workspace_id.filter(|_| current_workspace_authorized) else {
+    let Some(workspace_id) =
+        current_workspace_id.filter(|_| current_workspace_credential_available)
+    else {
         return SetupReadinessDecision::NeedsWorkspace;
     };
     if setup.status == "failed" && setup.workspace_id == Some(workspace_id) {
@@ -832,8 +834,8 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
     let auth = baijimu_cli::auth_status()
         .map_err(|error| HttpError::new(409, format!("读取当前工作区授权失败：{error}")))?;
     let current_workspace_id = auth.current_workspace_id;
-    let current_workspace_authorized =
-        current_workspace_id.is_some_and(|workspace_id| auth.workspace_ids.contains(&workspace_id));
+    let current_workspace_credential_available = current_workspace_id
+        .is_some_and(|workspace_id| auth.credential_workspace_ids.contains(&workspace_id));
     let setup_status = state.setup.state();
     let client = &state.client;
     let codex_cli = client.usable_cli_for_setup()?;
@@ -841,7 +843,7 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
     match decide_setup_readiness(
         &setup_status,
         current_workspace_id,
-        current_workspace_authorized,
+        current_workspace_credential_available,
         codex_cli.is_some(),
     ) {
         SetupReadinessDecision::Ready => Ok(setup_readiness_value(

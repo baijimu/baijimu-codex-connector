@@ -11,7 +11,7 @@ test("Connector manifest exposes only CLI and remote app-server responsibilities
   const manifest = JSON.parse(await read("connector.json"));
   assert.equal(manifest.id, "com.baijimu.connector.codex-connector");
   assert.equal(manifest.name, "Codex 远程连接器");
-  assert.equal(manifest.version, "1.0.3");
+  assert.equal(manifest.version, "1.0.4");
   assert.equal(manifest.source.repo, "baijimu/baijimu-codex-connector");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
@@ -34,6 +34,8 @@ test("Connector requires trusted workspace context and owns isolated profiles", 
   assert.match(main, /WORKSPACE_CONTEXT_REQUIRED/);
   assert.match(profile, /workspace-profiles/);
   assert.match(profile, /environment: String/);
+  assert.match(profile, /baijimu_cli::list_workspaces/);
+  assert.doesNotMatch(profile, /credential_workspace_ids/);
   assert.match(readme, /codex-completion`（Codex 模型接口服务）继续独立/);
 });
 
