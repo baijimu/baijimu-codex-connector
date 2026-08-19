@@ -1,6 +1,6 @@
 {
   "name": "@baijimu/connector-codex",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "面向可信工作区、对外提供 Codex CLI 与 app-server 能力的百积木连接器。",
   "type": "module",
   "bin": {
