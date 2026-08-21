@@ -180,6 +180,10 @@ pub(crate) fn connector_home() -> PathBuf {
         .unwrap_or_else(|| home_dir().join(".baijimu-connector-codex"))
 }
 
+pub(crate) fn system_codex_home() -> PathBuf {
+    home_dir().join(".codex")
+}
+
 pub(crate) fn management_token_path() -> PathBuf {
     connector_home().join(MANAGEMENT_TOKEN_FILE)
 }
@@ -232,7 +236,12 @@ pub(crate) fn log_path() -> PathBuf {
 }
 
 pub(crate) fn home_dir() -> PathBuf {
+    #[cfg(windows)]
+    if let Some(path) = env::var_os("USERPROFILE").filter(|value| !value.is_empty()) {
+        return PathBuf::from(path);
+    }
     env::var_os("HOME")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }

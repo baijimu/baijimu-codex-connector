@@ -1,9 +1,9 @@
 [package]
 name = "baijimu-connector-codex"
-version = "1.0.4"
+version = "2.0.0"
 edition = "2021"
 license = "MIT"
-description = "面向可信工作区、对外提供 Codex CLI 与 app-server 能力的百积木连接器。"
+description = "通过平台授权访问设备系统默认 Codex 的百积木远程连接器。"
 
 [[bin]]
 name = "baijimu-connector-codex"

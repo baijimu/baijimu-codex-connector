@@ -10,7 +10,6 @@ mod process_runtime;
 mod project_checkout;
 mod setup;
 mod thread_state;
-mod workspace_profile;
 
 #[cfg(test)]
 use app_server::retryable_event_status;
@@ -22,7 +21,6 @@ use invoke::{read_json_file, resolve_state_project_references};
 use process_runtime::*;
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -64,59 +62,10 @@ struct ServerOptions {
 
 struct AppState {
     client: CodexClient,
-    workspace_clients: WorkspaceClients,
     management_operation: Mutex<()>,
     setup: setup::SetupManager,
     management_token: String,
     startup: StartupReadiness,
-}
-
-struct WorkspaceClients {
-    options: ServerOptions,
-    clients: Mutex<HashMap<(String, u64), Arc<CodexClient>>>,
-}
-
-impl WorkspaceClients {
-    fn new(options: ServerOptions) -> Self {
-        Self {
-            options,
-            clients: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn get(&self, workspace_id: u64) -> Result<Arc<CodexClient>, HttpError> {
-        let profile = workspace_profile::ensure(workspace_id).map_err(|error| {
-            HttpError::coded(
-                409,
-                error.to_string(),
-                "CODEX_WORKSPACE_PROFILE_UNAVAILABLE",
-                json!({"workspaceId": workspace_id}),
-            )
-        })?;
-        let key = (profile.environment, workspace_id);
-        let mut clients = self
-            .clients
-            .lock()
-            .map_err(|_| HttpError::internal("Codex 工作区客户端池状态锁异常"))?;
-        Ok(clients
-            .entry(key)
-            .or_insert_with(|| {
-                Arc::new(CodexClient::new_with_home(
-                    self.options.clone(),
-                    profile.codex_home,
-                    profile.state_dir,
-                ))
-            })
-            .clone())
-    }
-
-    fn shutdown(&self) {
-        if let Ok(clients) = self.clients.lock() {
-            for client in clients.values() {
-                client.shutdown();
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -224,6 +173,9 @@ fn decide_setup_readiness(
     current_workspace_credential_available: bool,
     cli_ready: bool,
 ) -> SetupReadinessDecision {
+    if cli_ready {
+        return SetupReadinessDecision::Ready;
+    }
     if setup.status == "running" {
         return SetupReadinessDecision::Initializing;
     }
@@ -243,11 +195,7 @@ fn decide_setup_readiness(
     if setup.status == "interrupted" {
         return SetupReadinessDecision::Failed;
     }
-    if setup.status == "succeeded" && setup.workspace_id == Some(workspace_id) && cli_ready {
-        SetupReadinessDecision::Ready
-    } else {
-        SetupReadinessDecision::Start(workspace_id)
-    }
+    SetupReadinessDecision::Start(workspace_id)
 }
 
 #[derive(Debug)]
@@ -308,10 +256,8 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
         json!({"ok": true, "url": format!("http://{}:{}", options.host, options.port), "pid": std::process::id()})
     );
     let setup = setup::SetupManager::load();
-    let client_options = options.clone();
     let state = Arc::new(AppState {
         client: CodexClient::new(options.clone()),
-        workspace_clients: WorkspaceClients::new(client_options),
         management_operation: Mutex::new(()),
         setup,
         management_token,
@@ -423,7 +369,6 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
                 == Some("1") =>
         {
             state.client.shutdown();
-            state.workspace_clients.shutdown();
             thread::spawn(|| {
                 thread::sleep(Duration::from_millis(20));
                 std::process::exit(0);
@@ -439,26 +384,6 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             } else {
                 serde_json::from_slice(&request.body).map_err(|error| error.to_string())?
             };
-            if path == "/invoke/listWorkspaceProfiles" {
-                return match workspace_profile::list() {
-                    Ok(profiles) => write_json(
-                        &mut stream,
-                        200,
-                        &json!({"ok": true, "data": {"profiles": profiles}}),
-                    ),
-                    Err(error) => write_json(
-                        &mut stream,
-                        409,
-                        &json!({
-                            "ok": false,
-                            "error": {
-                                "code": "CODEX_WORKSPACE_PROFILE_LIST_UNAVAILABLE",
-                                "message": error.to_string()
-                            }
-                        }),
-                    ),
-                };
-            }
             let Some(workspace_id) = request.workspace_id else {
                 return write_json(
                     &mut stream,
@@ -486,8 +411,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
                     }),
                 );
             }
-            let client = state.workspace_clients.get(workspace_id);
-            match client.and_then(|client| handle_invoke(path, &body, &client)) {
+            match handle_invoke(path, &body, &state.client) {
                 Ok(data) => (200, json!({"ok": true, "data": data})),
                 Err(error) => (
                     error.status,
@@ -542,28 +466,6 @@ fn handle_management(
     body: &Value,
     state: &AppState,
 ) -> Result<Value, HttpError> {
-    if matches!(
-        path,
-        "/management/v1/credential-state"
-            | "/management/v1/codex/restore-external-home"
-            | "/management/v1/codex/launch"
-            | "/management/v1/codex/projects"
-            | "/management/v1/codex/sessions"
-            | "/management/v1/codex/sessions/read"
-            | "/management/v1/codex/sessions/read-state"
-            | "/management/v1/codex/sessions/start"
-            | "/management/v1/codex/turns"
-            | "/management/v1/codex/turns/start"
-            | "/management/v1/codex/turns/interrupt"
-            | "/management/v1/codex/events"
-    ) {
-        return Err(HttpError::coded(
-            410,
-            "该管理能力已从 Connector 移出；桌面安装和工作区切换请使用 Codex 桌面环境应用",
-            "CODEX_DESKTOP_MANAGEMENT_MOVED",
-            json!({"targetConnectorId": "com.baijimu.connector.codex"}),
-        ));
-    }
     match (method, path) {
         ("GET", "/management/v1/setup/state") => serde_json::to_value(state.setup.state())
             .map_err(|error| HttpError::internal(error.to_string())),
@@ -589,137 +491,6 @@ fn handle_management(
             )
             .map_err(|error| HttpError::internal(error.to_string()))
         }
-        #[cfg(any())]
-        ("GET", "/management/v1/credential-state") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-            serde_json::to_value(
-                credential::state().map_err(|error| HttpError::internal(error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
-        }
-        #[cfg(any())]
-        ("POST", "/management/v1/codex/restore-external-home") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-            serde_json::to_value(
-                credential::restore_legacy_global_codex_home()
-                    .map_err(|error| HttpError::new(409, error.to_string()))?,
-            )
-            .map_err(|error| HttpError::internal(error.to_string()))
-        }
-        #[cfg(any())]
-        ("POST", "/management/v1/codex/launch") => {
-            let _credential_guard = state
-                .credential_management
-                .lock()
-                .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-            if state.setup.state().status == "running" {
-                return Err(HttpError::new(
-                    409,
-                    "Codex 正在安装配置，完成后再启动所选工作区",
-                ));
-            }
-            let mode = body
-                .get("mode")
-                .and_then(Value::as_str)
-                .ok_or_else(|| HttpError::new(400, "必须提供 mode"))?;
-            let workspace_id = match mode {
-                "chatgpt" => None,
-                "baijimu" => Some(
-                    body.get("workspaceId")
-                        .and_then(Value::as_u64)
-                        .filter(|value| *value > 0)
-                        .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?,
-                ),
-                _ => return Err(HttpError::new(400, "mode 必须是 chatgpt 或 baijimu")),
-            };
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            if !test_control_enabled() {
-                desktop::verify_system_compatibility().map_err(desktop_compatibility_http_error)?;
-            }
-            let prepared_workspace = workspace_id
-                .map(credential::prepare_workspace_profile)
-                .transpose()
-                .map_err(|error| HttpError::new(409, error.to_string()))?;
-            let snapshot = credential::active_home_snapshot()
-                .map_err(|error| HttpError::internal(error.to_string()))?;
-            let previous_home = snapshot.codex_home.clone();
-            let client = &state.client;
-            client.shutdown();
-            let desktop_switch = if test_control_enabled() {
-                desktop::DesktopSwitch::default()
-            } else {
-                desktop::stop_for_codex_home_switch().map_err(|error| {
-                    client.switch_to_active_profile();
-                    let _ = client.ensure_started();
-                    HttpError::new(409, error.to_string())
-                })?
-            };
-            let activation = match mode {
-                "chatgpt" => credential::activate_chatgpt_profile().map(|_| ()),
-                "baijimu" => credential::activate_prepared_workspace_profile(
-                    &prepared_workspace.expect("prepared above").profile,
-                )
-                .map(|_| ()),
-                _ => unreachable!("mode validated above"),
-            };
-            if let Err(error) = activation {
-                client.switch_to_active_profile();
-                let _ = client.ensure_started();
-                let _ = desktop_switch.restart_and_verify(&previous_home);
-                return Err(HttpError::new(409, error.to_string()));
-            }
-            client.switch_to_active_profile();
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            let selected_home = credential::active_codex_home();
-            let verification = client
-                .ensure_started()
-                .map_err(|error| error.message)
-                .and_then(|_| {
-                    if test_control_enabled() {
-                        return Ok(());
-                    }
-                    #[cfg(any(target_os = "macos", target_os = "windows"))]
-                    {
-                        desktop::launch_and_verify(&selected_home)
-                            .map_err(|error| error.to_string())
-                    }
-                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                    {
-                        Ok(())
-                    }
-                })
-                .and_then(|_| credential::state().map_err(|error| error.to_string()));
-            match verification {
-                Ok(credential_state) => serde_json::to_value(credential_state)
-                    .map_err(|error| HttpError::internal(error.to_string())),
-                Err(error) => {
-                    client.shutdown();
-                    let _ = desktop::stop_for_codex_home_switch();
-                    let rollback = credential::restore_active_home(snapshot);
-                    client.switch_to_active_profile();
-                    let app_server_rollback =
-                        client.ensure_started().err().map(|item| item.message);
-                    let desktop_rollback = desktop_switch.restart_and_verify(&previous_home).err();
-                    let mut message = format!("Codex 启动验证失败，已恢复原有档案：{error}");
-                    if let Err(rollback) = rollback {
-                        message.push_str(&format!("；状态指针回滚失败：{rollback}"));
-                    }
-                    if let Some(rollback) = app_server_rollback {
-                        message.push_str(&format!("；app-server 回滚验证失败：{rollback}"));
-                    }
-                    if let Some(rollback) = desktop_rollback {
-                        message.push_str(&format!("；桌面应用回滚验证失败：{rollback}"));
-                    }
-                    Err(HttpError::new(409, message))
-                }
-            }
-        }
         ("POST", "/management/v1/projects/checkout") => {
             let _project_guard = state
                 .management_operation
@@ -732,53 +503,8 @@ fn handle_management(
                 .map_err(|error| HttpError::internal(error.to_string()))?;
             serde_json::to_value(result).map_err(|error| HttpError::internal(error.to_string()))
         }
-        ("POST", "/management/v1/codex/projects") => {
-            handle_management_invoke("/invoke/listProjects", body, state)
-        }
-        ("POST", "/management/v1/codex/sessions") => {
-            handle_management_invoke("/invoke/listSessions", body, state)
-        }
-        ("POST", "/management/v1/codex/sessions/read") => {
-            handle_management_invoke("/invoke/readThread", body, state)
-        }
-        ("POST", "/management/v1/codex/sessions/read-state") => {
-            handle_management_invoke("/invoke/setThreadReadState", body, state)
-        }
-        ("POST", "/management/v1/codex/sessions/start") => {
-            handle_management_invoke("/invoke/startThread", body, state)
-        }
-        ("POST", "/management/v1/codex/turns") => {
-            handle_management_invoke("/invoke/listThreadTurns", body, state)
-        }
-        ("POST", "/management/v1/codex/turns/start") => {
-            handle_management_invoke("/invoke/startTurn", body, state)
-        }
-        ("POST", "/management/v1/codex/turns/interrupt") => {
-            handle_management_invoke("/invoke/interruptTurn", body, state)
-        }
-        ("POST", "/management/v1/codex/events") => {
-            handle_management_invoke("/invoke/recentEvents", body, state)
-        }
         _ => Err(HttpError::new(404, format!("未知的管理接口路径：{path}"))),
     }
-}
-
-#[cfg(any())]
-fn desktop_compatibility_http_error(error: anyhow::Error) -> HttpError {
-    if let Some(unsupported) = system_compatibility::unsupported_os_version(&error) {
-        return HttpError::coded(
-            409,
-            unsupported.to_string(),
-            system_compatibility::ERROR_CODE_UNSUPPORTED_OS_VERSION,
-            json!({
-                "platform": unsupported.platform(),
-                "currentVersion": unsupported.current_version(),
-                "minimumVersion": unsupported.minimum_version(),
-                "application": unsupported.application(),
-            }),
-        );
-    }
-    HttpError::new(409, error.to_string())
 }
 
 fn setup_readiness_value(
@@ -831,15 +557,22 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
         .management_operation
         .lock()
         .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
-    let auth = baijimu_cli::auth_status()
-        .map_err(|error| HttpError::new(409, format!("读取当前工作区授权失败：{error}")))?;
-    let current_workspace_id = auth.current_workspace_id;
-    let current_workspace_credential_available = current_workspace_id
-        .is_some_and(|workspace_id| auth.credential_workspace_ids.contains(&workspace_id));
     let setup_status = state.setup.state();
     let client = &state.client;
     let codex_cli = client.usable_cli_for_setup()?;
     let verify_app_server_capability = client.options.extra_args.is_empty();
+    if codex_cli.is_some() {
+        return Ok(setup_readiness_value(
+            "ready",
+            "系统默认 Codex CLI 与 app-server 能力已就绪",
+            setup_status,
+        ));
+    }
+    let auth = baijimu_cli::auth_status()
+        .map_err(|error| HttpError::new(409, format!("读取安装授权上下文失败：{error}")))?;
+    let current_workspace_id = auth.current_workspace_id;
+    let current_workspace_credential_available = current_workspace_id
+        .is_some_and(|workspace_id| auth.credential_workspace_ids.contains(&workspace_id));
     match decide_setup_readiness(
         &setup_status,
         current_workspace_id,
@@ -882,14 +615,6 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
             setup_status,
         )),
     }
-}
-
-fn handle_management_invoke(
-    invoke_path: &str,
-    body: &Value,
-    state: &AppState,
-) -> Result<Value, HttpError> {
-    handle_invoke(invoke_path, body, &state.client)
 }
 
 fn management_authorized(header: Option<&str>, expected: &str) -> bool {
