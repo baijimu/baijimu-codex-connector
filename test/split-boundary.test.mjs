@@ -11,7 +11,7 @@ test("Connector manifest exposes only CLI and remote app-server responsibilities
   const manifest = JSON.parse(await read("connector.json"));
   assert.equal(manifest.id, "com.baijimu.connector.codex-connector");
   assert.equal(manifest.name, "Codex 远程连接器");
-  assert.equal(manifest.version, "1.0.4");
+  assert.equal(manifest.version, "2.0.0");
   assert.equal(manifest.source.repo, "baijimu/baijimu-codex-connector");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
@@ -20,22 +20,24 @@ test("Connector manifest exposes only CLI and remote app-server responsibilities
   assert.equal(manifest.management.operations.credentialState, undefined);
   assert.equal(manifest.management.operations.launchCodex, undefined);
   assert.ok(manifest.methods.some((method) => method.name === "startThread"));
-  assert.ok(manifest.methods.some((method) => method.name === "listWorkspaceProfiles"));
+  assert.ok(!manifest.methods.some((method) => method.name === "listWorkspaceProfiles"));
   assert.ok(manifest.events.some((event) => event.name === "codexTurnCompleted"));
 });
 
-test("Connector requires trusted workspace context and owns isolated profiles", async () => {
-  const [main, profile, readme] = await Promise.all([
+test("Connector uses trusted platform authorization with one system Codex home", async () => {
+  const [main, runtime, appServer, readme] = await Promise.all([
     read("src/main.rs"),
-    read("src/workspace_profile.rs"),
+    read("src/process_runtime.rs"),
+    read("src/app_server.rs"),
     read("README.md"),
   ]);
   assert.match(main, /x-baijimu-workspace-id/);
   assert.match(main, /WORKSPACE_CONTEXT_REQUIRED/);
-  assert.match(profile, /workspace-profiles/);
-  assert.match(profile, /environment: String/);
-  assert.match(profile, /baijimu_cli::list_workspaces/);
-  assert.doesNotMatch(profile, /credential_workspace_ids/);
+  assert.doesNotMatch(main, /WorkspaceClients|workspace_profile/);
+  assert.match(runtime, /home_dir\(\)\.join\("\.codex"\)/);
+  assert.match(appServer, /system_codex_home\(\)/);
+  assert.doesNotMatch(appServer, /default-profile/);
+  assert.doesNotMatch(readme, /workspace-profiles/);
   assert.match(readme, /codex-completion`（Codex 模型接口服务）继续独立/);
 });
 

@@ -7,10 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 test("Baijimu CLI exclusively owns platform authentication and Partner API calls", async () => {
-  const [profile, platformCli] = await Promise.all([
-    readFile(join(root, "src", "workspace_profile.rs"), "utf8"),
-    readFile(join(root, "src", "baijimu_cli.rs"), "utf8"),
-  ]);
+  const platformCli = await readFile(join(root, "src", "baijimu_cli.rs"), "utf8");
 
   for (const forbidden of [
     "load_shared_credential_store",
@@ -20,19 +17,14 @@ test("Baijimu CLI exclusively owns platform authentication and Partner API calls
     "bearer_auth",
     "machineCredentials",
     "lc_pat_",
+    "llm-credential",
+    "show-secret",
+    "workspace-profiles",
   ]) {
-    assert.doesNotMatch(profile, new RegExp(forbidden));
+    assert.doesNotMatch(platformCli, new RegExp(forbidden));
   }
-  assert.doesNotMatch(
-    profile,
-    /llm-credential\/partner\/v1|partner\/v1\/workspaces/,
-  );
 
   assert.match(platformCli, /\["auth", "status"\]/);
-  assert.match(platformCli, /"workspace", "get"/);
-  assert.match(platformCli, /"llm-credential",\s*"create"/);
-  assert.match(platformCli, /"--json"/);
-  assert.match(platformCli, /"--show-secret"/);
   assert.doesNotMatch(
     platformCli,
     /reqwest|bearer_auth|fs::read|fs::read_to_string|auth\.json/,

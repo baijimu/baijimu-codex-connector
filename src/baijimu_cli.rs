@@ -15,12 +15,6 @@ pub struct AuthStatus {
     pub credential_workspace_ids: Vec<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Workspace {
-    pub id: u64,
-    pub name: String,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthStatusContract {
@@ -28,50 +22,6 @@ struct AuthStatusContract {
     base_url: String,
     current_workspace_id: Option<u64>,
     workspace_ids: Vec<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PlatformEnvelope<T> {
-    error_code: String,
-    value: Option<String>,
-    data: T,
-}
-
-impl<T> PlatformEnvelope<T> {
-    fn into_data(self, operation: &str) -> Result<T> {
-        if self.error_code != "0" {
-            bail!(
-                "baijimu CLI {operation} 失败（{}）：{}",
-                self.error_code,
-                self.value.as_deref().unwrap_or("平台操作失败")
-            );
-        }
-        Ok(self.data)
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct WorkspaceContract {
-    id: u64,
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkspaceListContract {
-    list: Vec<WorkspaceContract>,
-    total_pages: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LlmCredentialContract {
-    created: bool,
-    key_type: String,
-    workspace_id: u64,
-    project_id: Option<u64>,
-    credential: String,
 }
 
 pub fn command() -> Result<Command> {
@@ -92,93 +42,6 @@ pub fn auth_status() -> Result<AuthStatus> {
             "auth status.workspaceIds",
         )?,
     })
-}
-
-pub fn get_workspace(workspace_id: u64) -> Result<Workspace> {
-    require_workspace_id(workspace_id)?;
-    let workspace_text = workspace_id.to_string();
-    let envelope: PlatformEnvelope<WorkspaceContract> = run_json(
-        "workspace get",
-        &["workspace", "get", &workspace_text, "--json"],
-    )?;
-    let workspace = envelope.into_data("workspace get")?;
-    if workspace.id != workspace_id {
-        bail!(
-            "baijimu CLI workspace get 返回的工作区不匹配：expected={workspace_id}, actual={}",
-            workspace.id
-        );
-    }
-    Ok(Workspace {
-        id: workspace.id,
-        name: required_text(workspace.name, "workspace get.data.name")?,
-    })
-}
-
-pub fn list_workspaces() -> Result<Vec<Workspace>> {
-    const PAGE_SIZE: u64 = 100;
-    let mut page = 1_u64;
-    let mut workspaces = Vec::new();
-    loop {
-        let page_text = page.to_string();
-        let page_size_text = PAGE_SIZE.to_string();
-        let envelope: PlatformEnvelope<WorkspaceListContract> = run_json(
-            "workspace list",
-            &[
-                "workspace",
-                "list",
-                "--page",
-                &page_text,
-                "--page-size",
-                &page_size_text,
-                "--json",
-            ],
-        )?;
-        let data = envelope.into_data("workspace list")?;
-        if data.total_pages == 0 {
-            bail!("baijimu CLI workspace list 返回非法 totalPages");
-        }
-        for workspace in data.list {
-            require_workspace_id(workspace.id)?;
-            if workspaces
-                .iter()
-                .any(|existing: &Workspace| existing.id == workspace.id)
-            {
-                bail!("baijimu CLI workspace list 返回重复工作区 {}", workspace.id);
-            }
-            workspaces.push(Workspace {
-                id: workspace.id,
-                name: required_text(workspace.name, "workspace list.data.list[].name")?,
-            });
-        }
-        if page >= data.total_pages {
-            break;
-        }
-        page += 1;
-    }
-    Ok(workspaces)
-}
-
-pub fn create_llm_credential(workspace_id: u64) -> Result<String> {
-    require_workspace_id(workspace_id)?;
-    let workspace_text = workspace_id.to_string();
-    let contract: LlmCredentialContract = run_json(
-        "llm-credential create",
-        &[
-            "llm-credential",
-            "create",
-            "--json",
-            "--workspace-id",
-            &workspace_text,
-            "--show-secret",
-        ],
-    )?;
-    if !contract.created || contract.key_type != "llmCredential" {
-        bail!("baijimu CLI 未确认 LLM credential 已创建");
-    }
-    if contract.workspace_id != workspace_id || contract.project_id.is_some() {
-        bail!("baijimu CLI 返回的 LLM credential 归属不匹配");
-    }
-    required_text(contract.credential, "llm-credential create.credential")
 }
 
 fn binary() -> Result<PathBuf> {
@@ -227,13 +90,6 @@ fn required_text(value: String, field: &str) -> Result<String> {
         bail!("baijimu CLI 响应缺少 {field}");
     }
     Ok(value.to_string())
-}
-
-fn require_workspace_id(workspace_id: u64) -> Result<()> {
-    if workspace_id == 0 {
-        bail!("工作区 ID 必须大于 0");
-    }
-    Ok(())
 }
 
 fn positive_unique_ids(mut ids: Vec<u64>, field: &str) -> Result<Vec<u64>> {
@@ -286,70 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_contract_rejects_failed_envelopes() {
-        let envelope: PlatformEnvelope<WorkspaceContract> = crate::json_compat::from_slice(
-            r#"{
-                "errorCode": "401",
-                "value": "PAT 无效或已过期",
-                "data": {"id": 642, "name": "不会使用"}
-            }"#
-            .as_bytes(),
-        )
-        .unwrap();
-        let error = envelope.into_data("workspace get").unwrap_err();
-        assert!(error.to_string().contains("PAT 无效或已过期"));
-    }
-
-    #[test]
-    fn workspace_list_contract_owns_pagination_and_workspace_identity() {
-        let envelope: PlatformEnvelope<WorkspaceListContract> = crate::json_compat::from_slice(
-            br#"{
-                    "errorCode": "0",
-                    "value": "success",
-                    "data": {
-                        "list": [
-                            {"id": 642, "name": "Workspace 642"},
-                            {"id": 1390, "name": "Workspace 1390"}
-                        ],
-                        "total": 2,
-                        "totalPages": 1
-                    }
-                }"#,
-        )
-        .unwrap();
-        let page = envelope.into_data("workspace list").unwrap();
-        assert_eq!(page.total_pages, 1);
-        assert_eq!(page.list.len(), 2);
-        assert_eq!(page.list[0].id, 642);
-        assert_eq!(page.list[1].name, "Workspace 1390");
-    }
-
-    #[test]
-    fn llm_credential_contract_exposes_only_the_typed_secret_field() {
-        let contract: LlmCredentialContract = crate::json_compat::from_slice(
-            br#"{
-                "created": true,
-                "keyType": "llmCredential",
-                "workspaceId": 642,
-                "projectId": null,
-                "agentConfigId": null,
-                "agentSessionId": null,
-                "sessionId": null,
-                "maskedLlmCredential": "secret****tail",
-                "credential": "workspace-llm-secret",
-                "llmCredential": "workspace-llm-secret",
-                "apiKey": "workspace-llm-secret"
-            }"#,
-        )
-        .unwrap();
-        assert!(contract.created);
-        assert_eq!(contract.workspace_id, 642);
-        assert_eq!(contract.credential, "workspace-llm-secret");
-    }
-
-    #[test]
     fn invalid_workspace_ids_fail_closed() {
-        assert!(require_workspace_id(0).is_err());
         assert!(positive_unique_ids(vec![642, 0], "workspaceIds").is_err());
     }
 

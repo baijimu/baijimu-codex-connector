@@ -391,7 +391,7 @@ function connectorHome() {
 }
 
 function codexHome() {
-  return process.env.CODEX_HOME || join(homedir(), ".codex");
+  return join(homedir(), ".codex");
 }
 
 function pidPath() {

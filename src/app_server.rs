@@ -74,7 +74,7 @@ impl CodexClient {
         let connector_home = crate::process_runtime::connector_home();
         Self::new_with_home(
             options,
-            connector_home.join("default-profile"),
+            crate::process_runtime::system_codex_home(),
             connector_home,
         )
     }
@@ -225,7 +225,9 @@ impl CodexClient {
     }
 
     fn refresh_active_home_locked(&self) {
-        // Each client is permanently bound to one trusted workspace profile.
+        // The remote connector has one process-wide client bound to the device's
+        // system Codex state. Platform workspace identity is authorization
+        // context and never selects a different Codex home.
     }
 
     pub(crate) fn refresh_active_home(&self) {

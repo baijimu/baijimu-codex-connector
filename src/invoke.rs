@@ -1,4 +1,5 @@
 use crate::*;
+use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StateProjectRoot {
