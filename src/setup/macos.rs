@@ -1,6 +1,7 @@
 use super::contract::{InstallerStatus, InstallerStepState, MacosInstallerResult};
 use super::{
-    atomic_write_private, compact_error, installer_state_dir, set_private_directory,
+    atomic_write_private, compact_error, ensure_app_server_capability,
+    expose_installed_command_to_current_process, installer_state_dir, set_private_directory,
     SetupCompletion,
 };
 use crate::codex_binary;
@@ -24,7 +25,6 @@ const LEGACY_APP_PATH: &str = "/Applications/Codex.app";
 
 pub(super) fn run_install(
     workspace_id: u64,
-    existing_codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
     native_script_path: &Path,
 ) -> Result<SetupCompletion> {
@@ -39,7 +39,6 @@ pub(super) fn run_install(
     let model = String::new();
     let request = MacosInstallRequest {
         workspace_id,
-        existing_codex_cli,
         verify_app_server_capability,
         native_script_path,
         state_dir: &state_dir,
@@ -70,7 +69,6 @@ pub(super) fn run_install(
 }
 
 struct MacosInstaller<'a> {
-    existing_codex_cli: Option<&'a Path>,
     verify_app_server_capability: bool,
     native_script_path: &'a Path,
     work_dir: &'a Path,
@@ -83,7 +81,6 @@ struct MacosInstaller<'a> {
 
 struct MacosInstallRequest<'a> {
     workspace_id: u64,
-    existing_codex_cli: Option<&'a Path>,
     verify_app_server_capability: bool,
     native_script_path: &'a Path,
     state_dir: &'a Path,
@@ -111,7 +108,6 @@ impl<'a> MacosInstaller<'a> {
             request.model,
         );
         Ok(Self {
-            existing_codex_cli: request.existing_codex_cli,
             verify_app_server_capability: request.verify_app_server_capability,
             native_script_path: request.native_script_path,
             work_dir: request.work_dir,
@@ -125,19 +121,9 @@ impl<'a> MacosInstaller<'a> {
 
     fn execute(&mut self) -> Result<SetupCompletion> {
         self.ensure_codex_cli()?;
-        let resolution = codex_binary::resolve()
+        let inspection = codex_binary::inspect()
             .map_err(|error| anyhow::anyhow!("Codex CLI 安装完成，但回查失败：{error}"))?;
-        if self.verify_app_server_capability {
-            let inspection = codex_binary::inspect(&resolution);
-            if !inspection.app_server_supported {
-                anyhow::bail!(
-                    "安装配置完成，但 Codex CLI 不支持 app-server：{}",
-                    inspection
-                        .error
-                        .unwrap_or_else(|| "能力检查失败".to_string())
-                );
-            }
-        }
+        ensure_app_server_capability(&inspection, self.verify_app_server_capability)?;
         self.progress
             .complete_pending(InstallerStepState::Skipped, "Codex CLI 安装已完成")?;
         Ok(SetupCompletion::completed_without_desktop_launch())
@@ -250,21 +236,6 @@ impl<'a> MacosInstaller<'a> {
             None,
             None,
         )?;
-        if let Some(path) = self.existing_codex_cli.filter(|path| path.is_file()) {
-            self.cli_path = Some(path.to_path_buf());
-            self.result.cli_installed = true;
-            self.result.cli_install_method = "already-installed".to_string();
-            self.result.cli_path = path.display().to_string();
-            self.progress.set_step(
-                5,
-                InstallerStepState::Completed,
-                "Codex CLI 已可用",
-                None,
-                None,
-            )?;
-            return Ok(());
-        }
-
         self.ensure_manifest(5)?;
         let asset = self.select_asset("codex_cli")?.clone();
         let archive = self.work_dir.join(&asset.name);
@@ -288,6 +259,7 @@ impl<'a> MacosInstaller<'a> {
         if !cli_path.is_absolute() || !cli_path.is_file() {
             anyhow::bail!("macOS 原生安装适配器未生成有效的 Codex CLI");
         }
+        expose_installed_command_to_current_process(&cli_path)?;
         self.cli_path = Some(cli_path.clone());
         self.result.cli_installed = true;
         self.result.cli_install_method = "baijimu-cache-tar".to_string();

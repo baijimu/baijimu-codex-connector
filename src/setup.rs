@@ -1,4 +1,3 @@
-#[cfg(target_os = "windows")]
 use crate::codex_binary;
 use anyhow::{Context, Result};
 #[cfg(any(target_os = "windows", test))]
@@ -160,7 +159,7 @@ impl SetupManager {
     pub fn start(
         &self,
         workspace_id: u64,
-        codex_cli: Option<PathBuf>,
+        codex_cli_available: bool,
         force: bool,
         verify_app_server_capability: bool,
     ) -> Result<SetupStatus> {
@@ -179,7 +178,7 @@ impl SetupManager {
                 anyhow::bail!("另一个工作区的初始化正在进行");
             }
             if !force
-                && codex_cli.is_some()
+                && codex_cli_available
                 && current.status == "succeeded"
                 && current.workspace_id == Some(workspace_id)
             {
@@ -219,7 +218,7 @@ impl SetupManager {
         thread::spawn(move || {
             let completed = match run_install(
                 workspace_id,
-                codex_cli.as_deref(),
+                codex_cli_available,
                 verify_app_server_capability,
             ) {
                 Ok(outcome) => SetupStatus {
@@ -316,9 +315,16 @@ fn recover_persisted_status(mut status: SetupStatus) -> (SetupStatus, bool) {
 
 fn run_install(
     workspace_id: u64,
-    codex_cli: Option<&Path>,
+    codex_cli_available: bool,
     verify_app_server_capability: bool,
 ) -> Result<SetupCompletion> {
+    if codex_cli_available {
+        let inspection = codex_binary::inspect()
+            .map_err(|error| anyhow::anyhow!("Codex CLI 回查失败：{error}"))?;
+        ensure_app_server_capability(&inspection, verify_app_server_capability)?;
+        return Ok(SetupCompletion::completed_without_desktop_launch());
+    }
+
     #[cfg(target_os = "macos")]
     {
         let setup_dir = connector_home().join("setup");
@@ -331,24 +337,20 @@ fn run_install(
             &script_path,
             include_bytes!("../installers/macos-configure-terminal-and-login.sh"),
         )?;
-        let install_result = macos::run_install(
-            workspace_id,
-            codex_cli,
-            verify_app_server_capability,
-            &script_path,
-        );
+        let install_result =
+            macos::run_install(workspace_id, verify_app_server_capability, &script_path);
         let _ = fs::remove_file(&script_path);
         install_result
     }
 
     #[cfg(target_os = "windows")]
     {
-        run_windows_install(workspace_id, codex_cli, verify_app_server_capability)
+        run_windows_install(workspace_id, verify_app_server_capability)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (workspace_id, codex_cli, verify_app_server_capability);
+        let _ = (workspace_id, verify_app_server_capability);
         anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
     }
 }
@@ -356,7 +358,6 @@ fn run_install(
 #[cfg(target_os = "windows")]
 fn run_windows_install(
     workspace_id: u64,
-    codex_cli: Option<&Path>,
     verify_app_server_capability: bool,
 ) -> Result<SetupCompletion> {
     let setup_dir = connector_home().join("setup");
@@ -387,11 +388,7 @@ fn run_windows_install(
             .env_remove("CODEX_PROJECT_ID")
             .env_remove("BAIJIMU_PROJECT_ID")
             .env_remove("PROJECT_ID");
-        if let Some(codex_cli) = codex_cli {
-            command.env("CODEX_CLI_BIN", codex_cli);
-        } else {
-            command.env_remove("CODEX_CLI_BIN");
-        }
+        command.env_remove("CODEX_CLI_BIN");
         let output = command.output().context("启动 Codex 官方安装脚本失败")?;
         let installer_result_path = state_dir.join("result.json");
         let installer_result = read_json::<InstallerResultEnvelope>(&installer_result_path)
@@ -418,25 +415,56 @@ fn run_windows_install(
                 .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).to_string());
             anyhow::bail!("官方安装脚本执行失败: {}", compact_error(&errors));
         }
+        let cli_path = installer_result
+            .codex_exe
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+            .context("官方安装脚本没有返回 Codex CLI 路径")?;
+        expose_installed_command_to_current_process(&cli_path)?;
         Ok(())
     })();
     let _ = fs::remove_file(&script_path);
     install_result?;
 
-    let resolution = codex_binary::resolve()
+    let inspection = codex_binary::inspect()
         .map_err(|error| anyhow::anyhow!("安装脚本执行成功，但 Codex CLI 回查失败：{error}"))?;
-    if verify_app_server_capability {
-        let inspection = codex_binary::inspect(&resolution);
-        if !inspection.app_server_supported {
-            anyhow::bail!(
-                "安装脚本执行成功，但 Codex CLI 不支持 app-server：{}",
-                inspection
-                    .error
-                    .unwrap_or_else(|| "能力检查失败".to_string())
-            );
+    ensure_app_server_capability(&inspection, verify_app_server_capability)?;
+    Ok(SetupCompletion::completed_without_desktop_launch())
+}
+
+fn ensure_app_server_capability(
+    inspection: &codex_binary::CliInspection,
+    required: bool,
+) -> Result<()> {
+    if required && !inspection.app_server_supported {
+        anyhow::bail!(
+            "Codex CLI 不支持 app-server：{}",
+            inspection.error.as_deref().unwrap_or("能力检查失败")
+        );
+    }
+    Ok(())
+}
+
+fn expose_installed_command_to_current_process(command_path: &Path) -> Result<()> {
+    let command_path = command_path
+        .canonicalize()
+        .with_context(|| format!("解析 Codex CLI 安装路径失败: {}", command_path.display()))?;
+    let directory = command_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .context("Codex CLI 安装路径缺少父目录")?;
+    let mut entries = vec![directory.to_path_buf()];
+    if let Some(path) = env::var_os("PATH") {
+        for entry in env::split_paths(&path) {
+            if !entries.contains(&entry) {
+                entries.push(entry);
+            }
         }
     }
-    Ok(SetupCompletion::completed_without_desktop_launch())
+    let path = env::join_paths(entries).context("构造 Codex CLI 安装后的进程 PATH 失败")?;
+    env::set_var("PATH", path);
+    Ok(())
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -710,12 +738,13 @@ throw $message
         ));
         fs::write(
             &path,
-            "\u{feff}{\"ok\":true,\"projectId\":null,\"errors\":[]}",
+            "\u{feff}{\"ok\":true,\"projectId\":null,\"codexExe\":\"C:\\\\Codex\\\\codex.exe\",\"errors\":[]}",
         )
         .unwrap();
         let value = read_json::<InstallerResultEnvelope>(&path).unwrap();
         assert!(value.ok);
         assert!(value.errors.is_empty());
+        assert_eq!(value.codex_exe.as_deref(), Some("C:\\Codex\\codex.exe"));
         fs::remove_file(path).unwrap();
     }
 }

@@ -638,25 +638,6 @@ function Get-CodexCliTarget {
   return "x86_64-pc-windows-msvc"
 }
 
-function Get-ConfiguredCodexCli {
-  if (-not $env:CODEX_CLI_BIN) { return $null }
-  if (-not [System.IO.Path]::IsPathRooted($env:CODEX_CLI_BIN)) {
-    throw "CODEX_CLI_BIN 必须是绝对路径"
-  }
-  if (-not (Test-Path -LiteralPath $env:CODEX_CLI_BIN -PathType Leaf)) {
-    throw "CODEX_CLI_BIN 不存在：$($env:CODEX_CLI_BIN)"
-  }
-  $extension = [System.IO.Path]::GetExtension($env:CODEX_CLI_BIN)
-  if ($extension -notin @(".exe", ".com", ".cmd", ".bat")) {
-    throw "CODEX_CLI_BIN 必须指向 Windows 可执行文件或命令启动器"
-  }
-  if (-not (Test-CodexCliCandidate $env:CODEX_CLI_BIN "CODEX_CLI_BIN")) {
-    throw "CODEX_CLI_BIN 指向的 Codex CLI 不可用或不支持 app-server：$($env:CODEX_CLI_BIN)"
-  }
-  $script:result.cliInstallMethod = "advanced-absolute-path"
-  return $env:CODEX_CLI_BIN
-}
-
 function Test-CodexCliCandidate([string]$codexExe, [string]$label) {
   $versionProbe = Invoke-CodexProcess $codexExe "--version" 20
   if ($versionProbe.timedOut -or $versionProbe.exitCode -ne 0) {
@@ -669,27 +650,6 @@ function Test-CodexCliCandidate([string]$codexExe, [string]$label) {
     return $false
   }
   return $true
-}
-
-function Get-SystemCodexCli {
-  $commands = @(Get-Command codex -All -ErrorAction SilentlyContinue)
-  $candidates = @($commands |
-    Where-Object {
-      $_.Source -and
-      [System.IO.Path]::GetExtension($_.Source) -in @(".exe", ".com", ".cmd", ".bat") -and
-      (Test-Path -LiteralPath $_.Source -PathType Leaf)
-    })
-  $seen = @{}
-  foreach ($command in $candidates) {
-    $candidate = [System.IO.Path]::GetFullPath([string]$command.Source)
-    if ($seen.ContainsKey($candidate)) { continue }
-    $seen[$candidate] = $true
-    if (Test-CodexCliCandidate $candidate "系统级") {
-      $script:result.cliInstallMethod = "already-installed"
-      return $candidate
-    }
-  }
-  return $null
 }
 
 function Read-ManagedCodexCli([string]$statePath) {
@@ -883,13 +843,35 @@ function Install-CodexCliFromBaijimuCache {
 }
 
 function Resolve-CodexCli {
-  $configured = Get-ConfiguredCodexCli
-  if ($configured) { return $configured }
-
-  $system = Get-SystemCodexCli
-  if ($system) { return $system }
-
-  return Install-CodexCliFromBaijimuCache
+  $binaryPath = Install-CodexCliFromBaijimuCache
+  $binaryDirectory = [System.IO.Path]::GetDirectoryName(
+    [System.IO.Path]::GetFullPath($binaryPath)
+  )
+  if ([string]::IsNullOrWhiteSpace($binaryDirectory)) {
+    throw "Codex CLI 安装路径缺少父目录"
+  }
+  $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+  $entries = @(
+    @($binaryDirectory) +
+    @(if ($userPath) { $userPath -split ";" } else { @() })
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  $uniqueEntries = New-Object System.Collections.Generic.List[string]
+  foreach ($entry in $entries) {
+    $normalized = [System.Environment]::ExpandEnvironmentVariables($entry.Trim()).TrimEnd("\")
+    if (-not @($uniqueEntries | Where-Object {
+      $_.TrimEnd("\").Equals($normalized, [System.StringComparison]::OrdinalIgnoreCase)
+    })) {
+      $uniqueEntries.Add($entry.Trim())
+    }
+  }
+  [System.Environment]::SetEnvironmentVariable(
+    "Path",
+    ($uniqueEntries -join ";"),
+    "User"
+  )
+  $env:Path = (@($binaryDirectory) + @($env:Path -split ";") |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
+  return $binaryPath
 }
 
 function Set-CodexProcessCommand([System.Diagnostics.ProcessStartInfo]$psi, [string]$codexExe, [string]$arguments) {
@@ -1172,6 +1154,7 @@ function Test-CodexCli([string]$codexExe) {
 try {
   if ($env:CODEX_CLI_ONLY -eq "1") {
     $codexExe = Resolve-CodexCli
+    $script:result.codexExe = $codexExe
     $versionResult = Invoke-CodexProcess $codexExe "--version" 20
     if ($versionResult.timedOut -or $versionResult.exitCode -ne 0) {
       throw "codex --version 执行失败：$($versionResult.stderr)"

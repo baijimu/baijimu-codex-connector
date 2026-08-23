@@ -520,7 +520,7 @@ fn setup_readiness_value(
 }
 
 fn ensure_cli_available(state: &AppState, workspace_id: u64) -> Result<(), HttpError> {
-    if state.client.usable_cli_for_setup()?.is_some() {
+    if state.client.usable_cli_for_setup()? {
         return Ok(());
     }
     let status = state.setup.state();
@@ -539,7 +539,7 @@ fn ensure_cli_available(state: &AppState, workspace_id: u64) -> Result<(), HttpE
         .setup
         .start(
             workspace_id,
-            None,
+            false,
             false,
             state.client.options.extra_args.is_empty(),
         )
@@ -559,9 +559,9 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
         .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
     let setup_status = state.setup.state();
     let client = &state.client;
-    let codex_cli = client.usable_cli_for_setup()?;
+    let codex_cli_available = client.usable_cli_for_setup()?;
     let verify_app_server_capability = client.options.extra_args.is_empty();
-    if codex_cli.is_some() {
+    if codex_cli_available {
         return Ok(setup_readiness_value(
             "ready",
             "系统默认 Codex CLI 与 app-server 能力已就绪",
@@ -577,7 +577,7 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
         &setup_status,
         current_workspace_id,
         current_workspace_credential_available,
-        codex_cli.is_some(),
+        codex_cli_available,
     ) {
         SetupReadinessDecision::Ready => Ok(setup_readiness_value(
             "ready",
@@ -588,7 +588,12 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
             client.shutdown();
             let setup_status = state
                 .setup
-                .start(workspace_id, codex_cli, false, verify_app_server_capability)
+                .start(
+                    workspace_id,
+                    codex_cli_available,
+                    false,
+                    verify_app_server_capability,
+                )
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
             Ok(setup_readiness_value(
                 "initializing",

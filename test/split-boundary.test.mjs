@@ -11,7 +11,7 @@ test("Connector manifest exposes only CLI and remote app-server responsibilities
   const manifest = JSON.parse(await read("connector.json"));
   assert.equal(manifest.id, "com.baijimu.connector.codex-connector");
   assert.equal(manifest.name, "Codex 远程连接器");
-  assert.equal(manifest.version, "2.0.0");
+  assert.equal(manifest.version, "2.0.1");
   assert.equal(manifest.source.repo, "baijimu/baijimu-codex-connector");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
@@ -51,4 +51,29 @@ test("Connector setup executes CLI installation from its own artifact catalog", 
   assert.doesNotMatch(execute, /ensure_desktop_app/);
   assert.doesNotMatch(execute, /launch_desktop/);
   assert.match(artifactSource, /codex-artifacts\/v4/);
+});
+
+test("Connector uses the host PATH as the only Codex runtime selection contract", async () => {
+  const [binary, appServer, windowsInstaller] = await Promise.all([
+    read("src/codex_binary.rs"),
+    read("src/app_server.rs"),
+    read("installers/windows-configure-terminal-and-login.ps1"),
+  ]);
+  assert.match(binary, /pub const COMMAND: &str = "codex"/);
+  assert.match(binary, /Command::new\(command\)/);
+  assert.match(appServer, /Command::new\(codex_binary::COMMAND\)/);
+  assert.doesNotMatch(binary, /known_codex_candidates|resolve_from_login_environment|Get-Command|WindowsApps|homebrew|snap\/bin/);
+  assert.doesNotMatch(appServer, /codex_binary::resolve|codex_binary::Resolution/);
+  assert.doesNotMatch(windowsInstaller, /function Get-SystemCodexCli|function Get-ConfiguredCodexCli/);
+});
+
+test("CLI installers publish the installed command directory into the user PATH", async () => {
+  const [macosInstaller, windowsInstaller] = await Promise.all([
+    read("installers/macos-configure-terminal-and-login.sh"),
+    read("installers/windows-configure-terminal-and-login.ps1"),
+  ]);
+  assert.match(macosInstaller, /shell_name="\${SHELL##\*\/}"/);
+  assert.match(macosInstaller, /zsh\) profile="\$HOME\/\.zprofile"/);
+  assert.doesNotMatch(macosInstaller, /profile="\$HOME\/\.zshrc"/);
+  assert.match(windowsInstaller, /SetEnvironmentVariable\(\s*"Path",[\s\S]+?"User"/);
 });

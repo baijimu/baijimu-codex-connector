@@ -18,8 +18,7 @@ struct ClientRuntime {
     active_codex_home: PathBuf,
     session: Option<Arc<ProcessSession>>,
     last_exit: Option<Value>,
-    codex_binary_resolution: Option<codex_binary::Resolution>,
-    codex_binary_error: Option<codex_binary::ResolutionError>,
+    codex_binary_error: Option<codex_binary::CommandError>,
     codex_cli_inspection: Option<codex_binary::CliInspection>,
 }
 
@@ -88,11 +87,10 @@ impl CodexClient {
             active_codex_home: codex_home,
             session: None,
             last_exit: None,
-            codex_binary_resolution: None,
             codex_binary_error: None,
             codex_cli_inspection: None,
         };
-        refresh_codex_binary_resolution(&mut runtime);
+        refresh_codex_command_status(&mut runtime);
         Self {
             options,
             state_dir,
@@ -117,15 +115,15 @@ impl CodexClient {
             .session
             .as_ref()
             .filter(|session| session.is_alive());
-        let binary_status = if let Some(resolution) = &runtime.codex_binary_resolution {
-            resolution.status_value(runtime.codex_cli_inspection.as_ref())
+        let binary_status = if let Some(inspection) = &runtime.codex_cli_inspection {
+            inspection.status_value()
         } else if let Some(error) = &runtime.codex_binary_error {
             error.status_value()
         } else {
             json!({
-                "mode": "auto",
-                "resolved": null,
-                "source": null,
+                "mode": "path",
+                "resolved": codex_binary::COMMAND,
+                "source": "process_path",
                 "checkedPaths": [],
                 "version": null,
                 "appServerSupported": null,
@@ -133,11 +131,6 @@ impl CodexClient {
                 "error": null,
             })
         };
-        let active_binary = runtime
-            .codex_binary_resolution
-            .as_ref()
-            .map(|resolution| resolution.path.display().to_string())
-            .unwrap_or_default();
         let (latest_sequence, retained) = self.events.summary();
         json!({
             "connector": {
@@ -149,7 +142,7 @@ impl CodexClient {
                 "running": session.is_some(),
                 "initialized": session.is_some_and(|session| session.initialized.load(Ordering::Acquire)),
                 "pid": session.map(|session| session.pid),
-                "codexBinary": active_binary,
+                "codexBinary": codex_binary::COMMAND,
                 "codexBinaryResolution": binary_status,
                 "listen": self.options.listen,
                 "startedAt": session.map(|session| session.started_at.clone()),
@@ -248,13 +241,12 @@ impl CodexClient {
     }
 
     fn start_process_locked(&self) -> Result<Arc<ProcessSession>, HttpError> {
-        let resolution = match codex_binary::resolve() {
-            Ok(resolution) => resolution,
+        let inspection = match codex_binary::inspect() {
+            Ok(inspection) => inspection,
             Err(error) => {
                 let message = error.to_string();
                 let data = error.data_value();
                 if let Ok(mut runtime) = self.runtime.lock() {
-                    runtime.codex_binary_resolution = None;
                     runtime.codex_binary_error = Some(error);
                     runtime.codex_cli_inspection = None;
                 }
@@ -266,21 +258,19 @@ impl CodexClient {
                 ));
             }
         };
-        let resolved_binary = resolution.path.clone();
-        let inspection = codex_binary::inspect(&resolution);
         if self.options.extra_args.is_empty() && !inspection.app_server_supported {
             let message = inspection.error.clone().unwrap_or_else(|| {
                 "the selected Codex CLI does not support app-server".to_string()
             });
             if let Ok(mut runtime) = self.runtime.lock() {
                 runtime.codex_cli_inspection = Some(inspection);
-                runtime.codex_binary_resolution = Some(resolution);
+                runtime.codex_binary_error = None;
             }
             return Err(HttpError::coded(
                 500,
                 message.clone(),
                 "CODEX_APP_SERVER_UNSUPPORTED",
-                json!({"resolved": resolved_binary, "error": message}),
+                json!({"command": codex_binary::COMMAND, "error": message}),
             ));
         }
         let active_home = self.active_codex_home();
@@ -293,7 +283,7 @@ impl CodexClient {
         } else {
             self.options.extra_args.clone()
         };
-        let mut command = Command::new(&resolved_binary);
+        let mut command = Command::new(codex_binary::COMMAND);
         child_process::isolate_from_connector_environment(&mut command);
         let mut child = command
             .args(args)
@@ -304,21 +294,19 @@ impl CodexClient {
             .spawn()
             .map_err(|error| {
                 if let Ok(mut runtime) = self.runtime.lock() {
-                    runtime.codex_binary_error = Some(codex_binary::ResolutionError {
-                        checked_paths: vec![resolved_binary.clone()],
+                    runtime.codex_binary_error = Some(codex_binary::CommandError {
                         reason: error.to_string(),
                     });
-                    runtime.codex_binary_resolution = None;
                     runtime.codex_cli_inspection = None;
                 }
                 HttpError::coded(
                     500,
                     format!(
-                        "failed to start Codex executable '{}': {error}",
-                        resolved_binary.display()
+                        "failed to start Codex command '{}': {error}",
+                        codex_binary::COMMAND
                     ),
                     "CODEX_PROCESS_START_FAILED",
-                    json!({"resolved": resolved_binary, "error": error.to_string()}),
+                    json!({"command": codex_binary::COMMAND, "error": error.to_string()}),
                 )
             })?;
         let stdin = child.stdin.take().ok_or_else(|| {
@@ -347,7 +335,6 @@ impl CodexClient {
             runtime.session = Some(Arc::clone(&session));
             runtime.last_exit = None;
             runtime.codex_cli_inspection = Some(inspection);
-            runtime.codex_binary_resolution = Some(resolution);
             runtime.codex_binary_error = None;
         }
         Ok(session)
@@ -381,31 +368,27 @@ impl CodexClient {
         }
     }
 
-    pub(crate) fn usable_cli_for_setup(&self) -> Result<Option<PathBuf>, HttpError> {
-        match codex_binary::resolve() {
-            Ok(resolution) => {
-                let inspection = codex_binary::inspect(&resolution);
+    pub(crate) fn usable_cli_for_setup(&self) -> Result<bool, HttpError> {
+        match codex_binary::inspect() {
+            Ok(inspection) => {
                 let supported =
                     !self.options.extra_args.is_empty() || inspection.app_server_supported;
-                let resolved = resolution.path.clone();
                 let mut runtime = self
                     .runtime
                     .lock()
                     .map_err(|_| HttpError::internal("Codex 客户端状态锁异常"))?;
-                runtime.codex_binary_resolution = Some(resolution);
                 runtime.codex_binary_error = None;
                 runtime.codex_cli_inspection = Some(inspection);
-                Ok(supported.then_some(resolved))
+                Ok(supported)
             }
             Err(error) => {
                 let mut runtime = self
                     .runtime
                     .lock()
                     .map_err(|_| HttpError::internal("Codex 客户端状态锁异常"))?;
-                runtime.codex_binary_resolution = None;
                 runtime.codex_binary_error = Some(error);
                 runtime.codex_cli_inspection = None;
-                Ok(None)
+                Ok(false)
             }
         }
     }
@@ -627,15 +610,14 @@ impl ProcessSession {
     }
 }
 
-fn refresh_codex_binary_resolution(runtime: &mut ClientRuntime) {
-    match codex_binary::resolve() {
-        Ok(resolution) => {
-            runtime.codex_binary_resolution = Some(resolution);
+fn refresh_codex_command_status(runtime: &mut ClientRuntime) {
+    match codex_binary::inspect() {
+        Ok(inspection) => {
+            runtime.codex_cli_inspection = Some(inspection);
             runtime.codex_binary_error = None;
         }
         Err(error) => {
             runtime.codex_cli_inspection = None;
-            runtime.codex_binary_resolution = None;
             runtime.codex_binary_error = Some(error);
         }
     }

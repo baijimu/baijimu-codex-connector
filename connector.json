@@ -2,7 +2,7 @@
   "schemaVersion": "2.0",
   "id": "com.baijimu.connector.codex-connector",
   "name": "Codex 远程连接器",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "安装并托管 Codex CLI，通过平台授权访问设备系统默认 Codex 的会话、线程、轮次和事件。",
   "icon": {
     "mediaType": "image/png",
@@ -15,7 +15,7 @@
   "source": {
     "type": "github",
     "repo": "baijimu/baijimu-codex-connector",
-    "revision": "v2.0.0"
+    "revision": "v2.0.1"
   },
   "runtime": {
     "type": "process",
@@ -79,9 +79,9 @@
     }
   ],
   "releaseNotes": [
-    "平台工作区仅作为设备调用授权上下文，不再创建或选择 Codex 工作区档案。",
-    "所有远程能力统一使用设备用户的系统默认 .codex 和单一 Connector app-server。",
-    "移除 listWorkspaceProfiles 方法以及按平台工作区隔离 CODEX_HOME、凭证和进程的行为。"
+    "Codex CLI 的版本检查、app-server 能力检查和运行统一通过宿主注入的当前用户 PATH 直接执行 codex 命令。",
+    "移除固定安装目录、登录 Shell、PowerShell Get-Command 和内部路径黑名单等插件侧命令猜测逻辑。",
+    "一键安装把官方 CLI 目录登记到用户 PATH，并在安装进程中立即使用相同命令契约完成回查。"
   ],
   "configSchema": {
     "type": "object",

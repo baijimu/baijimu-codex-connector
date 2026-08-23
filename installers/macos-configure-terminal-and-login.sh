@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
 verify_sha256() {
   local archive="$1"
@@ -54,7 +54,7 @@ install_app() {
 install_cli() {
   local archive="$1"
   local expected_sha256="$2"
-  local work_dir bin install_target install_temp profile line
+  local work_dir bin install_target install_temp shell_name profile line
   verify_sha256 "$archive" "$expected_sha256"
 
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-cli.XXXXXX")"
@@ -78,7 +78,16 @@ install_cli() {
   mv -f "$install_temp" "$install_target"
   xattr -d com.apple.quarantine "$install_target" 2>/dev/null || true
 
-  profile="$HOME/.zshrc"
+  shell_name="${SHELL##*/}"
+  case "$shell_name" in
+    zsh) profile="$HOME/.zprofile" ;;
+    bash) profile="$HOME/.bash_profile" ;;
+    sh|dash|ksh) profile="$HOME/.profile" ;;
+    *)
+      echo "无法确定当前用户登录 Shell 的 PATH 配置文件：${SHELL:-<empty>}" >&2
+      return 1
+      ;;
+  esac
   line='export PATH="$HOME/.local/bin:$PATH"'
   if [ ! -f "$profile" ] || ! grep -Fq '.local/bin' "$profile"; then
     printf '\n# 由百积木 Codex 安装器添加\n%s\n' "$line" >> "$profile"

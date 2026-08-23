@@ -2,7 +2,7 @@
 
 `com.baijimu.connector.codex-connector` 是面向百积木 Relay 的独立 Codex CLI 远程连接器。它只负责：
 
-- 安装、发现并验证官方 Codex CLI 与 `app-server` 能力；
+- 安装官方 Codex CLI，并通过宿主注入的当前用户 `PATH` 直接验证 `codex` 与 `app-server` 能力；
 - 接收 Relay 鉴权后传入的可信 `workspaceId`；
 - 使用设备用户的系统默认 `~/.codex` 启动唯一的 Connector app-server；
 - 提供 `session/thread/turn/event` 和原始 app-server 请求接口；
@@ -27,7 +27,8 @@ cargo run -- stop
 默认监听 `127.0.0.1:18111`。Bridge Agent 会注入：
 
 - `BAIJIMU_CONNECTOR_DATA_DIR`：应用私有状态目录；
-- `CODEX_CONNECTOR_BAIJIMU_BINARY`：平台管理的 Baijimu CLI 绝对路径。
+- `CODEX_CONNECTOR_BAIJIMU_BINARY`：平台管理的 Baijimu CLI 绝对路径；
+- `PATH`：当前桌面用户的规范命令搜索路径；连接器的检查和运行均直接执行同一个 `codex` 命令，不再自行枚举安装目录或探测登录 Shell。
 
 远程能力、方法、事件、超时和输入 Schema 以 [connector.json](./connector.json) 为准。
 

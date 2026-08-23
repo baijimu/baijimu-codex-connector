@@ -148,6 +148,8 @@ pub struct InstallerResultEnvelope {
     pub ok: bool,
     #[serde(default)]
     pub errors: Vec<String>,
+    #[serde(default)]
+    pub codex_exe: Option<String>,
 }
 
 #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
