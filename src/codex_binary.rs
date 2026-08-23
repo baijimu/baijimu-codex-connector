@@ -1,3 +1,4 @@
+use semver::Version;
 use serde_json::{json, Value};
 use std::fmt;
 use std::process::Command;
@@ -12,6 +13,17 @@ pub struct CliInspection {
 }
 
 impl CliInspection {
+    pub fn semantic_version(&self) -> Option<Version> {
+        self.version.as_deref().and_then(parse_version_output)
+    }
+
+    pub fn satisfies(&self, required: &Version) -> bool {
+        self.app_server_supported
+            && self
+                .semantic_version()
+                .is_some_and(|installed| installed >= *required)
+    }
+
     pub fn status_value(&self) -> Value {
         json!({
             "mode": "path",
@@ -24,6 +36,12 @@ impl CliInspection {
             "error": null,
         })
     }
+}
+
+fn parse_version_output(output: &str) -> Option<Version> {
+    output
+        .split_whitespace()
+        .find_map(|token| Version::parse(token.trim_start_matches('v')).ok())
 }
 
 #[derive(Clone, Debug)]
@@ -169,6 +187,19 @@ mod tests {
         assert_eq!(inspection.version.as_deref(), Some("codex-cli 1.2.3"));
         assert!(inspection.app_server_supported);
         fs::remove_dir_all(command.parent().expect("command parent")).expect("remove test root");
+    }
+
+    #[test]
+    fn parses_stable_and_prerelease_cli_versions() {
+        assert_eq!(
+            parse_version_output("codex-cli 0.149.0"),
+            Some(Version::new(0, 149, 0))
+        );
+        assert_eq!(
+            parse_version_output("codex-cli 0.149.0-alpha.4.1"),
+            Version::parse("0.149.0-alpha.4.1").ok()
+        );
+        assert_eq!(parse_version_output("codex-cli unknown"), None);
     }
 
     #[cfg(unix)]

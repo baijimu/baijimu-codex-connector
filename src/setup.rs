@@ -2,8 +2,10 @@ use crate::codex_binary;
 use anyhow::{Context, Result};
 #[cfg(any(target_os = "windows", test))]
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use semver::Version;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::env;
+use std::fmt;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -14,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod catalog;
 mod contract;
 #[cfg(any(target_os = "macos", all(test, not(target_os = "windows"))))]
 mod macos;
@@ -29,6 +32,7 @@ const CONNECTOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ERROR_CODE_INTERRUPTED: &str = "SETUP_INTERRUPTED";
 const ERROR_CODE_RETRY_AFTER_UPGRADE: &str = "SETUP_RETRY_REQUIRED_AFTER_UPGRADE";
 const ERROR_CODE_FAILED: &str = "SETUP_FAILED";
+const ERROR_CODE_CLI_INCOMPATIBLE: &str = "CODEX_CLI_VERSION_INCOMPATIBLE";
 #[cfg(target_os = "windows")]
 const WINDOWS_INSTALL_SCRIPT_ENV: &str = "CODEX_CONNECTOR_INSTALL_SCRIPT_PATH";
 #[cfg(any(target_os = "windows", test))]
@@ -74,8 +78,32 @@ struct SetupFailureClassification {
     retryable: bool,
 }
 
+#[derive(Debug)]
+struct CliVersionIncompatible {
+    installed: Version,
+    required: Version,
+}
+
+impl fmt::Display for CliVersionIncompatible {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Codex CLI 版本不兼容：已安装 {}，要求至少 {}",
+            self.installed, self.required
+        )
+    }
+}
+
+impl std::error::Error for CliVersionIncompatible {}
+
 fn classify_setup_failure(error: &anyhow::Error) -> SetupFailureClassification {
-    let _ = error;
+    if error.downcast_ref::<CliVersionIncompatible>().is_some() {
+        return SetupFailureClassification {
+            message: "Codex CLI 版本不兼容",
+            error_code: ERROR_CODE_CLI_INCOMPATIBLE,
+            retryable: true,
+        };
+    }
     SetupFailureClassification {
         message: "Codex CLI 初始化失败",
         error_code: ERROR_CODE_FAILED,
@@ -117,6 +145,7 @@ impl Default for SetupStatus {
 #[derive(Clone)]
 pub struct SetupManager {
     state: Arc<Mutex<SetupStatus>>,
+    catalog: catalog::CatalogResolver,
 }
 
 impl SetupManager {
@@ -130,11 +159,16 @@ impl SetupManager {
         };
         let manager = Self {
             state: Arc::new(Mutex::new(status)),
+            catalog: catalog::CatalogResolver::default(),
         };
         if should_persist {
             let _ = manager.persist();
         }
         manager
+    }
+
+    pub fn cli_requirement(&self) -> catalog::CliRequirement {
+        self.catalog.requirement()
     }
 
     pub fn state(&self) -> SetupStatus {
@@ -162,6 +196,7 @@ impl SetupManager {
         codex_cli_available: bool,
         force: bool,
         verify_app_server_capability: bool,
+        required_version: Version,
     ) -> Result<SetupStatus> {
         if workspace_id == 0 {
             anyhow::bail!("workspaceId 必须是正整数");
@@ -218,8 +253,9 @@ impl SetupManager {
         thread::spawn(move || {
             let completed = match run_install(
                 workspace_id,
-                codex_cli_available,
+                force || !codex_cli_available,
                 verify_app_server_capability,
+                required_version,
             ) {
                 Ok(outcome) => SetupStatus {
                     schema_version: SETUP_STATUS_SCHEMA_VERSION,
@@ -315,13 +351,15 @@ fn recover_persisted_status(mut status: SetupStatus) -> (SetupStatus, bool) {
 
 fn run_install(
     workspace_id: u64,
-    codex_cli_available: bool,
+    install_required: bool,
     verify_app_server_capability: bool,
+    required_version: Version,
 ) -> Result<SetupCompletion> {
-    if codex_cli_available {
+    if !install_required {
         let inspection = codex_binary::inspect()
             .map_err(|error| anyhow::anyhow!("Codex CLI 回查失败：{error}"))?;
         ensure_app_server_capability(&inspection, verify_app_server_capability)?;
+        ensure_cli_version(&inspection, &required_version)?;
         return Ok(SetupCompletion::completed_without_desktop_launch());
     }
 
@@ -340,17 +378,25 @@ fn run_install(
         let install_result =
             macos::run_install(workspace_id, verify_app_server_capability, &script_path);
         let _ = fs::remove_file(&script_path);
-        install_result
+        let outcome = install_result?;
+        let inspection = codex_binary::inspect()
+            .map_err(|error| anyhow::anyhow!("Codex CLI 安装完成，但版本回查失败：{error}"))?;
+        ensure_cli_version(&inspection, &required_version)?;
+        Ok(outcome)
     }
 
     #[cfg(target_os = "windows")]
     {
-        run_windows_install(workspace_id, verify_app_server_capability)
+        let outcome = run_windows_install(workspace_id, verify_app_server_capability)?;
+        let inspection = codex_binary::inspect()
+            .map_err(|error| anyhow::anyhow!("Codex CLI 安装完成，但版本回查失败：{error}"))?;
+        ensure_cli_version(&inspection, &required_version)?;
+        Ok(outcome)
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let _ = (workspace_id, verify_app_server_capability);
+        let _ = (workspace_id, verify_app_server_capability, required_version);
         anyhow::bail!("Codex 一键安装目前只支持 macOS 和 Windows")
     }
 }
@@ -442,6 +488,20 @@ fn ensure_app_server_capability(
             "Codex CLI 不支持 app-server：{}",
             inspection.error.as_deref().unwrap_or("能力检查失败")
         );
+    }
+    Ok(())
+}
+
+fn ensure_cli_version(inspection: &codex_binary::CliInspection, required: &Version) -> Result<()> {
+    let installed = inspection
+        .semantic_version()
+        .context("Codex CLI 版本输出不是有效 SemVer")?;
+    if installed < *required {
+        return Err(CliVersionIncompatible {
+            installed,
+            required: required.clone(),
+        }
+        .into());
     }
     Ok(())
 }
@@ -652,6 +712,19 @@ mod tests {
         assert_eq!(classification.error_code, ERROR_CODE_FAILED);
         assert!(classification.retryable);
         assert!(classification.message.contains("CLI 初始化失败"));
+    }
+
+    #[test]
+    fn incompatible_cli_versions_have_a_structured_failure_code() {
+        let error = anyhow::Error::new(CliVersionIncompatible {
+            installed: Version::new(0, 144, 1),
+            required: Version::new(0, 149, 0),
+        });
+        let classification = classify_setup_failure(&error);
+
+        assert_eq!(classification.error_code, ERROR_CODE_CLI_INCOMPATIBLE);
+        assert!(classification.retryable);
+        assert_eq!(classification.message, "Codex CLI 版本不兼容");
     }
 
     #[test]

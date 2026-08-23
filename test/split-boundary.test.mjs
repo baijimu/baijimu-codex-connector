@@ -11,7 +11,7 @@ test("Connector manifest exposes only CLI and remote app-server responsibilities
   const manifest = JSON.parse(await read("connector.json"));
   assert.equal(manifest.id, "com.baijimu.connector.codex-connector");
   assert.equal(manifest.name, "Codex 远程连接器");
-  assert.equal(manifest.version, "2.0.1");
+  assert.equal(manifest.version, "2.0.2");
   assert.equal(manifest.source.repo, "baijimu/baijimu-codex-connector");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
@@ -42,14 +42,18 @@ test("Connector uses trusted platform authorization with one system Codex home",
 });
 
 test("Connector setup executes CLI installation from its own artifact catalog", async () => {
-  const [source, artifactSource] = await Promise.all([
+  const [source, catalog, artifactSource] = await Promise.all([
     read("src/setup/macos.rs"),
+    read("src/setup/catalog.rs"),
     read("installers/upstream-artifact-source.json"),
   ]);
   const execute = source.slice(source.indexOf("fn execute"), source.indexOf("fn ensure_desktop_app"));
   assert.match(execute, /ensure_codex_cli/);
   assert.doesNotMatch(execute, /ensure_desktop_app/);
   assert.doesNotMatch(execute, /launch_desktop/);
+  assert.match(catalog, /CATALOG_REFRESH_INTERVAL/);
+  assert.match(catalog, /PAGINATED_THREADS_MINIMUM_VERSION/);
+  assert.match(catalog, /verified_cache/);
   assert.match(artifactSource, /codex-artifacts\/v4/);
 });
 

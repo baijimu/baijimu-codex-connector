@@ -29,7 +29,7 @@ use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -63,6 +63,7 @@ struct ServerOptions {
 struct AppState {
     client: CodexClient,
     management_operation: Mutex<()>,
+    runtime_operation: RwLock<()>,
     setup: setup::SetupManager,
     management_token: String,
     startup: StartupReadiness,
@@ -259,6 +260,7 @@ fn start_server(options: ServerOptions) -> Result<(), String> {
     let state = Arc::new(AppState {
         client: CodexClient::new(options.clone()),
         management_operation: Mutex::new(()),
+        runtime_operation: RwLock::new(()),
         setup,
         management_token,
         startup: StartupReadiness::initializing(),
@@ -397,20 +399,23 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
                     }),
                 );
             };
-            if let Err(error) = ensure_cli_available(state.as_ref(), workspace_id) {
-                return write_json(
-                    &mut stream,
-                    error.status,
-                    &json!({
-                        "ok": false,
-                        "error": {
-                            "message": error.message,
-                            "code": error.code,
-                            "data": error.data,
-                        }
-                    }),
-                );
-            }
+            let _runtime_guard = match ensure_cli_available(state.as_ref(), workspace_id) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    return write_json(
+                        &mut stream,
+                        error.status,
+                        &json!({
+                            "ok": false,
+                            "error": {
+                                "message": error.message,
+                                "code": error.code,
+                                "data": error.data,
+                            }
+                        }),
+                    );
+                }
+            };
             match handle_invoke(path, &body, &state.client) {
                 Ok(data) => (200, json!({"ok": true, "data": data})),
                 Err(error) => (
@@ -480,13 +485,24 @@ fn handle_management(
                 .and_then(Value::as_u64)
                 .filter(|value| *value > 0)
                 .ok_or_else(|| HttpError::new(400, "必须提供 workspaceId"))?;
+            let _runtime_guard = state
+                .runtime_operation
+                .write()
+                .map_err(|_| HttpError::internal("Codex 运行时状态锁异常"))?;
             state.client.shutdown();
-            let codex_cli = state.client.usable_cli_for_setup()?;
+            let requirement = state.setup.cli_requirement();
+            let codex_cli = state.client.usable_cli_for_setup(requirement.target())?;
             let verify_app_server_capability = state.client.options.extra_args.is_empty();
             serde_json::to_value(
                 state
                     .setup
-                    .start(workspace_id, codex_cli, true, verify_app_server_capability)
+                    .start(
+                        workspace_id,
+                        codex_cli,
+                        true,
+                        verify_app_server_capability,
+                        requirement.target().clone(),
+                    )
                     .map_err(|error| HttpError::new(409, error.to_string()))?,
             )
             .map_err(|error| HttpError::internal(error.to_string()))
@@ -519,37 +535,68 @@ fn setup_readiness_value(
     })
 }
 
-fn ensure_cli_available(state: &AppState, workspace_id: u64) -> Result<(), HttpError> {
-    if state.client.usable_cli_for_setup()? {
-        return Ok(());
-    }
-    let status = state.setup.state();
-    if status.status == "failed" && status.workspace_id == Some(workspace_id) {
+fn ensure_cli_available(
+    state: &AppState,
+    workspace_id: u64,
+) -> Result<RwLockReadGuard<'_, ()>, HttpError> {
+    loop {
+        let runtime_guard = state
+            .runtime_operation
+            .read()
+            .map_err(|_| HttpError::internal("Codex 运行时状态锁异常"))?;
+        let requirement = state.setup.cli_requirement();
+        if state.client.usable_cli_for_setup(requirement.target())? {
+            return Ok(runtime_guard);
+        }
+        drop(runtime_guard);
+
+        let update_guard = state
+            .runtime_operation
+            .write()
+            .map_err(|_| HttpError::internal("Codex 运行时状态锁异常"))?;
+        let requirement = state.setup.cli_requirement();
+        if state.client.usable_cli_for_setup(requirement.target())? {
+            drop(update_guard);
+            continue;
+        }
+        let status = state.setup.state();
+        if status.status == "failed" && status.workspace_id == Some(workspace_id) {
+            return Err(HttpError::coded(
+                503,
+                status
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Codex CLI 初始化失败".to_string()),
+                "CODEX_CLI_SETUP_FAILED",
+                json!({
+                    "workspaceId": workspace_id,
+                    "cliRequirement": requirement.status_value(),
+                    "setup": status
+                }),
+            ));
+        }
+        state.client.shutdown();
+        state
+            .setup
+            .start(
+                workspace_id,
+                false,
+                false,
+                state.client.options.extra_args.is_empty(),
+                requirement.target().clone(),
+            )
+            .map_err(|error| HttpError::new(409, error.to_string()))?;
         return Err(HttpError::coded(
             503,
-            status
-                .error
-                .clone()
-                .unwrap_or_else(|| "Codex CLI 初始化失败".to_string()),
-            "CODEX_CLI_SETUP_FAILED",
-            json!({"workspaceId": workspace_id, "setup": status}),
+            "Codex CLI 正在同步到兼容版本并验证，请稍后重试",
+            "CODEX_CLI_INITIALIZING",
+            json!({
+                "workspaceId": workspace_id,
+                "cliRequirement": requirement.status_value(),
+                "setup": state.setup.state()
+            }),
         ));
     }
-    state
-        .setup
-        .start(
-            workspace_id,
-            false,
-            false,
-            state.client.options.extra_args.is_empty(),
-        )
-        .map_err(|error| HttpError::new(409, error.to_string()))?;
-    Err(HttpError::coded(
-        503,
-        "Codex CLI 正在安装并验证，请稍后重试",
-        "CODEX_CLI_INITIALIZING",
-        json!({"workspaceId": workspace_id, "setup": state.setup.state()}),
-    ))
 }
 
 fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
@@ -557,9 +604,14 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
         .management_operation
         .lock()
         .map_err(|_| HttpError::internal("凭证管理状态锁异常"))?;
+    let _runtime_guard = state
+        .runtime_operation
+        .write()
+        .map_err(|_| HttpError::internal("Codex 运行时状态锁异常"))?;
     let setup_status = state.setup.state();
     let client = &state.client;
-    let codex_cli_available = client.usable_cli_for_setup()?;
+    let requirement = state.setup.cli_requirement();
+    let codex_cli_available = client.usable_cli_for_setup(requirement.target())?;
     let verify_app_server_capability = client.options.extra_args.is_empty();
     if codex_cli_available {
         return Ok(setup_readiness_value(
@@ -593,6 +645,7 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
                     codex_cli_available,
                     false,
                     verify_app_server_capability,
+                    requirement.target().clone(),
                 )
                 .map_err(|error| HttpError::new(409, error.to_string()))?;
             Ok(setup_readiness_value(

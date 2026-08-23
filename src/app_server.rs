@@ -368,11 +368,14 @@ impl CodexClient {
         }
     }
 
-    pub(crate) fn usable_cli_for_setup(&self) -> Result<bool, HttpError> {
+    pub(crate) fn usable_cli_for_setup(
+        &self,
+        required_version: &semver::Version,
+    ) -> Result<bool, HttpError> {
         match codex_binary::inspect() {
             Ok(inspection) => {
                 let supported =
-                    !self.options.extra_args.is_empty() || inspection.app_server_supported;
+                    !self.options.extra_args.is_empty() || inspection.satisfies(required_version);
                 let mut runtime = self
                     .runtime
                     .lock()
