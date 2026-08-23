@@ -711,7 +711,7 @@ struct UpstreamAssetV4 {
 #[serde(deny_unknown_fields)]
 struct ArtifactHostRequirementsV4 {
     #[serde(rename = "minimum_os_version")]
-    _minimum_os_version: String,
+    minimum_os_version: String,
 }
 
 impl UpstreamAssetV4 {
@@ -730,8 +730,14 @@ impl UpstreamAssetV4 {
             self.sha256.as_str(),
             self.content_type.as_str(),
         ];
-        let host_requirements_valid =
-            self.component == "codex_cli" && self.host_requirements.is_none();
+        let host_requirements_valid = match self.component.as_str() {
+            "codex_cli" => self.host_requirements.is_none(),
+            "codex_desktop_app" => self
+                .host_requirements
+                .as_ref()
+                .is_some_and(|requirements| !requirements.minimum_os_version.trim().is_empty()),
+            _ => false,
+        };
         if required.iter().any(|value| value.trim().is_empty())
             || self.size == 0
             || self.size != self.size_bytes
@@ -861,22 +867,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cli_manifest_is_deserialized_into_a_closed_contract() {
-        let mut manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
+    fn shared_manifest_is_deserialized_into_a_closed_contract() {
+        let manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
             "../../test/fixtures/codex-artifacts-manifest-v4.json"
         ))
         .unwrap();
-        manifest
-            .assets
-            .retain(|asset| asset.component == "codex_cli");
-        manifest.required_assets = manifest
+        manifest.validate().unwrap();
+        assert_eq!(manifest.assets.len(), 2);
+        assert!(manifest
             .assets
             .iter()
-            .map(|asset| asset.name.clone())
-            .collect();
-        manifest.validate().unwrap();
-        assert_eq!(manifest.assets.len(), 1);
-        assert_eq!(manifest.assets[0].component, "codex_cli");
+            .any(|asset| asset.component == "codex_cli"));
+        assert!(manifest
+            .assets
+            .iter()
+            .any(|asset| asset.component == "codex_desktop_app"));
     }
 
     #[test]
@@ -893,13 +898,12 @@ mod tests {
     }
 
     #[test]
-    fn cli_manifest_rejects_desktop_assets() {
+    fn shared_manifest_rejects_unknown_components() {
         let mut manifest = crate::json_compat::from_slice::<UpstreamManifestV4>(include_bytes!(
             "../../test/fixtures/codex-artifacts-manifest-v4.json"
         ))
         .unwrap();
-        manifest.required_assets = vec![manifest.assets[0].name.clone()];
-        manifest.assets.truncate(1);
+        manifest.assets[0].component = "unknown_component".to_string();
         assert!(manifest.validate().is_err());
     }
 
