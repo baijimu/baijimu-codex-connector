@@ -120,6 +120,7 @@ mod tests {
     use super::*;
     use std::env;
     use std::fs;
+    use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
@@ -141,7 +142,10 @@ mod tests {
         let root = test_root(name);
         fs::create_dir_all(&root).expect("create test root");
         let command = root.join("codex");
-        fs::write(&command, source).expect("write command");
+        let mut file = fs::File::create(&command).expect("create command");
+        file.write_all(source.as_bytes()).expect("write command");
+        file.sync_all().expect("sync command");
+        drop(file);
         fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).expect("chmod command");
         command
     }
