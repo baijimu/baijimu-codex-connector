@@ -1,7 +1,10 @@
 use semver::Version;
 use serde_json::{json, Value};
 use std::fmt;
+use std::io;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 pub const COMMAND: &str = "codex";
 
@@ -88,12 +91,9 @@ pub fn inspect() -> Result<CliInspection, CommandError> {
 }
 
 fn inspect_command(command: &str) -> Result<CliInspection, CommandError> {
-    let version_output = Command::new(command)
-        .arg("--version")
-        .output()
-        .map_err(|error| CommandError {
-            reason: format!("执行 codex --version 失败：{error}"),
-        })?;
+    let version_output = command_output(command, &["--version"]).map_err(|error| CommandError {
+        reason: format!("执行 codex --version 失败：{error}"),
+    })?;
     if !version_output.status.success() {
         return Err(CommandError {
             reason: format!("codex --version 退出状态为 {}", version_output.status),
@@ -108,10 +108,7 @@ fn inspect_command(command: &str) -> Result<CliInspection, CommandError> {
     let version =
         Some(if stdout.is_empty() { stderr } else { stdout }).filter(|value| !value.is_empty());
 
-    match Command::new(command)
-        .args(["app-server", "--help"])
-        .output()
-    {
+    match command_output(command, &["app-server", "--help"]) {
         Ok(output) if output.status.success() => Ok(CliInspection {
             version,
             app_server_supported: true,
@@ -130,6 +127,31 @@ fn inspect_command(command: &str) -> Result<CliInspection, CommandError> {
             app_server_supported: false,
             error: Some(format!("验证 codex app-server 失败：{error}")),
         }),
+    }
+}
+
+fn command_output(command: &str, arguments: &[&str]) -> io::Result<std::process::Output> {
+    const MAX_ATTEMPTS: usize = 5;
+    for attempt in 1..=MAX_ATTEMPTS {
+        match Command::new(command).args(arguments).output() {
+            Err(error) if is_transient_executable_busy(&error) && attempt < MAX_ATTEMPTS => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded command retry loop always returns")
+}
+
+fn is_transient_executable_busy(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(libc::ETXTBSY)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
     }
 }
 
@@ -202,6 +224,17 @@ mod tests {
             Version::parse("0.149.0-alpha.4.1").ok()
         );
         assert_eq!(parse_version_output("codex-cli unknown"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recognizes_linux_text_file_busy_as_a_transient_execution_error() {
+        assert!(is_transient_executable_busy(&io::Error::from_raw_os_error(
+            libc::ETXTBSY
+        )));
+        assert!(!is_transient_executable_busy(
+            &io::Error::from_raw_os_error(libc::ENOENT)
+        ));
     }
 
     #[cfg(unix)]
