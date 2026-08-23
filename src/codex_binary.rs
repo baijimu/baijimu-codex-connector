@@ -166,11 +166,13 @@ mod tests {
         let root = test_root(name);
         fs::create_dir_all(&root).expect("create test root");
         let command = root.join("codex");
-        let mut file = fs::File::create(&command).expect("create command");
+        let temporary = root.join("codex.tmp");
+        let mut file = fs::File::create(&temporary).expect("create command");
         file.write_all(source.as_bytes()).expect("write command");
         file.sync_all().expect("sync command");
         drop(file);
-        fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).expect("chmod command");
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755)).expect("chmod command");
+        fs::rename(temporary, &command).expect("publish command");
         command
     }
 
