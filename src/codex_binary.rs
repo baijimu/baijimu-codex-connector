@@ -118,14 +118,20 @@ fn inspect_command(command: &str) -> Result<CliInspection, CommandError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::env;
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     use std::path::PathBuf;
+    #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(unix)]
     fn test_root(name: &str) -> PathBuf {
         env::temp_dir().join(format!(
             "baijimu-codex-command-{name}-{}-{}",
