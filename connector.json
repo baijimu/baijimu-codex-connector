@@ -1,8 +1,8 @@
 {
-  "schemaVersion": "2.0",
-  "id": "com.baijimu.connector.codex-connector",
+  "schemaVersion": "3.0.0",
+  "appId": "codex-connector",
   "name": "Codex 远程连接器",
-  "version": "2.0.4",
+  "version": "3.0.0",
   "description": "安装并托管 Codex CLI，通过平台授权访问设备系统默认 Codex 的会话、线程、轮次和事件。",
   "icon": {
     "mediaType": "image/png",
@@ -15,7 +15,7 @@
   "source": {
     "type": "github",
     "repo": "baijimu/baijimu-codex-connector",
-    "revision": "v2.0.4"
+    "revision": "v3.0.0"
   },
   "runtime": {
     "type": "process",
@@ -60,7 +60,7 @@
     }
   },
   "hostRequirements": {
-    "minimumVersion": "0.3.0",
+    "minimumVersion": "0.6.0",
     "capabilities": [
       "connector.process.host-managed.v1",
       "connector.managed-tool-dependencies.v1",
@@ -69,7 +69,7 @@
   },
   "managedToolDependencies": [
     {
-      "id": "com.baijimu.cli",
+      "id": "baijimu-cli",
       "minimumVersion": "0.1.50",
       "requiredFor": [
         "install",
@@ -77,13 +77,6 @@
       ],
       "executablePathEnv": "CODEX_CONNECTOR_BAIJIMU_BINARY"
     }
-  ],
-  "releaseNotes": [
-    "接受权威共享制品目录中结构有效的桌面应用记录，并仍只选择当前平台唯一的 Codex CLI 制品进行安装。",
-    "按权威 Codex 制品目录定期刷新目标 CLI 版本，已有 CLI 不再跳过同步检查。",
-    "要求支持分页任务历史的 CLI 版本；旧版本会在调用 app-server 前自动升级并复验 SemVer。",
-    "升级前等待进行中的调用完成，macOS 安装包在原子替换现有 CLI 前完成版本与 app-server 能力检查。",
-    "CLI 刚完成原子替换时若 Linux 返回 ETXTBSY，执行入口会进行有界瞬态重试。"
   ],
   "configSchema": {
     "type": "object",

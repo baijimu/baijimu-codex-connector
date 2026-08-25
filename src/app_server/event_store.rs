@@ -44,6 +44,7 @@ struct PublishJob {
 }
 
 struct PublisherWorker {
+    app_id: String,
     endpoint: String,
     token: String,
     client: reqwest::blocking::Client,
@@ -135,14 +136,16 @@ impl EventStore {
 
 impl EventPublisher {
     fn from_env() -> Option<Self> {
-        let endpoint = env::var("BAIJIMU_CONNECTOR_EVENT_ENDPOINT").ok()?;
-        let token_path = env::var("BAIJIMU_CONNECTOR_EVENT_TOKEN_FILE").ok()?;
+        let app_id = env::var("BAIJIMU_LOCAL_APP_ID").ok()?;
+        let endpoint = env::var("BAIJIMU_LOCAL_APP_EVENT_ENDPOINT").ok()?;
+        let token_path = env::var("BAIJIMU_LOCAL_APP_EVENT_TOKEN_FILE").ok()?;
         let token = fs::read_to_string(token_path).ok()?.trim().to_string();
         if endpoint.trim().is_empty() || token.is_empty() {
             return None;
         }
         let (sender, receiver) = mpsc::sync_channel(EVENT_PUBLISH_QUEUE_CAPACITY);
         let worker = PublisherWorker {
+            app_id,
             endpoint,
             token,
             client: reqwest::blocking::Client::new(),
@@ -199,7 +202,7 @@ impl PublisherWorker {
 
     fn publish(&self, job: PublishJob) {
         let request = json!({
-            "connectorId": "com.baijimu.connector.codex-connector",
+            "appId": self.app_id,
             "event": job.event_name,
             "eventId": job.event_id,
             "payload": job.payload,

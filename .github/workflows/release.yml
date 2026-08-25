@@ -324,8 +324,8 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "connector.json"), "utf8"));
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
           if (manifest.source?.type !== "github" || manifest.source?.repo !== "baijimu/baijimu-codex-connector" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
-          if (manifest.id !== "com.baijimu.connector.codex-connector" || manifest.name !== "Codex 远程连接器") throw new Error("connector identity mismatch");
-          if (manifest.schemaVersion !== "2.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || typeof manifest.transport !== "object" || !Array.isArray(manifest.methods) || !Array.isArray(manifest.events) || manifest.ui !== undefined) throw new Error("connector package contract is invalid");
+          if (manifest.appId !== "codex-connector" || manifest.name !== "Codex 远程连接器") throw new Error("connector identity mismatch");
+          if (manifest.schemaVersion !== "3.0.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || typeof manifest.transport !== "object" || !Array.isArray(manifest.methods) || !Array.isArray(manifest.events) || manifest.ui !== undefined) throw new Error("connector package contract is invalid");
           NODE
           binary_name=baijimu-connector-codex
           test "$RUNNER_OS" != Windows || binary_name=baijimu-connector-codex.exe
@@ -585,7 +585,7 @@ jobs:
           windows_name="baijimu-codex-connector-${VERSION}-windows-x64.zip"
           linux_name="baijimu-codex-connector-${VERSION}-linux-x64.zip"
           artifacts="[$(upload_one macos universal "$macos_name"),$(upload_one windows x86_64 "$windows_name"),$(upload_one linux x86_64 "$linux_name")]"
-          jq -n --arg version "$VERSION" --arg tag "$RELEASE_TAG" --argjson artifacts "$artifacts" '{schemaVersion:"1.0",applicationId:"codex-connector",connectorId:"com.baijimu.connector.codex-connector",releaseTag:$tag,version:$version,artifacts:$artifacts}' > "$manifest"
+          jq -n --arg version "$VERSION" --arg tag "$RELEASE_TAG" --argjson artifacts "$artifacts" '{schemaVersion:"2.0.0",appId:"codex-connector",releaseTag:$tag,version:$version,artifacts:$artifacts}' > "$manifest"
           manifest_url="$public_base/$prefix/manifest.json"
           existing_manifest="$RUNNER_TEMP/existing-oss-manifest.json"
           if curl -fsSL --retry 3 "$manifest_url" -o "$existing_manifest" 2>/dev/null; then
@@ -702,7 +702,7 @@ jobs:
             PUBLISHED)
               for target in 'macos&arch=aarch64' 'windows&arch=x86_64' 'linux&arch=x86_64'; do
                 curl -fsS --retry 5 --retry-all-errors --retry-delay 3 \
-                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex-connector?platform=${target}&hostVersion=0.3.0&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
+                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex-connector?platform=${target}&hostVersion=0.6.0&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
                   | jq -e --arg version "$VERSION" '
                     (.data // .).latestVersion.version == $version and
                     (.data // .).latestVersion.compatibility.compatible == true and
@@ -764,9 +764,8 @@ jobs:
           done
           oss_manifest="$release_dir/baijimu-codex-connector-${VERSION}-oss-manifest.json"
           jq -e --arg version "$VERSION" '
-            .schemaVersion == "1.0" and
-            .applicationId == "codex-connector" and
-            .connectorId == "com.baijimu.connector.codex-connector" and
+            .schemaVersion == "2.0.0" and
+            .appId == "codex-connector" and
             .releaseTag == ("v" + $version) and
             .version == $version and
             (.artifacts | length) == 3' "$oss_manifest" >/dev/null

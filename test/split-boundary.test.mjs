@@ -9,13 +9,14 @@ const read = (path) => readFile(join(root, path), "utf8");
 
 test("Connector manifest exposes only CLI and remote app-server responsibilities", async () => {
   const manifest = JSON.parse(await read("connector.json"));
-  assert.equal(manifest.id, "com.baijimu.connector.codex-connector");
+  assert.equal(manifest.schemaVersion, "3.0.0");
+  assert.equal(manifest.appId, "codex-connector");
   assert.equal(manifest.name, "Codex 远程连接器");
-  assert.equal(manifest.version, "2.0.4");
+  assert.equal(manifest.version, "3.0.0");
   assert.equal(manifest.source.repo, "baijimu/baijimu-codex-connector");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
-  assert.equal(manifest.hostRequirements.minimumVersion, "0.3.0");
+  assert.equal(manifest.hostRequirements.minimumVersion, "0.6.0");
   assert.equal(manifest.ui, undefined);
   assert.equal(manifest.management.operations.credentialState, undefined);
   assert.equal(manifest.management.operations.launchCodex, undefined);
