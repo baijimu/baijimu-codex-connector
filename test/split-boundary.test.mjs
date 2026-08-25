@@ -39,7 +39,11 @@ test("Connector uses trusted platform authorization with one system Codex home",
   assert.match(appServer, /system_codex_home\(\)/);
   assert.doesNotMatch(appServer, /default-profile/);
   assert.doesNotMatch(readme, /workspace-profiles/);
-  assert.match(readme, /codex-completion`（Codex 模型接口服务）继续独立/);
+  assert.match(
+    readme,
+    /06042dd8-a08f-11f1-8622-00163e3536cb`（Codex 模型接口服务）继续独立/,
+  );
+  assert.match(readme, /Bridge Agent 0\.6\.0 及以上/);
 });
 
 test("Connector setup executes CLI installation from its own artifact catalog", async () => {

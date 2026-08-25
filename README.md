@@ -12,7 +12,7 @@
 
 ## 调用上下文
 
-Relay 从客户端令牌取得平台工作区，发送 `LocalAppInvokeRequest.workspace_id`；Bridge Agent 0.3.0 及以上把该值写入本机 HTTP 请求头 `x-baijimu-workspace-id`。Connector 不接受调用参数中的工作区覆盖。该字段只证明本次调用已经过平台授权，不选择 `CODEX_HOME`、账号、任务空间或 app-server。
+Relay 从客户端令牌取得平台工作区，发送 `LocalAppInvokeRequest.workspace_id`；Bridge Agent 0.6.0 及以上把该值写入本机 HTTP 请求头 `x-baijimu-workspace-id`。Connector 不接受调用参数中的工作区覆盖。该字段只证明本次调用已经过平台授权，不选择 `CODEX_HOME`、账号、任务空间或 app-server。
 
 所有获准调用都进入同一个、固定绑定系统默认 `~/.codex` 的 app-server。当前 Codex 账号、配置、会话、历史、技能和任务状态完全由该系统默认目录决定。Connector 私有目录只保存自身管理令牌、安装状态、日志和已读状态，不保存平台工作区到 Codex 运行时的映射。
 
