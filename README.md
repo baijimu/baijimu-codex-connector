@@ -1,6 +1,6 @@
 # 百积木 Codex 远程连接器
 
-服务端分配的 appId `04166b2e-a08f-11f1-8622-00163e3536cb` 对应面向百积木 Relay 的独立 Codex CLI 远程连接器。它只负责：
+存量市场 appId `codex-connector` 对应面向百积木 Relay 的独立 Codex CLI 远程连接器。它只负责：
 
 - 按百积木权威制品目录安装和定期同步官方 Codex CLI，并通过宿主注入的当前用户 `PATH` 验证版本、`codex` 与 `app-server` 能力；
 - 接收 Relay 鉴权后传入的可信 `workspaceId`；
@@ -8,7 +8,7 @@
 - 提供 `session/thread/turn/event` 和原始 app-server 请求接口；
 - 将平台工作区身份仅作为调用授权上下文，不参与 Codex 状态或进程隔离。
 
-它不安装或启动 ChatGPT/Codex 桌面应用，不创建 Codex 工作区档案，也不签发、切换或覆盖 `~/.codex/auth.json`。桌面安装和系统默认 Codex 认证由 appId `08098e26-a08f-11f1-8622-00163e3536cb`（Codex 桌面管理器）负责；appId `06042dd8-a08f-11f1-8622-00163e3536cb`（Codex 模型接口服务）继续独立提供 OpenAI 兼容模型接口，不并入本应用。
+它不安装或启动 ChatGPT/Codex 桌面应用，不创建 Codex 工作区档案，也不签发、切换或覆盖 `~/.codex/auth.json`。桌面安装和系统默认 Codex 认证由 appId `codex`（Codex 桌面管理器）负责；appId `codex-completion`（Codex 模型接口服务）继续独立提供 OpenAI 兼容模型接口，不并入本应用。
 
 ## 调用上下文
 
