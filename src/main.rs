@@ -358,7 +358,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             .ok()
             .as_deref()
             == Some("1");
-    if !test_shutdown
+    if request_requires_authorization(&request.method, &path, test_shutdown)
         && !management_authorized(request.authorization.as_deref(), &state.management_token)
     {
         return write_json(
@@ -468,6 +468,10 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
         _ => (404, json!({"ok": false, "error": {"message": "not found"}})),
     };
     write_json(&mut stream, response.0, &response.1)
+}
+
+fn request_requires_authorization(method: &str, path: &str, test_shutdown: bool) -> bool {
+    !test_shutdown && !matches!((method, path), ("GET", "/healthz") | ("GET", "/readyz"))
 }
 
 fn startup_not_ready_response(startup: &StartupReadiness) -> Option<Value> {
@@ -848,6 +852,23 @@ mod project_state_tests {
         assert_eq!(failed.phase, StartupPhase::Failed);
         assert_eq!(response["error"]["code"], "connector_initialization_failed");
         assert_eq!(response["error"]["message"], "Connector 元数据初始化超时");
+    }
+
+    #[test]
+    fn host_health_endpoints_are_public_but_business_routes_require_authorization() {
+        assert!(!request_requires_authorization("GET", "/healthz", false));
+        assert!(!request_requires_authorization("GET", "/readyz", false));
+        assert!(request_requires_authorization(
+            "POST",
+            "/invoke/status",
+            false
+        ));
+        assert!(request_requires_authorization(
+            "GET",
+            "/management/v1/setup/state",
+            false,
+        ));
+        assert!(!request_requires_authorization("POST", "/__shutdown", true));
     }
 
     #[test]
