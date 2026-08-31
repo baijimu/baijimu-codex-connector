@@ -77,6 +77,7 @@ install_cli() {
   install -m 755 "$bin" "$install_temp"
   "$install_temp" --version >/dev/null
   "$install_temp" app-server --help >/dev/null
+  "$install_temp" app-server proxy --help >/dev/null
   mv -f "$install_temp" "$install_target"
   xattr -d com.apple.quarantine "$install_target" 2>/dev/null || true
 

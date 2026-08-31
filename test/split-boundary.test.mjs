@@ -12,7 +12,7 @@ test("Connector manifest exposes only CLI and remote app-server responsibilities
   assert.equal(manifest.schemaVersion, "3.0.0");
   assert.equal(manifest.appId, "codex-connector");
   assert.equal(manifest.name, "Codex 远程连接器");
-  assert.equal(manifest.version, "2.0.6");
+  assert.equal(manifest.version, "2.1.0");
   assert.equal(manifest.source.repo, "baijimu/baijimu-codex-connector");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
@@ -37,6 +37,9 @@ test("Connector uses trusted platform authorization with one system Codex home",
   assert.doesNotMatch(main, /WorkspaceClients|workspace_profile/);
   assert.match(runtime, /home_dir\(\)\.join\("\.codex"\)/);
   assert.match(appServer, /system_codex_home\(\)/);
+  assert.match(appServer, /app-server-control\.sock/);
+  assert.match(appServer, /\["app-server", "proxy"\]/);
+  assert.match(appServer, /\["app-server", "--listen", "unix:\/\/"\]/);
   assert.doesNotMatch(appServer, /default-profile/);
   assert.doesNotMatch(readme, /workspace-profiles/);
   assert.match(
@@ -44,6 +47,8 @@ test("Connector uses trusted platform authorization with one system Codex home",
     /codex-completion`（Codex 模型接口服务）继续独立/,
   );
   assert.match(readme, /Bridge Agent 0\.6\.0 及以上/);
+  assert.match(readme, /只关闭自己的 proxy，不停止共享 app-server/);
+  assert.match(readme, /独立 `stdio:\/\/` app-server/);
 });
 
 test("Connector setup executes CLI installation from its own artifact catalog", async () => {

@@ -10,6 +10,8 @@ mod process_runtime;
 mod project_checkout;
 mod setup;
 mod thread_state;
+#[cfg(unix)]
+mod websocket_transport;
 
 #[cfg(test)]
 use app_server::retryable_event_status;

@@ -109,11 +109,37 @@ fn inspect_command(command: &str) -> Result<CliInspection, CommandError> {
         Some(if stdout.is_empty() { stderr } else { stdout }).filter(|value| !value.is_empty());
 
     match command_output(command, &["app-server", "--help"]) {
-        Ok(output) if output.status.success() => Ok(CliInspection {
-            version,
-            app_server_supported: true,
-            error: None,
-        }),
+        Ok(output) if output.status.success() => {
+            #[cfg(unix)]
+            {
+                match command_output(command, &["app-server", "proxy", "--help"]) {
+                    Ok(output) if output.status.success() => Ok(CliInspection {
+                        version,
+                        app_server_supported: true,
+                        error: None,
+                    }),
+                    Ok(output) => Ok(CliInspection {
+                        version,
+                        app_server_supported: false,
+                        error: Some(format!(
+                            "codex app-server proxy --help 退出状态为 {}",
+                            output.status
+                        )),
+                    }),
+                    Err(error) => Ok(CliInspection {
+                        version,
+                        app_server_supported: false,
+                        error: Some(format!("验证 codex app-server proxy 失败：{error}")),
+                    }),
+                }
+            }
+            #[cfg(not(unix))]
+            Ok(CliInspection {
+                version,
+                app_server_supported: true,
+                error: None,
+            })
+        }
         Ok(output) => Ok(CliInspection {
             version,
             app_server_supported: false,
@@ -203,7 +229,7 @@ mod tests {
     fn inspects_the_same_command_for_version_and_app_server() {
         let command = command_script(
             "supported",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 1.2.3'; exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then exit 0; fi\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 1.2.3'; exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"proxy\" ] && [ \"$3\" = \"--help\" ]; then exit 0; fi\nexit 2\n",
         );
 
         let inspection = inspect_command(command.to_str().expect("utf8 path")).expect("inspect");

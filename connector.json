@@ -2,7 +2,7 @@
   "schemaVersion": "3.0.0",
   "appId": "codex-connector",
   "name": "Codex 远程连接器",
-  "version": "2.0.6",
+  "version": "2.1.0",
   "description": "安装并托管 Codex CLI，通过平台授权访问设备系统默认 Codex 的会话、线程、轮次和事件。",
   "icon": {
     "mediaType": "image/png",
@@ -15,7 +15,7 @@
   "source": {
     "type": "github",
     "repo": "baijimu/baijimu-codex-connector",
-    "revision": "v2.0.6"
+    "revision": "v2.1.0"
   },
   "runtime": {
     "type": "process",
@@ -89,7 +89,8 @@
       },
       "listen": {
         "type": "string",
-        "default": "stdio://"
+        "default": "stdio://",
+        "description": "Windows 或显式自定义 Codex 启动参数时使用的 app-server 监听方式；Unix 默认复用官方 control socket。"
       },
       "projectsDirectory": {
         "type": "string",
