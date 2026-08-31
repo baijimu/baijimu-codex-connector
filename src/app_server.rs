@@ -6,7 +6,17 @@ pub(crate) use event_store::retryable_event_status;
 use event_store::EventStore;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -33,6 +43,7 @@ pub(crate) struct CodexClient {
 struct ProcessSession {
     child: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
+    transport: RpcTransportKind,
     pending: Mutex<HashMap<u64, SyncSender<Result<Value, RpcFailure>>>>,
     next_id: AtomicU64,
     initialized: AtomicBool,
@@ -41,6 +52,55 @@ struct ProcessSession {
     started_at: String,
     exit: Mutex<Option<Value>>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RpcTransportKind {
+    JsonLines,
+    #[cfg(unix)]
+    WebSocketProxy,
+}
+
+impl RpcTransportKind {
+    fn status_name(self) -> &'static str {
+        match self {
+            Self::JsonLines => "private_stdio",
+            #[cfg(unix)]
+            Self::WebSocketProxy => "shared_control_socket",
+        }
+    }
+
+    fn listen_name(self, configured: &str) -> &str {
+        match self {
+            Self::JsonLines => configured,
+            #[cfg(unix)]
+            Self::WebSocketProxy => "unix://",
+        }
+    }
+
+    fn is_shared(self) -> bool {
+        #[cfg(unix)]
+        {
+            self == Self::WebSocketProxy
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+}
+
+#[cfg(unix)]
+const CONTROL_DIR_NAME: &str = "app-server-control";
+#[cfg(unix)]
+const CONTROL_SOCKET_NAME: &str = "app-server-control.sock";
+#[cfg(unix)]
+const SHARED_START_LOCK_NAME: &str = "baijimu-connector-start.lock";
+#[cfg(unix)]
+const SHARED_LOG_NAME: &str = "baijimu-connector-app-server.log";
+#[cfg(unix)]
+const SHARED_START_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(unix)]
+const PROXY_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 struct RpcFailure {
@@ -142,9 +202,13 @@ impl CodexClient {
                 "running": session.is_some(),
                 "initialized": session.is_some_and(|session| session.initialized.load(Ordering::Acquire)),
                 "pid": session.map(|session| session.pid),
+                "transport": session.map(|session| session.transport.status_name()),
+                "shared": session.is_some_and(|session| session.transport.is_shared()),
                 "codexBinary": codex_binary::COMMAND,
                 "codexBinaryResolution": binary_status,
-                "listen": self.options.listen,
+                "listen": session
+                    .map(|session| session.transport.listen_name(&self.options.listen))
+                    .unwrap_or(&self.options.listen),
                 "startedAt": session.map(|session| session.started_at.clone()),
                 "lastExit": runtime.last_exit,
                 "codexHome": runtime.active_codex_home,
@@ -273,6 +337,17 @@ impl CodexClient {
                 json!({"command": codex_binary::COMMAND, "error": message}),
             ));
         }
+        #[cfg(unix)]
+        if self.options.extra_args.is_empty() {
+            return self.start_shared_process_locked(inspection);
+        }
+        self.start_private_process_locked(inspection)
+    }
+
+    fn start_private_process_locked(
+        &self,
+        inspection: codex_binary::CliInspection,
+    ) -> Result<Arc<ProcessSession>, HttpError> {
         let active_home = self.active_codex_home();
         let args = if self.options.extra_args.is_empty() {
             vec![
@@ -320,6 +395,7 @@ impl CodexClient {
             pid: child.id(),
             child: Mutex::new(Some(child)),
             stdin: Mutex::new(Some(stdin)),
+            transport: RpcTransportKind::JsonLines,
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             initialized: AtomicBool::new(false),
@@ -335,6 +411,208 @@ impl CodexClient {
             runtime.session = Some(Arc::clone(&session));
             runtime.last_exit = None;
             runtime.codex_cli_inspection = Some(inspection);
+            runtime.codex_binary_error = None;
+        }
+        Ok(session)
+    }
+
+    #[cfg(unix)]
+    fn start_shared_process_locked(
+        &self,
+        inspection: codex_binary::CliInspection,
+    ) -> Result<Arc<ProcessSession>, HttpError> {
+        let active_home = self.active_codex_home();
+        if let Ok(session) = self.connect_shared_proxy(&active_home, &inspection) {
+            return Ok(session);
+        }
+
+        let control_dir = active_home.join(CONTROL_DIR_NAME);
+        fs::create_dir_all(&control_dir).map_err(|error| {
+            HttpError::coded(
+                500,
+                format!("创建 Codex control socket 目录失败：{error}"),
+                "CODEX_CONTROL_DIR_FAILED",
+                json!({"path": control_dir, "error": error.to_string()}),
+            )
+        })?;
+        fs::set_permissions(&control_dir, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            HttpError::internal(format!("设置 Codex control socket 目录权限失败：{error}"))
+        })?;
+        let lock_path = control_dir.join(SHARED_START_LOCK_NAME);
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(&lock_path)
+            .map_err(|error| {
+                HttpError::internal(format!("打开共享 app-server 启动锁失败：{error}"))
+            })?;
+        lock_exclusive(&lock).map_err(|error| {
+            HttpError::internal(format!("获取共享 app-server 启动锁失败：{error}"))
+        })?;
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+            HttpError::internal(format!("设置共享 app-server 启动锁权限失败：{error}"))
+        })?;
+
+        if let Ok(session) = self.connect_shared_proxy(&active_home, &inspection) {
+            return Ok(session);
+        }
+
+        let socket_path = control_dir.join(CONTROL_SOCKET_NAME);
+        remove_stale_control_socket(&socket_path)?;
+        let log_path = control_dir.join(SHARED_LOG_NAME);
+        let log = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&log_path)
+            .map_err(|error| {
+                HttpError::internal(format!("打开共享 app-server 日志失败：{error}"))
+            })?;
+        fs::set_permissions(&log_path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+            HttpError::internal(format!("设置共享 app-server 日志权限失败：{error}"))
+        })?;
+        let mut command = Command::new(codex_binary::COMMAND);
+        child_process::isolate_from_connector_environment(&mut command);
+        command
+            .args(["app-server", "--listen", "unix://"])
+            .env("CODEX_HOME", &active_home)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().map_err(|error| {
+                HttpError::internal(format!("复制共享 app-server 日志句柄失败：{error}"))
+            })?))
+            .stderr(Stdio::from(log));
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+        let mut backend = command.spawn().map_err(|error| {
+            HttpError::coded(
+                500,
+                format!("启动共享 Codex app-server 失败：{error}"),
+                "CODEX_SHARED_APP_SERVER_START_FAILED",
+                json!({"command": codex_binary::COMMAND, "error": error.to_string(), "logPath": log_path}),
+            )
+        })?;
+        let backend_pid = backend.id();
+        wait_for_control_socket(&mut backend, &socket_path, &log_path)?;
+        drop(backend);
+
+        self.connect_shared_proxy(&active_home, &inspection)
+            .map_err(|error| {
+                HttpError::coded(
+                    500,
+                    format!("共享 Codex app-server 已启动，但 proxy 连接失败：{}", error.message),
+                    "CODEX_SHARED_PROXY_CONNECT_FAILED",
+                    json!({"backendPid": backend_pid, "socketPath": socket_path, "logPath": log_path}),
+                )
+            })
+    }
+
+    #[cfg(unix)]
+    fn connect_shared_proxy(
+        &self,
+        active_home: &std::path::Path,
+        inspection: &codex_binary::CliInspection,
+    ) -> Result<Arc<ProcessSession>, HttpError> {
+        let mut command = Command::new(codex_binary::COMMAND);
+        child_process::isolate_from_connector_environment(&mut command);
+        let mut child = command
+            .args(["app-server", "proxy"])
+            .env("CODEX_HOME", active_home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| {
+                HttpError::coded(
+                    500,
+                    format!("启动 Codex app-server proxy 失败：{error}"),
+                    "CODEX_PROXY_START_FAILED",
+                    json!({"command": codex_binary::COMMAND, "error": error.to_string()}),
+                )
+            })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| HttpError::internal("codex app-server proxy stdin 启动后不可用"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| HttpError::internal("codex app-server proxy stdout 启动后不可用"))?;
+        let stderr = child.stderr.take();
+        let (handshake_sender, handshake_receiver) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let mut stdin = stdin;
+            let result = crate::websocket_transport::client_handshake(&mut stdin, stdout)
+                .map(|reader| (stdin, reader));
+            let _ = handshake_sender.send(result);
+        });
+        let (stdin, reader) = match handshake_receiver.recv_timeout(PROXY_HANDSHAKE_TIMEOUT) {
+            Ok(Ok(transport)) => transport,
+            Ok(Err(error)) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(HttpError::coded(
+                    500,
+                    format!("连接 Codex control socket 失败：{error}"),
+                    "CODEX_CONTROL_SOCKET_UNAVAILABLE",
+                    json!({"codexHome": active_home, "error": error.to_string()}),
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(HttpError::coded(
+                    500,
+                    "连接 Codex control socket 的 WebSocket 握手超时",
+                    "CODEX_CONTROL_SOCKET_TIMEOUT",
+                    json!({"codexHome": active_home, "timeoutSeconds": PROXY_HANDSHAKE_TIMEOUT.as_secs()}),
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(HttpError::coded(
+                    500,
+                    "Codex control socket WebSocket 握手线程异常退出",
+                    "CODEX_CONTROL_SOCKET_HANDSHAKE_FAILED",
+                    json!({"codexHome": active_home}),
+                ));
+            }
+        };
+        let session = Arc::new(ProcessSession {
+            pid: child.id(),
+            child: Mutex::new(Some(child)),
+            stdin: Mutex::new(Some(stdin)),
+            transport: RpcTransportKind::WebSocketProxy,
+            pending: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(1),
+            initialized: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+            started_at: timestamp(),
+            exit: Mutex::new(None),
+        });
+        ProcessSession::spawn_websocket_reader(
+            Arc::clone(&session),
+            reader,
+            Arc::clone(&self.events),
+        );
+        if let Some(stderr) = stderr {
+            ProcessSession::spawn_stderr_reader(stderr);
+        }
+        if let Ok(mut runtime) = self.runtime.lock() {
+            runtime.session = Some(Arc::clone(&session));
+            runtime.last_exit = None;
+            runtime.codex_cli_inspection = Some(inspection.clone());
             runtime.codex_binary_error = None;
         }
         Ok(session)
@@ -441,10 +719,16 @@ impl ProcessSession {
         let stdin = stdin
             .as_mut()
             .ok_or_else(|| HttpError::internal("codex app-server is not writable"))?;
-        writeln!(stdin, "{message}").map_err(|error| HttpError::internal(error.to_string()))?;
-        stdin
-            .flush()
-            .map_err(|error| HttpError::internal(error.to_string()))
+        match self.transport {
+            RpcTransportKind::JsonLines => writeln!(stdin, "{message}")
+                .and_then(|_| stdin.flush())
+                .map_err(|error| HttpError::internal(error.to_string())),
+            #[cfg(unix)]
+            RpcTransportKind::WebSocketProxy => {
+                crate::websocket_transport::write_text(stdin, &message.to_string())
+                    .map_err(|error| HttpError::internal(error.to_string()))
+            }
+        }
     }
 
     fn remove_pending(&self, id: u64) {
@@ -490,41 +774,95 @@ impl ProcessSession {
                         continue;
                     }
                 };
-                if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                    let sender = session
-                        .pending
-                        .lock()
-                        .ok()
-                        .and_then(|mut pending| pending.remove(&id));
-                    if let Some(sender) = sender {
-                        let result = if let Some(error) = value.get("error") {
-                            Err(RpcFailure {
-                                message: error
-                                    .get("message")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("codex app-server error")
-                                    .to_string(),
-                                code: error.get("code").cloned(),
-                                data: error.get("data").cloned(),
-                            })
-                        } else {
-                            Ok(value.get("result").cloned().unwrap_or(Value::Null))
-                        };
-                        let _ = sender.send(result);
-                    } else {
-                        events.push("connector/unmatchedResponse", value);
-                    }
-                } else {
-                    let method = value
-                        .get("method")
-                        .and_then(Value::as_str)
-                        .unwrap_or("codex/notification")
-                        .to_string();
-                    let params = value.get("params").cloned().unwrap_or(value);
-                    events.push(&method, params);
+                session.dispatch_value(value, &events);
+            }
+        });
+    }
+
+    #[cfg(unix)]
+    fn spawn_websocket_reader(
+        session: Arc<Self>,
+        mut reader: BufReader<std::process::ChildStdout>,
+        events: Arc<EventStore>,
+    ) {
+        thread::spawn(move || loop {
+            let incoming =
+                crate::websocket_transport::read_message(&mut reader, |opcode, payload| {
+                    let mut stdin = session.stdin.lock().map_err(|_| {
+                        std::io::Error::other("Codex app-server stdin lock poisoned")
+                    })?;
+                    let stdin = stdin.as_mut().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::BrokenPipe,
+                            "codex app-server proxy is not writable",
+                        )
+                    })?;
+                    crate::websocket_transport::write_control(stdin, opcode, payload)
+                });
+            match incoming {
+                Ok(crate::websocket_transport::IncomingMessage::Text(text)) => {
+                    let value = match serde_json::from_str::<Value>(&text) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            events.push(
+                                "connector/parseError",
+                                json!({"line": text, "error": error.to_string()}),
+                            );
+                            continue;
+                        }
+                    };
+                    session.dispatch_value(value, &events);
+                }
+                Ok(crate::websocket_transport::IncomingMessage::Closed) => {
+                    session.mark_exited(RpcFailure::transport(
+                        "codex app-server proxy WebSocket closed",
+                    ));
+                    return;
+                }
+                Err(error) => {
+                    session.mark_exited(RpcFailure::transport(format!(
+                        "failed to read codex app-server proxy WebSocket: {error}"
+                    )));
+                    return;
                 }
             }
         });
+    }
+
+    fn dispatch_value(&self, value: Value, events: &EventStore) {
+        if let Some(id) = value.get("id").and_then(Value::as_u64) {
+            let sender = self
+                .pending
+                .lock()
+                .ok()
+                .and_then(|mut pending| pending.remove(&id));
+            if let Some(sender) = sender {
+                let result = if let Some(error) = value.get("error") {
+                    Err(RpcFailure {
+                        message: error
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("codex app-server error")
+                            .to_string(),
+                        code: error.get("code").cloned(),
+                        data: error.get("data").cloned(),
+                    })
+                } else {
+                    Ok(value.get("result").cloned().unwrap_or(Value::Null))
+                };
+                let _ = sender.send(result);
+            } else {
+                events.push("connector/unmatchedResponse", value);
+            }
+        } else {
+            let method = value
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("codex/notification")
+                .to_string();
+            let params = value.get("params").cloned().unwrap_or(value);
+            events.push(&method, params);
+        }
     }
 
     fn spawn_stderr_reader(stderr: std::process::ChildStderr) {
@@ -558,6 +896,12 @@ impl ProcessSession {
 
     fn shutdown(&self) {
         if let Ok(mut stdin) = self.stdin.lock() {
+            #[cfg(unix)]
+            if self.transport == RpcTransportKind::WebSocketProxy {
+                if let Some(writer) = stdin.as_mut() {
+                    let _ = crate::websocket_transport::write_control(writer, 0x8, &[]);
+                }
+            }
             stdin.take();
         }
         if let Ok(mut child) = self.child.lock() {
@@ -624,4 +968,103 @@ fn refresh_codex_command_status(runtime: &mut ClientRuntime) {
             runtime.codex_binary_error = Some(error);
         }
     }
+}
+
+#[cfg(unix)]
+fn lock_exclusive(file: &File) -> std::io::Result<()> {
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn remove_stale_control_socket(socket_path: &std::path::Path) -> Result<(), HttpError> {
+    use std::os::unix::fs::FileTypeExt;
+
+    if !socket_path.exists() {
+        return Ok(());
+    }
+    for _ in 0..20 {
+        if UnixStream::connect(socket_path).is_ok() {
+            return Err(HttpError::coded(
+                500,
+                "Codex control socket 正在监听，但 proxy 无法完成 WebSocket 协商",
+                "CODEX_CONTROL_SOCKET_PROTOCOL_FAILED",
+                json!({"socketPath": socket_path}),
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let metadata = fs::symlink_metadata(socket_path).map_err(|error| {
+        HttpError::internal(format!("读取 Codex control socket 状态失败：{error}"))
+    })?;
+    if !metadata.file_type().is_socket() {
+        return Err(HttpError::coded(
+            500,
+            "Codex control socket 路径被非 socket 文件占用",
+            "CODEX_CONTROL_SOCKET_PATH_OCCUPIED",
+            json!({"socketPath": socket_path}),
+        ));
+    }
+    fs::remove_file(socket_path).map_err(|error| {
+        HttpError::internal(format!("清理失效的 Codex control socket 失败：{error}"))
+    })
+}
+
+#[cfg(unix)]
+fn wait_for_control_socket(
+    backend: &mut Child,
+    socket_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> Result<(), HttpError> {
+    let deadline = std::time::Instant::now() + SHARED_START_TIMEOUT;
+    loop {
+        if UnixStream::connect(socket_path).is_ok() {
+            return Ok(());
+        }
+        if let Some(status) = backend.try_wait().map_err(|error| {
+            HttpError::internal(format!("检查共享 app-server 状态失败：{error}"))
+        })? {
+            return Err(HttpError::coded(
+                500,
+                format!("共享 Codex app-server 在创建 control socket 前退出：{status}"),
+                "CODEX_SHARED_APP_SERVER_EXITED",
+                json!({
+                    "status": status.to_string(),
+                    "socketPath": socket_path,
+                    "logPath": log_path,
+                    "logTail": read_log_tail(log_path),
+                }),
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = backend.kill();
+            let _ = backend.wait();
+            return Err(HttpError::coded(
+                500,
+                "共享 Codex app-server 未在 10 秒内创建 control socket",
+                "CODEX_SHARED_APP_SERVER_TIMEOUT",
+                json!({
+                    "socketPath": socket_path,
+                    "logPath": log_path,
+                    "logTail": read_log_tail(log_path),
+                }),
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(unix)]
+fn read_log_tail(path: &std::path::Path) -> String {
+    const LIMIT: usize = 8 * 1024;
+    fs::read(path)
+        .map(|bytes| {
+            let start = bytes.len().saturating_sub(LIMIT);
+            String::from_utf8_lossy(&bytes[start..]).to_string()
+        })
+        .unwrap_or_default()
 }
