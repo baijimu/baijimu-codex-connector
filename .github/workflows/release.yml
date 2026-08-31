@@ -30,9 +30,9 @@ permissions:
   contents: read
 
 env:
-  BAIJIMU_CLI_VERSION: "0.12.0"
-  BAIJIMU_CLI_LINUX_SHA256: "9300f9db1f7d8d9bd4014026f47ae515bc04dc28a141e473c798f30ae279310e"
-  BAIJIMU_CLI_LINUX_URL: "https://download.baijimu.com/managed-tool-artifacts/baijimu-cli/releases/v0.12.0/9300f9db1f7d8d9bd4014026f47ae515bc04dc28a141e473c798f30ae279310e/baijimu-cli-0.12.0-linux-x64.zip"
+  BAIJIMU_CLI_VERSION: "0.36.1"
+  BAIJIMU_CLI_LINUX_SHA256: "3a70832013057fa53cc2a7c26220f0f9efb1ad4d6d2b3b1792da9044769dc7d6"
+  BAIJIMU_CLI_LINUX_URL: "https://download.baijimu.com/managed-tool-artifacts/baijimu-cli/releases/v0.36.1/3a70832013057fa53cc2a7c26220f0f9efb1ad4d6d2b3b1792da9044769dc7d6/baijimu-cli-0.36.1-linux-x64.zip"
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
