@@ -44,6 +44,7 @@ const MAX_EVENTS: usize = 1000;
 const DEFAULT_PROJECT_LIMIT: usize = 100;
 const DEFAULT_PROJECT_THREAD_PAGE_LIMIT: usize = 100;
 const DEFAULT_PROJECT_THREAD_MAX_PAGES: usize = 100;
+const MAX_THREAD_LIST_PAGES: usize = 100;
 const DEFAULT_THREAD_SORT_KEY: &str = "updated_at";
 const DEFAULT_THREAD_SORT_DIRECTION: &str = "desc";
 const MANAGEMENT_TOKEN_FILE: &str = "management-token";

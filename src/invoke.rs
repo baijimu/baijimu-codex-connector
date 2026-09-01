@@ -1,5 +1,6 @@
 use crate::*;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StateProjectRoot {
@@ -39,7 +40,9 @@ pub(crate) fn handle_invoke(
                     "searchTerm",
                 ],
             );
-            Ok(json!({"result": client.request("thread/search", params, timeout_ms(body))?}))
+            Ok(json!({
+                "result": request_unique_threads(client, "thread/search", params, timeout_ms(body))?
+            }))
         }
         "/invoke/readThread" => {
             let Some(thread_id) = string_field(body, "threadId").or_else(|| {
@@ -201,11 +204,8 @@ fn list_threads(body: &Value, client: &CodexClient) -> Result<Value, HttpError> 
     if params.get("sortDirection").is_none() {
         params["sortDirection"] = Value::String(DEFAULT_THREAD_SORT_DIRECTION.to_string());
     }
-    let mut result = client.request("thread/list", params, timeout_ms(body))?;
+    let mut result = request_unique_threads(client, "thread/list", params, timeout_ms(body))?;
     if let Some(data) = result.get_mut("data").and_then(Value::as_array_mut) {
-        for item in data.iter_mut() {
-            *item = normalize_thread_list_item(item.clone());
-        }
         client.refresh_active_home();
         thread_state::enrich_thread_list(client.state_dir(), &client.active_codex_home(), data)
             .map_err(HttpError::internal)?;
@@ -556,6 +556,8 @@ fn read_thread_projects(
         usize_param(body, "maxThreadPages", DEFAULT_PROJECT_THREAD_MAX_PAGES).clamp(1, 500);
     let limit =
         usize_param(body, "threadPageLimit", DEFAULT_PROJECT_THREAD_PAGE_LIMIT).clamp(1, 100);
+    let mut unique_threads = Vec::new();
+    let mut thread_indexes = HashMap::new();
     for _ in 0..max_pages {
         let mut params = json!({
             "cursor": cursor,
@@ -581,25 +583,27 @@ fn read_thread_projects(
             .into_iter()
             .map(normalize_thread_list_item)
             .collect::<Vec<_>>();
-        for thread in &threads {
-            if let Some(cwd) = thread.get("cwd").and_then(Value::as_str) {
-                if let Some(path) = normalize_project_path(cwd) {
-                    let project = upsert_project(projects, &path, "threads", Map::new());
-                    let count = project
-                        .get("sessionCount")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0)
-                        + 1;
-                    project["sessionCount"] = Value::from(count);
-                    if let Some(timestamp) = thread_timestamp(thread) {
-                        project["lastActiveAt"] = timestamp;
-                    }
+        let page_was_empty = threads.is_empty();
+        merge_unique_threads(&mut unique_threads, &mut thread_indexes, threads);
+        cursor = result.get("nextCursor").cloned().unwrap_or(Value::Null);
+        if cursor.is_null() || page_was_empty {
+            break;
+        }
+    }
+    for thread in &unique_threads {
+        if let Some(cwd) = thread.get("cwd").and_then(Value::as_str) {
+            if let Some(path) = normalize_project_path(cwd) {
+                let project = upsert_project(projects, &path, "threads", Map::new());
+                let count = project
+                    .get("sessionCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    + 1;
+                project["sessionCount"] = Value::from(count);
+                if let Some(timestamp) = thread_timestamp(thread) {
+                    project["lastActiveAt"] = timestamp;
                 }
             }
-        }
-        cursor = result.get("nextCursor").cloned().unwrap_or(Value::Null);
-        if cursor.is_null() || threads.is_empty() {
-            return Ok(());
         }
     }
     Ok(())
@@ -635,6 +639,247 @@ fn normalize_thread_list_item(item: Value) -> Value {
         map.insert(key.clone(), value.clone());
     }
     Value::Object(map)
+}
+
+fn request_unique_threads(
+    client: &CodexClient,
+    method: &str,
+    params: Value,
+    request_timeout_ms: Option<u64>,
+) -> Result<Value, HttpError> {
+    let requested_limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value.clamp(1, 100) as usize);
+    let mut cursor = params.get("cursor").cloned().unwrap_or(Value::Null);
+    let mut visited_cursors = HashSet::new();
+    if !cursor.is_null() {
+        visited_cursors.insert(cursor.to_string());
+    }
+
+    let mut result: Option<Value> = None;
+    let mut threads = Vec::new();
+    let mut thread_indexes = HashMap::new();
+    let mut next_cursor = Value::Null;
+
+    for _ in 0..MAX_THREAD_LIST_PAGES {
+        let mut page_params = params.clone();
+        if let Some(map) = page_params.as_object_mut() {
+            if cursor.is_null() {
+                map.remove("cursor");
+            } else {
+                map.insert("cursor".to_string(), cursor.clone());
+            }
+            if let Some(limit) = requested_limit {
+                let remaining = limit.saturating_sub(threads.len());
+                if remaining == 0 {
+                    break;
+                }
+                map.insert("limit".to_string(), Value::from(remaining));
+            }
+        }
+
+        let page = client.request(method, page_params, request_timeout_ms)?;
+        let page_threads = page
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(normalize_thread_list_item)
+            .collect::<Vec<_>>();
+        let page_was_empty = page_threads.is_empty();
+        merge_unique_threads(&mut threads, &mut thread_indexes, page_threads);
+        next_cursor = page.get("nextCursor").cloned().unwrap_or(Value::Null);
+
+        if result.is_none() {
+            result = Some(page);
+        }
+        if requested_limit.is_none()
+            || requested_limit.is_some_and(|limit| threads.len() >= limit)
+            || next_cursor.is_null()
+            || page_was_empty
+        {
+            break;
+        }
+
+        let cursor_key = next_cursor.to_string();
+        if !visited_cursors.insert(cursor_key) {
+            break;
+        }
+        cursor = next_cursor.clone();
+    }
+
+    let mut result = result.unwrap_or_else(|| json!({"data": [], "nextCursor": null}));
+    if let Some(map) = result.as_object_mut() {
+        map.insert("data".to_string(), Value::Array(threads));
+        map.insert("nextCursor".to_string(), next_cursor);
+    }
+    Ok(result)
+}
+
+fn merge_unique_threads(
+    threads: &mut Vec<Value>,
+    thread_indexes: &mut HashMap<String, usize>,
+    incoming: Vec<Value>,
+) {
+    for thread in incoming {
+        let Some(thread_id) = logical_thread_id(&thread).map(str::to_string) else {
+            threads.push(thread);
+            continue;
+        };
+        if let Some(index) = thread_indexes.get(&thread_id).copied() {
+            threads[index] = merge_thread_projections(threads[index].clone(), thread);
+        } else {
+            thread_indexes.insert(thread_id, threads.len());
+            threads.push(thread);
+        }
+    }
+}
+
+fn logical_thread_id(thread: &Value) -> Option<&str> {
+    ["threadId", "sessionId", "id"]
+        .into_iter()
+        .find_map(|key| thread.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn merge_thread_projections(existing: Value, incoming: Value) -> Value {
+    let incoming_is_preferred = compare_thread_projections(&incoming, &existing).is_gt();
+    let (preferred, fallback) = if incoming_is_preferred {
+        (incoming, existing)
+    } else {
+        (existing, incoming)
+    };
+    let Some(mut preferred_map) = preferred.as_object().cloned() else {
+        return preferred;
+    };
+    if let Some(fallback_map) = fallback.as_object() {
+        for (key, value) in fallback_map {
+            let should_fill = preferred_map.get(key).is_none_or(value_is_missing);
+            if should_fill && !value_is_missing(value) {
+                preferred_map.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Value::Object(preferred_map)
+}
+
+fn compare_thread_projections(left: &Value, right: &Value) -> Ordering {
+    thread_is_live(left)
+        .cmp(&thread_is_live(right))
+        .then_with(|| compare_thread_recency(left, right))
+}
+
+fn thread_is_live(thread: &Value) -> bool {
+    if let Some(availability) = thread
+        .get("runtimeStatusAvailability")
+        .and_then(Value::as_str)
+    {
+        return availability == "live";
+    }
+    match thread.get("status") {
+        Some(Value::Object(status)) => status
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value != "notLoaded"),
+        Some(Value::String(status)) => !status.is_empty() && status != "notLoaded",
+        _ => false,
+    }
+}
+
+fn compare_thread_recency(left: &Value, right: &Value) -> Ordering {
+    let left = thread_timestamp(left);
+    let right = thread_timestamp(right);
+    match (left.as_ref(), right.as_ref()) {
+        (Some(Value::Number(left)), Some(Value::Number(right))) => left
+            .as_f64()
+            .and_then(|left| right.as_f64().and_then(|right| left.partial_cmp(&right)))
+            .unwrap_or(Ordering::Equal),
+        (Some(Value::String(left)), Some(Value::String(right))) => left.cmp(right),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        _ => Ordering::Equal,
+    }
+}
+
+fn value_is_missing(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(value) => value.trim().is_empty(),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merges_rollout_segments_by_stable_thread_id() {
+        let mut threads = Vec::new();
+        let mut indexes = HashMap::new();
+        merge_unique_threads(
+            &mut threads,
+            &mut indexes,
+            vec![
+                json!({
+                    "id": "thread-1",
+                    "title": "older rollout",
+                    "updatedAt": "2026-09-01T11:30:16Z",
+                    "rolloutPath": "/old.jsonl"
+                }),
+                json!({
+                    "id": "thread-1",
+                    "title": "new rollout",
+                    "updatedAt": "2026-09-01T19:57:48Z",
+                    "rolloutPath": "/new.jsonl"
+                }),
+                json!({"id": "thread-2", "updatedAt": "2026-09-01T18:00:00Z"}),
+            ],
+        );
+
+        assert_eq!(threads.len(), 2);
+        assert_eq!(threads[0]["title"], "new rollout");
+        assert_eq!(threads[0]["rolloutPath"], "/new.jsonl");
+    }
+
+    #[test]
+    fn prefers_live_projection_and_fills_missing_metadata() {
+        let merged = merge_thread_projections(
+            json!({
+                "id": "thread-1",
+                "title": "history",
+                "cwd": "/project",
+                "updatedAt": 20,
+                "status": {"type": "notLoaded"}
+            }),
+            json!({
+                "id": "thread-1",
+                "title": "live",
+                "cwd": null,
+                "updatedAt": 10,
+                "status": {"type": "active"}
+            }),
+        );
+
+        assert_eq!(merged["title"], "live");
+        assert_eq!(merged["cwd"], "/project");
+        assert_eq!(merged["status"]["type"], "active");
+    }
+
+    #[test]
+    fn keeps_records_without_a_stable_id() {
+        let mut threads = Vec::new();
+        let mut indexes = HashMap::new();
+        merge_unique_threads(
+            &mut threads,
+            &mut indexes,
+            vec![json!({"title": "one"}), json!({"title": "two"})],
+        );
+        assert_eq!(threads.len(), 2);
+    }
 }
 
 fn string_field(body: &Value, key: &str) -> Option<String> {

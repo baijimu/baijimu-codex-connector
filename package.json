@@ -1,6 +1,6 @@
 {
   "name": "@baijimu/connector-codex",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "通过平台授权访问设备系统默认 Codex 的百积木远程连接器。",
   "type": "module",
   "bin": {
