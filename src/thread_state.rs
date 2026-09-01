@@ -67,6 +67,11 @@ pub fn enrich_thread_list(
             .and_then(Value::as_str)
             .unwrap_or("notLoaded")
             .to_string();
+        let runtime_status_availability = if runtime_status_type == "notLoaded" {
+            "persistedOnly"
+        } else {
+            "live"
+        };
         let latest_turn_status = latest_turn_status(map, &runtime_status);
         let entry = store
             .threads
@@ -111,6 +116,14 @@ pub fn enrich_thread_list(
             .unwrap_or_default();
 
         map.insert("threadRuntimeStatus".to_string(), runtime_status);
+        map.insert(
+            "runtimeStatusAvailability".to_string(),
+            Value::String(runtime_status_availability.to_string()),
+        );
+        map.insert(
+            "runtimeStatusSource".to_string(),
+            Value::String("codexAppServer".to_string()),
+        );
         map.insert("activeFlags".to_string(), Value::Array(active_flags));
         map.insert("isInProgress".to_string(), Value::Bool(is_in_progress));
         map.insert(
@@ -346,6 +359,8 @@ mod tests {
         assert_eq!(threads[0]["isInProgress"], true);
         assert_eq!(threads[0]["latestTurnStatus"], "inProgress");
         assert_eq!(threads[0]["activeFlags"][0], "waitingOnApproval");
+        assert_eq!(threads[0]["runtimeStatusAvailability"], "live");
+        assert_eq!(threads[0]["runtimeStatusSource"], "codexAppServer");
 
         set_thread_read_state(
             &connector_home,
@@ -363,6 +378,22 @@ mod tests {
         threads[0]["turns"] = json!([{"status": "completed"}]);
         enrich_thread_list(&connector_home, &codex_home, &mut threads).unwrap();
         assert_eq!(threads[0]["hasUnreadTurn"], true);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn marks_persisted_threads_without_runtime_state_as_history_only() {
+        let root = temp_dir("persisted-only");
+        let codex_home = root.join("codex");
+        let connector_home = root.join("connector");
+        fs::create_dir_all(&codex_home).unwrap();
+        let mut threads = vec![json!({"id": "thread-history", "updatedAt": 10})];
+
+        enrich_thread_list(&connector_home, &codex_home, &mut threads).unwrap();
+
+        assert_eq!(threads[0]["threadRuntimeStatus"]["type"], "notLoaded");
+        assert_eq!(threads[0]["runtimeStatusAvailability"], "persistedOnly");
+        assert_eq!(threads[0]["isInProgress"], false);
         fs::remove_dir_all(root).unwrap();
     }
 

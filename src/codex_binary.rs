@@ -2,6 +2,8 @@ use semver::Version;
 use serde_json::{json, Value};
 use std::fmt;
 use std::io;
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -90,6 +92,47 @@ pub fn inspect() -> Result<CliInspection, CommandError> {
     inspect_command(COMMAND)
 }
 
+#[cfg(unix)]
+pub fn managed_install_ready(codex_home: &Path, required: &Version) -> bool {
+    let Some(path_command) = resolve_from_path(COMMAND) else {
+        return false;
+    };
+    managed_install_ready_for_command(codex_home, required, &path_command)
+}
+
+#[cfg(unix)]
+fn managed_install_ready_for_command(
+    codex_home: &Path,
+    required: &Version,
+    path_command: &Path,
+) -> bool {
+    let managed = codex_home
+        .join("packages")
+        .join("standalone")
+        .join("current")
+        .join("codex");
+    let Ok(managed_canonical) = managed.canonicalize() else {
+        return false;
+    };
+    let Ok(path_canonical) = path_command.canonicalize() else {
+        return false;
+    };
+    if managed_canonical != path_canonical {
+        return false;
+    }
+    inspect_command(managed.to_string_lossy().as_ref())
+        .is_ok_and(|inspection| inspection.satisfies(required))
+}
+
+#[cfg(unix)]
+fn resolve_from_path(command: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|directory| directory.join(command))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
 fn inspect_command(command: &str) -> Result<CliInspection, CommandError> {
     let version_output = command_output(command, &["--version"]).map_err(|error| CommandError {
         reason: format!("执行 codex --version 失败：{error}"),
@@ -113,11 +156,41 @@ fn inspect_command(command: &str) -> Result<CliInspection, CommandError> {
             #[cfg(unix)]
             {
                 match command_output(command, &["app-server", "proxy", "--help"]) {
-                    Ok(output) if output.status.success() => Ok(CliInspection {
-                        version,
-                        app_server_supported: true,
-                        error: None,
-                    }),
+                    Ok(output) if output.status.success() => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            match command_output(command, &["app-server", "daemon", "--help"]) {
+                                Ok(output) if output.status.success() => Ok(CliInspection {
+                                    version,
+                                    app_server_supported: true,
+                                    error: None,
+                                }),
+                                Ok(output) => Ok(CliInspection {
+                                    version,
+                                    app_server_supported: false,
+                                    error: Some(format!(
+                                        "codex app-server daemon --help 退出状态为 {}",
+                                        output.status
+                                    )),
+                                }),
+                                Err(error) => Ok(CliInspection {
+                                    version,
+                                    app_server_supported: false,
+                                    error: Some(format!(
+                                        "验证 codex app-server daemon 失败：{error}"
+                                    )),
+                                }),
+                            }
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            Ok(CliInspection {
+                                version,
+                                app_server_supported: true,
+                                error: None,
+                            })
+                        }
+                    }
                     Ok(output) => Ok(CliInspection {
                         version,
                         app_server_supported: false,
@@ -229,7 +302,7 @@ mod tests {
     fn inspects_the_same_command_for_version_and_app_server() {
         let command = command_script(
             "supported",
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 1.2.3'; exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"proxy\" ] && [ \"$3\" = \"--help\" ]; then exit 0; fi\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 1.2.3'; exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"proxy\" ] && [ \"$3\" = \"--help\" ]; then exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"daemon\" ] && [ \"$3\" = \"--help\" ]; then exit 0; fi\nexit 2\n",
         );
 
         let inspection = inspect_command(command.to_str().expect("utf8 path")).expect("inspect");
@@ -237,6 +310,49 @@ mod tests {
         assert_eq!(inspection.version.as_deref(), Some("codex-cli 1.2.3"));
         assert!(inspection.app_server_supported);
         fs::remove_dir_all(command.parent().expect("command parent")).expect("remove test root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_install_requires_the_path_command_to_resolve_to_current() {
+        let command = command_script(
+            "managed",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex-cli 1.2.3'; exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"--help\" ]; then exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"proxy\" ] && [ \"$3\" = \"--help\" ]; then exit 0; fi\nif [ \"$1\" = \"app-server\" ] && [ \"$2\" = \"daemon\" ] && [ \"$3\" = \"--help\" ]; then exit 0; fi\nexit 2\n",
+        );
+        let root = command.parent().expect("command parent");
+        let codex_home = root.join("home");
+        let release = codex_home
+            .join("packages")
+            .join("standalone")
+            .join("releases")
+            .join("1.2.3-test");
+        fs::create_dir_all(&release).expect("create release");
+        fs::copy(&command, release.join("codex")).expect("copy managed command");
+        std::os::unix::fs::symlink(
+            &release,
+            codex_home
+                .join("packages")
+                .join("standalone")
+                .join("current"),
+        )
+        .expect("link current");
+
+        assert!(managed_install_ready_for_command(
+            &codex_home,
+            &Version::new(1, 2, 0),
+            &release.join("codex")
+        ));
+        assert!(!managed_install_ready_for_command(
+            &codex_home,
+            &Version::new(1, 2, 4),
+            &release.join("codex")
+        ));
+        assert!(!managed_install_ready_for_command(
+            &codex_home,
+            &Version::new(1, 2, 0),
+            &command
+        ));
+        fs::remove_dir_all(root).expect("remove test root");
     }
 
     #[test]

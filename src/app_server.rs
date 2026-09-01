@@ -7,15 +7,17 @@ use event_store::EventStore;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 #[cfg(unix)]
-use std::fs::{self, File, OpenOptions};
+use std::fs;
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -93,11 +95,11 @@ impl RpcTransportKind {
 const CONTROL_DIR_NAME: &str = "app-server-control";
 #[cfg(unix)]
 const CONTROL_SOCKET_NAME: &str = "app-server-control.sock";
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 const SHARED_START_LOCK_NAME: &str = "baijimu-connector-start.lock";
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 const SHARED_LOG_NAME: &str = "baijimu-connector-app-server.log";
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 const SHARED_START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(unix)]
 const PROXY_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -422,10 +424,26 @@ impl CodexClient {
         inspection: codex_binary::CliInspection,
     ) -> Result<Arc<ProcessSession>, HttpError> {
         let active_home = self.active_codex_home();
-        if let Ok(session) = self.connect_shared_proxy(&active_home, &inspection) {
-            return Ok(session);
+        #[cfg(target_os = "macos")]
+        {
+            start_managed_daemon(&active_home, &inspection)?;
+            self.connect_shared_proxy(&active_home, &inspection)
         }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Ok(session) = self.connect_shared_proxy(&active_home, &inspection) {
+                return Ok(session);
+            }
+            self.start_legacy_shared_process(&active_home, &inspection)
+        }
+    }
 
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn start_legacy_shared_process(
+        &self,
+        active_home: &std::path::Path,
+        inspection: &codex_binary::CliInspection,
+    ) -> Result<Arc<ProcessSession>, HttpError> {
         let control_dir = active_home.join(CONTROL_DIR_NAME);
         fs::create_dir_all(&control_dir).map_err(|error| {
             HttpError::coded(
@@ -456,7 +474,7 @@ impl CodexClient {
             HttpError::internal(format!("设置共享 app-server 启动锁权限失败：{error}"))
         })?;
 
-        if let Ok(session) = self.connect_shared_proxy(&active_home, &inspection) {
+        if let Ok(session) = self.connect_shared_proxy(active_home, inspection) {
             return Ok(session);
         }
 
@@ -479,7 +497,7 @@ impl CodexClient {
         child_process::isolate_from_connector_environment(&mut command);
         command
             .args(["app-server", "--listen", "unix://"])
-            .env("CODEX_HOME", &active_home)
+            .env("CODEX_HOME", active_home)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone().map_err(|error| {
                 HttpError::internal(format!("复制共享 app-server 日志句柄失败：{error}"))
@@ -505,16 +523,14 @@ impl CodexClient {
         let backend_pid = backend.id();
         wait_for_control_socket(&mut backend, &socket_path, &log_path)?;
         drop(backend);
-
-        self.connect_shared_proxy(&active_home, &inspection)
-            .map_err(|error| {
-                HttpError::coded(
-                    500,
-                    format!("共享 Codex app-server 已启动，但 proxy 连接失败：{}", error.message),
-                    "CODEX_SHARED_PROXY_CONNECT_FAILED",
-                    json!({"backendPid": backend_pid, "socketPath": socket_path, "logPath": log_path}),
-                )
-            })
+        self.connect_shared_proxy(active_home, inspection).map_err(|error| {
+            HttpError::coded(
+                500,
+                format!("共享 Codex app-server 已启动，但 proxy 连接失败：{}", error.message),
+                "CODEX_SHARED_PROXY_CONNECT_FAILED",
+                json!({"backendPid": backend_pid, "socketPath": socket_path, "logPath": log_path}),
+            )
+        })
     }
 
     #[cfg(unix)]
@@ -632,6 +648,19 @@ impl CodexClient {
         }
     }
 
+    pub(crate) fn shutdown_for_upgrade(&self) -> Result<(), HttpError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| HttpError::internal("Codex app-server 生命周期锁异常"))?;
+        self.shutdown_locked();
+        #[cfg(target_os = "macos")]
+        if self.options.extra_args.is_empty() {
+            stop_shared_backend_for_upgrade(&self.active_codex_home())?;
+        }
+        Ok(())
+    }
+
     fn shutdown_locked(&self) {
         let session = self
             .runtime
@@ -652,8 +681,23 @@ impl CodexClient {
     ) -> Result<bool, HttpError> {
         match codex_binary::inspect() {
             Ok(inspection) => {
-                let supported =
-                    !self.options.extra_args.is_empty() || inspection.satisfies(required_version);
+                let supported = if !self.options.extra_args.is_empty() {
+                    true
+                } else if !inspection.satisfies(required_version) {
+                    false
+                } else {
+                    #[cfg(target_os = "macos")]
+                    {
+                        codex_binary::managed_install_ready(
+                            &self.active_codex_home(),
+                            required_version,
+                        )
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        true
+                    }
+                };
                 let mut runtime = self
                     .runtime
                     .lock()
@@ -970,7 +1014,230 @@ fn refresh_codex_command_status(runtime: &mut ClientRuntime) {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+fn run_daemon_command(codex_home: &std::path::Path, action: &str) -> Result<Value, HttpError> {
+    let mut command = Command::new(codex_binary::COMMAND);
+    child_process::isolate_from_connector_environment(&mut command);
+    let output = command
+        .args(["app-server", "daemon", action])
+        .env("CODEX_HOME", codex_home)
+        .output()
+        .map_err(|error| {
+            HttpError::coded(
+                500,
+                format!("执行 Codex app-server daemon {action} 失败：{error}"),
+                "CODEX_DAEMON_COMMAND_FAILED",
+                json!({"action": action, "codexHome": codex_home, "error": error.to_string()}),
+            )
+        })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return Err(HttpError::coded(
+            500,
+            format!(
+                "Codex app-server daemon {action} 失败：{}",
+                if stderr.is_empty() { &stdout } else { &stderr }
+            ),
+            "CODEX_DAEMON_COMMAND_FAILED",
+            json!({
+                "action": action,
+                "codexHome": codex_home,
+                "status": output.status.to_string(),
+                "stdout": stdout,
+                "stderr": stderr,
+            }),
+        ));
+    }
+    serde_json::from_str(&stdout).map_err(|error| {
+        HttpError::coded(
+            500,
+            format!("Codex app-server daemon {action} 返回了无效 JSON：{error}"),
+            "CODEX_DAEMON_RESPONSE_INVALID",
+            json!({"action": action, "codexHome": codex_home, "stdout": stdout}),
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn start_managed_daemon(
+    codex_home: &std::path::Path,
+    inspection: &codex_binary::CliInspection,
+) -> Result<(), HttpError> {
+    let expected = inspection
+        .semantic_version()
+        .map(|value| value.to_string())
+        .ok_or_else(|| HttpError::internal("Codex CLI 版本无法用于校验 app-server 守护进程"))?;
+    let initial_start = run_daemon_command(codex_home, "start");
+    let initial_version = initial_start
+        .as_ref()
+        .ok()
+        .and_then(|_| run_daemon_command(codex_home, "version").ok());
+    let version = if initial_version
+        .as_ref()
+        .is_some_and(|value| daemon_version_matches(value, &expected))
+    {
+        initial_version.expect("checked as present")
+    } else {
+        stop_shared_backend_for_upgrade(codex_home)?;
+        run_daemon_command(codex_home, "start")?;
+        run_daemon_command(codex_home, "version")?
+    };
+    if !daemon_version_matches(&version, &expected) {
+        return Err(HttpError::coded(
+            503,
+            "Codex CLI 已更新，但共享 app-server 尚未切换到同一版本",
+            "CODEX_DAEMON_VERSION_MISMATCH",
+            json!({"expectedVersion": expected, "daemon": version}),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn daemon_version_matches(version: &Value, expected: &str) -> bool {
+    let cli_version = version.get("cliVersion").and_then(Value::as_str);
+    let app_server_version = version.get("appServerVersion").and_then(Value::as_str);
+    let managed_path = version.get("managedCodexPath").and_then(Value::as_str);
+    let running = version.get("status").and_then(Value::as_str) == Some("running");
+    running
+        && managed_path.is_some()
+        && cli_version == Some(expected)
+        && app_server_version == Some(expected)
+}
+
+#[cfg(target_os = "macos")]
+fn stop_shared_backend_for_upgrade(codex_home: &std::path::Path) -> Result<(), HttpError> {
+    let socket_path = codex_home.join(CONTROL_DIR_NAME).join(CONTROL_SOCKET_NAME);
+    if run_daemon_command(codex_home, "stop").is_ok() {
+        wait_for_socket_shutdown(&socket_path)?;
+        return Ok(());
+    }
+    let stream = match UnixStream::connect(&socket_path) {
+        Ok(stream) => stream,
+        Err(_) => {
+            remove_stale_control_socket(&socket_path)?;
+            return Ok(());
+        }
+    };
+    let pid = unix_peer_pid(&stream).map_err(|error| {
+        HttpError::coded(
+            500,
+            format!("无法确认遗留 Codex app-server 的 socket 对端：{error}"),
+            "CODEX_LEGACY_DAEMON_IDENTITY_FAILED",
+            json!({"socketPath": socket_path, "error": error.to_string()}),
+        )
+    })?;
+    validate_legacy_backend_process(pid)?;
+    terminate_verified_process(pid)?;
+    wait_for_socket_shutdown(&socket_path)
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_socket_shutdown(socket_path: &std::path::Path) -> Result<(), HttpError> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if UnixStream::connect(socket_path).is_err() {
+            return remove_stale_control_socket(socket_path);
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(HttpError::coded(
+        500,
+        "Codex app-server 在升级前未按时停止",
+        "CODEX_DAEMON_STOP_TIMEOUT",
+        json!({"socketPath": socket_path}),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn unix_peer_pid(stream: &UnixStream) -> std::io::Result<u32> {
+    const SOL_LOCAL: libc::c_int = 0;
+    const LOCAL_PEERPID: libc::c_int = 0x002;
+    let mut pid: libc::pid_t = 0;
+    let mut length = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    let status = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            SOL_LOCAL,
+            LOCAL_PEERPID,
+            (&mut pid as *mut libc::pid_t).cast(),
+            &mut length,
+        )
+    };
+    if status == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    u32::try_from(pid).map_err(|_| std::io::Error::other("socket 对端 PID 无效"))
+}
+
+#[cfg(target_os = "macos")]
+fn validate_legacy_backend_process(pid: u32) -> Result<(), HttpError> {
+    let output = Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "uid=", "-o", "command="])
+        .output()
+        .map_err(|error| HttpError::internal(format!("检查遗留 app-server 进程失败：{error}")))?;
+    let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let expected_uid = unsafe { libc::geteuid() };
+    if !output.status.success() || !legacy_backend_identity_matches(&line, expected_uid) {
+        return Err(HttpError::coded(
+            500,
+            "control socket 对端不是当前用户的 Codex app-server，拒绝终止",
+            "CODEX_LEGACY_DAEMON_IDENTITY_FAILED",
+            json!({"pid": pid, "expectedUid": expected_uid, "command": line}),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn legacy_backend_identity_matches(line: &str, expected_uid: u32) -> bool {
+    let mut fields = line.split_whitespace();
+    let uid = fields.next().and_then(|value| value.parse::<u32>().ok());
+    let command = fields.collect::<Vec<_>>();
+    let executable_is_codex = command
+        .first()
+        .and_then(|value| std::path::Path::new(value).file_name())
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == "codex" || value.starts_with("codex-"));
+    let is_app_server = command.iter().any(|value| *value == "app-server");
+    let listens_on_control_socket = command
+        .windows(2)
+        .any(|pair| pair == ["--listen", "unix://"]);
+    uid == Some(expected_uid) && executable_is_codex && is_app_server && listens_on_control_socket
+}
+
+#[cfg(target_os = "macos")]
+fn terminate_verified_process(pid: u32) -> Result<(), HttpError> {
+    let pid = i32::try_from(pid).map_err(|_| HttpError::internal("遗留 app-server PID 无效"))?;
+    if unsafe { libc::kill(pid, libc::SIGTERM) } == -1 {
+        return Err(HttpError::internal(format!(
+            "停止遗留 app-server 失败：{}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if unsafe { libc::kill(pid, 0) } == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    if unsafe { libc::kill(pid, libc::SIGKILL) } == -1 {
+        if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        return Err(HttpError::internal(format!(
+            "强制停止遗留 app-server 失败：{}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 fn lock_exclusive(file: &File) -> std::io::Result<()> {
     let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
     if result == 0 {
@@ -1014,7 +1281,7 @@ fn remove_stale_control_socket(socket_path: &std::path::Path) -> Result<(), Http
     })
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn wait_for_control_socket(
     backend: &mut Child,
     socket_path: &std::path::Path,
@@ -1058,7 +1325,7 @@ fn wait_for_control_socket(
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn read_log_tail(path: &std::path::Path) -> String {
     const LIMIT: usize = 8 * 1024;
     fs::read(path)
@@ -1067,4 +1334,53 @@ fn read_log_tail(path: &std::path::Path) -> String {
             String::from_utf8_lossy(&bytes[start..]).to_string()
         })
         .unwrap_or_default()
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::{daemon_version_matches, legacy_backend_identity_matches};
+    use serde_json::json;
+
+    #[test]
+    fn managed_daemon_requires_cli_and_app_server_to_match() {
+        let matching = json!({
+            "status": "running",
+            "managedCodexPath": "/tmp/current/codex",
+            "cliVersion": "0.152.0",
+            "appServerVersion": "0.152.0",
+        });
+        assert!(daemon_version_matches(&matching, "0.152.0"));
+
+        let stale = json!({
+            "status": "running",
+            "managedCodexPath": "/tmp/current/codex",
+            "cliVersion": "0.152.0",
+            "appServerVersion": "0.151.0",
+        });
+        assert!(!daemon_version_matches(&stale, "0.152.0"));
+    }
+
+    #[test]
+    fn legacy_backend_identity_requires_exact_user_command_and_control_listener() {
+        assert!(legacy_backend_identity_matches(
+            "501 /Users/c/.local/bin/codex app-server --listen unix://",
+            501,
+        ));
+        assert!(legacy_backend_identity_matches(
+            "501 codex app-server --listen unix://",
+            501,
+        ));
+        assert!(!legacy_backend_identity_matches(
+            "502 codex app-server --listen unix://",
+            501,
+        ));
+        assert!(!legacy_backend_identity_matches(
+            "501 codex app-server --listen stdio://",
+            501,
+        ));
+        assert!(!legacy_backend_identity_matches(
+            "501 unrelated app-server --listen unix://",
+            501,
+        ));
+    }
 }

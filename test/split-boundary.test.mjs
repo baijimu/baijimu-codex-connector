@@ -9,10 +9,11 @@ const read = (path) => readFile(join(root, path), "utf8");
 
 test("Connector manifest exposes only CLI and remote app-server responsibilities", async () => {
   const manifest = JSON.parse(await read("connector.json"));
+  const packageManifest = JSON.parse(await read("package.json"));
   assert.equal(manifest.schemaVersion, "3.0.0");
   assert.equal(manifest.appId, "codex-connector");
   assert.equal(manifest.name, "Codex 远程连接器");
-  assert.equal(manifest.version, "2.1.0");
+  assert.equal(manifest.version, packageManifest.version);
   assert.equal(manifest.source.repo, "baijimu/baijimu-codex-connector");
   assert.equal(manifest.source.revision, `v${manifest.version}`);
   assert.equal(manifest.runtime.healthCheck.url, "http://127.0.0.1:18111/healthz");
@@ -39,7 +40,10 @@ test("Connector uses trusted platform authorization with one system Codex home",
   assert.match(appServer, /system_codex_home\(\)/);
   assert.match(appServer, /app-server-control\.sock/);
   assert.match(appServer, /\["app-server", "proxy"\]/);
+  assert.match(appServer, /\["app-server", "daemon", action\]/);
+  assert.match(appServer, /CODEX_DAEMON_VERSION_MISMATCH/);
   assert.match(appServer, /\["app-server", "--listen", "unix:\/\/"\]/);
+  assert.match(appServer, /not\(target_os = "macos"\)/);
   assert.doesNotMatch(appServer, /default-profile/);
   assert.doesNotMatch(readme, /workspace-profiles/);
   assert.match(
@@ -47,7 +51,8 @@ test("Connector uses trusted platform authorization with one system Codex home",
     /codex-completion`（Codex 模型接口服务）继续独立/,
   );
   assert.match(readme, /Bridge Agent 0\.6\.0 及以上/);
-  assert.match(readme, /只关闭自己的 proxy，不停止共享 app-server/);
+  assert.match(readme, /正常停止或重连只关闭自己的 proxy，不停止共享 app-server/);
+  assert.match(readme, /原子切换 `current`/);
   assert.match(readme, /独立 `stdio:\/\/` app-server/);
 });
 

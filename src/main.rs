@@ -505,7 +505,7 @@ fn handle_management(
                 .runtime_operation
                 .write()
                 .map_err(|_| HttpError::internal("Codex 运行时状态锁异常"))?;
-            state.client.shutdown();
+            state.client.shutdown_for_upgrade()?;
             let requirement = state.setup.cli_requirement();
             let codex_cli = state.client.usable_cli_for_setup(requirement.target())?;
             let verify_app_server_capability = state.client.options.extra_args.is_empty();
@@ -591,7 +591,7 @@ fn ensure_cli_available(
                 }),
             ));
         }
-        state.client.shutdown();
+        state.client.shutdown_for_upgrade()?;
         state
             .setup
             .start(
@@ -653,7 +653,7 @@ fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {
             setup_status,
         )),
         SetupReadinessDecision::Start(workspace_id) => {
-            client.shutdown();
+            client.shutdown_for_upgrade()?;
             let setup_status = state
                 .setup
                 .start(
