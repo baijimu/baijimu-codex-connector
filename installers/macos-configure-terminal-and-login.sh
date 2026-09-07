@@ -54,9 +54,11 @@ install_app() {
 install_cli() {
   local archive="$1"
   local expected_sha256="$2"
-  local work_dir bin codex_version machine target codex_home package_root releases_dir
+  local work_dir bin codex_version machine target install_layout package_manifest package_target
+  local package_variant package_entrypoint package_resources_dir package_path_dir
+  local codex_home package_root releases_dir
   local release_dir release_temp current_link install_target install_temp lock_dir lock_attempt
-  local shell_name profile line
+  local code_mode_host_target code_mode_host_temp shell_name profile line
   verify_sha256 "$archive" "$expected_sha256"
 
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-cli.XXXXXX")"
@@ -69,13 +71,50 @@ install_cli() {
   }
   trap cleanup_cli EXIT
   tar -xzf "$archive" -C "$work_dir"
-  bin="$(find "$work_dir" -maxdepth 4 -type f \( -name codex -o -name 'codex-*' \) ! -name '*.tar.gz' -perm -111 2>/dev/null | head -n 1)"
-  if [ -z "${bin:-}" ]; then
-    bin="$(find "$work_dir" -maxdepth 4 -type f \( -name codex -o -name 'codex-*' \) ! -name '*.tar.gz' 2>/dev/null | head -n 1)"
-  fi
-  if [ -z "${bin:-}" ]; then
-    echo "解压 Codex CLI 安装包后未找到可执行文件" >&2
-    return 1
+  machine="$(uname -m)"
+  case "$machine" in
+    arm64) target="aarch64-apple-darwin" ;;
+    x86_64) target="x86_64-apple-darwin" ;;
+    *)
+      echo "不支持的 macOS 处理器架构：$machine" >&2
+      return 1
+      ;;
+  esac
+
+  package_manifest="$work_dir/codex-package.json"
+  if [ -f "$package_manifest" ]; then
+    install_layout="codex_package_v1"
+    package_variant="$(plutil -extract variant raw -o - "$package_manifest")"
+    package_target="$(plutil -extract target raw -o - "$package_manifest")"
+    package_entrypoint="$(plutil -extract entrypoint raw -o - "$package_manifest")"
+    package_resources_dir="$(plutil -extract resourcesDir raw -o - "$package_manifest")"
+    package_path_dir="$(plutil -extract pathDir raw -o - "$package_manifest")"
+    if [ "$package_variant" != "codex" ] || [ "$package_target" != "$target" ] ||
+      { [ "$package_entrypoint" != "bin/codex" ] && [ "$package_entrypoint" != 'bin\codex' ]; } ||
+      [ "$package_resources_dir" != "codex-resources" ] || [ "$package_path_dir" != "codex-path" ]; then
+      echo "官方 Codex 完整包元数据与当前平台不匹配" >&2
+      return 1
+    fi
+    for required_path in \
+      "$work_dir/bin/codex" \
+      "$work_dir/bin/codex-code-mode-host" \
+      "$work_dir/codex-path/rg"; do
+      if [ ! -f "$required_path" ]; then
+        echo "官方 Codex 完整包不完整，缺少：${required_path#"$work_dir/"}" >&2
+        return 1
+      fi
+    done
+    bin="$work_dir/bin/codex"
+  else
+    install_layout="legacy_single_binary_archive"
+    bin="$(find "$work_dir" -maxdepth 4 -type f -name codex -perm -111 2>/dev/null | head -n 1)"
+    if [ -z "${bin:-}" ]; then
+      bin="$(find "$work_dir" -maxdepth 4 -type f -name codex 2>/dev/null | head -n 1)"
+    fi
+    if [ -z "${bin:-}" ]; then
+      echo "解压 Codex CLI 安装包后未找到可执行文件" >&2
+      return 1
+    fi
   fi
 
   codex_version="$("$bin" --version | awk '{print $NF}')"
@@ -83,15 +122,6 @@ install_cli() {
     [0-9]*.[0-9]*.[0-9]*) ;;
     *)
       echo "Codex CLI 返回了无效版本：$codex_version" >&2
-      return 1
-      ;;
-  esac
-  machine="$(uname -m)"
-  case "$machine" in
-    arm64) target="aarch64-apple-darwin" ;;
-    x86_64) target="x86_64-apple-darwin" ;;
-    *)
-      echo "不支持的 macOS 处理器架构：$machine" >&2
       return 1
       ;;
   esac
@@ -118,14 +148,29 @@ install_cli() {
 
   rm -rf "$release_temp"
   mkdir -m 700 "$release_temp"
-  install -m 755 "$bin" "$release_temp/codex"
+  if [ "$install_layout" = "codex_package_v1" ]; then
+    ditto "$work_dir" "$release_temp"
+    chmod 755 \
+      "$release_temp/bin/codex" \
+      "$release_temp/bin/codex-code-mode-host" \
+      "$release_temp/codex-path/rg"
+    ln -s "bin/codex" "$release_temp/codex"
+  else
+    install -m 755 "$bin" "$release_temp/codex"
+  fi
   "$release_temp/codex" --version >/dev/null
   "$release_temp/codex" app-server --help >/dev/null
   "$release_temp/codex" app-server proxy --help >/dev/null
   "$release_temp/codex" app-server daemon --help >/dev/null
   if [ -e "$release_dir/codex" ]; then
     "$release_dir/codex" --version >/dev/null
-    rm -rf "$release_temp"
+    if [ "$install_layout" != "codex_package_v1" ] ||
+      { [ -x "$release_dir/bin/codex-code-mode-host" ] && [ -x "$release_dir/codex-path/rg" ]; }; then
+      rm -rf "$release_temp"
+    else
+      rm -rf "$release_dir"
+      mv "$release_temp" "$release_dir"
+    fi
   else
     mv "$release_temp" "$release_dir"
   fi
@@ -135,13 +180,28 @@ install_cli() {
   install_target="$HOME/.local/bin/codex"
   install_temp="$HOME/.local/bin/.codex.install.$$"
   rm -f "$install_temp"
-  ln -s "$current_link/codex" "$install_temp"
+  if [ "$install_layout" = "codex_package_v1" ]; then
+    ln -s "$current_link/bin/codex" "$install_temp"
+  else
+    ln -s "$current_link/codex" "$install_temp"
+  fi
   "$install_temp" --version >/dev/null
   "$install_temp" app-server --help >/dev/null
   "$install_temp" app-server proxy --help >/dev/null
   "$install_temp" app-server daemon --help >/dev/null
   mv -f "$install_temp" "$install_target"
   xattr -d com.apple.quarantine "$install_target" 2>/dev/null || true
+
+  code_mode_host_target="$HOME/.local/bin/codex-code-mode-host"
+  if [ "$install_layout" = "codex_package_v1" ]; then
+    code_mode_host_temp="$HOME/.local/bin/.codex-code-mode-host.install.$$"
+    rm -f "$code_mode_host_temp"
+    ln -s "$current_link/bin/codex-code-mode-host" "$code_mode_host_temp"
+    test -x "$code_mode_host_temp"
+    mv -f "$code_mode_host_temp" "$code_mode_host_target"
+  elif [ "$(readlink "$code_mode_host_target" 2>/dev/null || true)" = "$current_link/bin/codex-code-mode-host" ]; then
+    rm -f "$code_mode_host_target"
+  fi
 
   shell_name="${SHELL##*/}"
   case "$shell_name" in

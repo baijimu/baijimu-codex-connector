@@ -93,6 +93,10 @@ test("CLI installers publish the installed command directory into the user PATH"
   ]);
   assert.match(macosInstaller, /shell_name="\${SHELL##\*\/}"/);
   assert.match(macosInstaller, /zsh\) profile="\$HOME\/\.zprofile"/);
+  assert.match(macosInstaller, /codex-package\.json/);
+  assert.match(macosInstaller, /bin\/codex-code-mode-host/);
+  assert.match(macosInstaller, /codex-path\/rg/);
+  assert.match(macosInstaller, /\.local\/bin\/codex-code-mode-host/);
   assert.doesNotMatch(macosInstaller, /profile="\$HOME\/\.zshrc"/);
   assert.match(windowsInstaller, /SetEnvironmentVariable\(\s*"Path",[\s\S]+?"User"/);
 });
