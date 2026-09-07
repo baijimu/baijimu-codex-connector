@@ -8,7 +8,11 @@ trap cleanup EXIT
 
 package_root="$test_root/package"
 mkdir -p "$package_root/bin" "$package_root/codex-path" "$package_root/codex-resources"
-target="$(case "$(uname -m)" in arm64) echo aarch64-apple-darwin ;; x86_64) echo x86_64-apple-darwin ;; *) exit 2 ;; esac)"
+case "$(uname -m)" in
+  arm64) target="aarch64-apple-darwin" ;;
+  x86_64) target="x86_64-apple-darwin" ;;
+  *) exit 2 ;;
+esac
 cat > "$package_root/codex-package.json" <<EOF
 {"layoutVersion":1,"version":"9.8.7","target":"$target","variant":"codex","entrypoint":"bin/codex","resourcesDir":"codex-resources","pathDir":"codex-path"}
 EOF
