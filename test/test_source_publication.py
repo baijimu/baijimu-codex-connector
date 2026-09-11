@@ -37,6 +37,9 @@ class SourcePublicationTest(unittest.TestCase):
 
     def test_preserves_complete_connector_manifest_and_rejects_identity_drift(self):
         manifest = publisher.validate_release(self.version, self.connector, self.oss)
+        self.assertEqual(manifest, self.connector)
+        self.assertNotIn("applicationType", manifest)
+        self.assertNotIn("artifacts", manifest)
         for field in ("runtime", "methods", "events", "management", "source"):
             self.assertEqual(manifest[field], self.connector[field])
         wrong = copy.deepcopy(self.oss)
@@ -141,6 +144,12 @@ class SourcePublicationTest(unittest.TestCase):
             state = publisher.publish(FakeCli(), self.version, self.connector, self.oss, self.directory)
         self.assertEqual(state, "PENDING_REVIEW")
         self.assertEqual(sum(args[:2] == ("local-app", "submit") for args in calls), 1)
+
+    def test_rejects_obsolete_distribution_fields_inside_connector_manifest(self):
+        for field, value in [("applicationType", "connector"), ("artifacts", [])]:
+            invalid = {**self.connector, field: value}
+            with self.assertRaises(ValueError):
+                publisher.validate_release(self.version, invalid, self.oss)
 
     def test_duplicate_platform_targets_are_rejected(self):
         self.oss["artifacts"].append(dict(self.artifact))

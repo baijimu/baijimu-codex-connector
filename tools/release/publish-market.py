@@ -71,7 +71,11 @@ def validate_release(version, connector, oss):
         require(re.fullmatch(r"sha256:[0-9a-f]{64}", artifact["checksum"]), "Invalid artifact checksum")
         require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,190}", url.path.rsplit("/", 1)[-1]),
                 "Invalid artifact file name")
-    return {**connector, "applicationType": "connector", "artifacts": artifacts}
+    # Connector 3.0.0 rejects distribution fields inside its manifest. The
+    # source owner's VersionContent owns applicationType and artifact IDs.
+    require("applicationType" not in connector and "artifacts" not in connector,
+            "Distribution metadata must not be embedded in a connector manifest")
+    return dict(connector)
 
 
 def verify_frozen(frozen, source, manifest, originals):
