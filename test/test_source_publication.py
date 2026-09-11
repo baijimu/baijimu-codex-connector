@@ -57,6 +57,13 @@ class SourcePublicationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             publisher.verify_frozen(frozen, self.source, manifest, [(self.artifact, self.original)])
 
+    def test_market_queries_use_the_public_cli_name_value_contract(self):
+        cli = publisher.Cli("baijimu", 17)
+        with patch.object(cli, "call", return_value={}) as call:
+            cli.api("listings", after="cursor-id")
+        call.assert_called_once_with("api", "get", "/local-app-service/api/local-app-market/listings",
+                                     "--query", "workspaceId=17", "--query", "after=cursor-id")
+
     def test_only_exact_source_absence_is_creatable(self):
         cli = publisher.Cli("baijimu", 1)
         for stderr, missing in [

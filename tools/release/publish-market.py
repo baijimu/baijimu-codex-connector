@@ -46,8 +46,10 @@ class Cli:
         return envelope["data"]
 
     def api(self, path, **query):
-        return self.call("api", "get", "/local-app-service/api/local-app-market/" + path,
-                         "--query", json.dumps({"workspaceId": self.workspace, **query}))
+        args = ["api", "get", "/local-app-service/api/local-app-market/" + path]
+        for name, value in {"workspaceId": self.workspace, **query}.items():
+            args.extend(["--query", f"{name}={value}"])
+        return self.call(*args)
 
 
 def validate_release(version, connector, oss):
