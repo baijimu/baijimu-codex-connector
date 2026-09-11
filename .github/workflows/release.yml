@@ -30,9 +30,9 @@ permissions:
   contents: read
 
 env:
-  BAIJIMU_CLI_VERSION: "0.36.1"
-  BAIJIMU_CLI_LINUX_SHA256: "3a70832013057fa53cc2a7c26220f0f9efb1ad4d6d2b3b1792da9044769dc7d6"
-  BAIJIMU_CLI_LINUX_URL: "https://download.baijimu.com/managed-tool-artifacts/baijimu-cli/releases/v0.36.1/3a70832013057fa53cc2a7c26220f0f9efb1ad4d6d2b3b1792da9044769dc7d6/baijimu-cli-0.36.1-linux-x64.zip"
+  BAIJIMU_CLI_VERSION: "0.56.0"
+  BAIJIMU_CLI_LINUX_SHA256: "2634006f070cff94fbfc2cd0c6f807806fb1902bb0ad092a4e8ed3d342fbc94b"
+  BAIJIMU_CLI_LINUX_URL: "https://download.baijimu.com/managed-tool-artifacts/baijimu-cli/releases/v0.56.0/2634006f070cff94fbfc2cd0c6f807806fb1902bb0ad092a4e8ed3d342fbc94b/baijimu-cli-0.56.0-linux-x64.zip"
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
@@ -131,6 +131,7 @@ jobs:
           cargo fmt --check
           cargo test --locked
           npm test
+          python3 -m unittest discover -s test -p "test_*.py"
 
 
   build:
@@ -702,15 +703,7 @@ jobs:
               echo "market submission is pending independent review"
               ;;
             PUBLISHED)
-              for target in 'macos&arch=aarch64' 'windows&arch=x86_64' 'linux&arch=x86_64'; do
-                curl -fsS --retry 5 --retry-all-errors --retry-delay 3 \
-                  "https://api.baijimu.com/lowcode3/api/local-app-market/apps/codex-connector?platform=${target}&hostVersion=0.6.0&hostCapabilities=connector.setup.v1,connector.process.host-managed.v1,connector.managed-tool-dependencies.v1,connector.presentation.icon.v1" \
-                  | jq -e --arg version "$VERSION" '
-                    (.data // .).latestVersion.version == $version and
-                    (.data // .).latestVersion.compatibility.compatible == true and
-                    ((.data // .).latestVersion.source | startswith("https://download.baijimu.com/local-app-artifacts/codex-connector/releases/v" + $version + "/")) and
-                    all((.data // .).latestVersion.manifest.artifacts[]; .source | startswith("https://download.baijimu.com/local-app-artifacts/codex-connector/releases/v" + $version + "/"))'
-              done
+              echo "source receipt and current consumer market listing verified by publish-market.py"
               ;;
             *)
               echo "unexpected publication status: $PUBLICATION_STATUS" >&2
