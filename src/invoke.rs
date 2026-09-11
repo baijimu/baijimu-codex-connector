@@ -812,76 +812,6 @@ fn value_is_missing(value: &Value) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn merges_rollout_segments_by_stable_thread_id() {
-        let mut threads = Vec::new();
-        let mut indexes = HashMap::new();
-        merge_unique_threads(
-            &mut threads,
-            &mut indexes,
-            vec![
-                json!({
-                    "id": "thread-1",
-                    "title": "older rollout",
-                    "updatedAt": "2026-09-01T11:30:16Z",
-                    "rolloutPath": "/old.jsonl"
-                }),
-                json!({
-                    "id": "thread-1",
-                    "title": "new rollout",
-                    "updatedAt": "2026-09-01T19:57:48Z",
-                    "rolloutPath": "/new.jsonl"
-                }),
-                json!({"id": "thread-2", "updatedAt": "2026-09-01T18:00:00Z"}),
-            ],
-        );
-
-        assert_eq!(threads.len(), 2);
-        assert_eq!(threads[0]["title"], "new rollout");
-        assert_eq!(threads[0]["rolloutPath"], "/new.jsonl");
-    }
-
-    #[test]
-    fn prefers_live_projection_and_fills_missing_metadata() {
-        let merged = merge_thread_projections(
-            json!({
-                "id": "thread-1",
-                "title": "history",
-                "cwd": "/project",
-                "updatedAt": 20,
-                "status": {"type": "notLoaded"}
-            }),
-            json!({
-                "id": "thread-1",
-                "title": "live",
-                "cwd": null,
-                "updatedAt": 10,
-                "status": {"type": "active"}
-            }),
-        );
-
-        assert_eq!(merged["title"], "live");
-        assert_eq!(merged["cwd"], "/project");
-        assert_eq!(merged["status"]["type"], "active");
-    }
-
-    #[test]
-    fn keeps_records_without_a_stable_id() {
-        let mut threads = Vec::new();
-        let mut indexes = HashMap::new();
-        merge_unique_threads(
-            &mut threads,
-            &mut indexes,
-            vec![json!({"title": "one"}), json!({"title": "two"})],
-        );
-        assert_eq!(threads.len(), 2);
-    }
-}
-
 fn string_field(body: &Value, key: &str) -> Option<String> {
     body.get(key)
         .and_then(Value::as_str)
@@ -1054,4 +984,74 @@ fn normalize_project_path(value: &str) -> Option<String> {
             .join(expanded)
     };
     Some(absolute.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merges_rollout_segments_by_stable_thread_id() {
+        let mut threads = Vec::new();
+        let mut indexes = HashMap::new();
+        merge_unique_threads(
+            &mut threads,
+            &mut indexes,
+            vec![
+                json!({
+                    "id": "thread-1",
+                    "title": "older rollout",
+                    "updatedAt": "2026-09-01T11:30:16Z",
+                    "rolloutPath": "/old.jsonl"
+                }),
+                json!({
+                    "id": "thread-1",
+                    "title": "new rollout",
+                    "updatedAt": "2026-09-01T19:57:48Z",
+                    "rolloutPath": "/new.jsonl"
+                }),
+                json!({"id": "thread-2", "updatedAt": "2026-09-01T18:00:00Z"}),
+            ],
+        );
+
+        assert_eq!(threads.len(), 2);
+        assert_eq!(threads[0]["title"], "new rollout");
+        assert_eq!(threads[0]["rolloutPath"], "/new.jsonl");
+    }
+
+    #[test]
+    fn prefers_live_projection_and_fills_missing_metadata() {
+        let merged = merge_thread_projections(
+            json!({
+                "id": "thread-1",
+                "title": "history",
+                "cwd": "/project",
+                "updatedAt": 20,
+                "status": {"type": "notLoaded"}
+            }),
+            json!({
+                "id": "thread-1",
+                "title": "live",
+                "cwd": null,
+                "updatedAt": 10,
+                "status": {"type": "active"}
+            }),
+        );
+
+        assert_eq!(merged["title"], "live");
+        assert_eq!(merged["cwd"], "/project");
+        assert_eq!(merged["status"]["type"], "active");
+    }
+
+    #[test]
+    fn keeps_records_without_a_stable_id() {
+        let mut threads = Vec::new();
+        let mut indexes = HashMap::new();
+        merge_unique_threads(
+            &mut threads,
+            &mut indexes,
+            vec![json!({"title": "one"}), json!({"title": "two"})],
+        );
+        assert_eq!(threads.len(), 2);
+    }
 }

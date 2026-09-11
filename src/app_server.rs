@@ -145,14 +145,13 @@ impl CodexClient {
         codex_home: PathBuf,
         state_dir: PathBuf,
     ) -> Self {
-        let mut runtime = ClientRuntime {
+        let runtime = ClientRuntime {
             active_codex_home: codex_home,
             session: None,
             last_exit: None,
             codex_binary_error: None,
             codex_cli_inspection: None,
         };
-        refresh_codex_command_status(&mut runtime);
         Self {
             options,
             state_dir,
@@ -337,6 +336,20 @@ impl CodexClient {
                 message.clone(),
                 "CODEX_APP_SERVER_UNSUPPORTED",
                 json!({"command": codex_binary::COMMAND, "error": message}),
+            ));
+        }
+        let minimum = codex_binary::protocol_minimum();
+        if self.options.extra_args.is_empty() && !inspection.satisfies(&minimum) {
+            let data = json!({"minimumVersion": minimum.to_string(), "inspection": inspection.status_value()});
+            if let Ok(mut runtime) = self.runtime.lock() {
+                runtime.codex_cli_inspection = Some(inspection);
+                runtime.codex_binary_error = None;
+            }
+            return Err(HttpError::coded(
+                503,
+                format!("Codex CLI 不满足 app-server 协议要求（最低版本 {minimum}），请通过管理入口升级"),
+                "CODEX_CLI_VERSION_INCOMPATIBLE",
+                data,
             ));
         }
         #[cfg(unix)]
@@ -1001,19 +1014,6 @@ impl ProcessSession {
     }
 }
 
-fn refresh_codex_command_status(runtime: &mut ClientRuntime) {
-    match codex_binary::inspect() {
-        Ok(inspection) => {
-            runtime.codex_cli_inspection = Some(inspection);
-            runtime.codex_binary_error = None;
-        }
-        Err(error) => {
-            runtime.codex_cli_inspection = None;
-            runtime.codex_binary_error = Some(error);
-        }
-    }
-}
-
 #[cfg(target_os = "macos")]
 fn run_daemon_command(codex_home: &std::path::Path, action: &str) -> Result<Value, HttpError> {
     let mut command = Command::new(codex_binary::COMMAND);
@@ -1200,7 +1200,7 @@ fn legacy_backend_identity_matches(line: &str, expected_uid: u32) -> bool {
         .and_then(|value| std::path::Path::new(value).file_name())
         .and_then(|value| value.to_str())
         .is_some_and(|value| value == "codex" || value.starts_with("codex-"));
-    let is_app_server = command.iter().any(|value| *value == "app-server");
+    let is_app_server = command.contains(&"app-server");
     let listens_on_control_socket = command
         .windows(2)
         .any(|pair| pair == ["--listen", "unix://"]);

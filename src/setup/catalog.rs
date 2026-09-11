@@ -1,9 +1,11 @@
 use super::{atomic_write_private, connector_home, now_epoch_seconds, source};
+use crate::codex_binary::protocol_minimum;
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
 use std::fs;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -11,7 +13,6 @@ use std::time::{Duration, Instant};
 const MANIFEST_SCHEMA_VERSION: u32 = 4;
 const MANIFEST_KIND: &str = "baijimu.codex.customer-install-artifacts";
 const CACHE_SCHEMA_VERSION: u32 = 1;
-const PAGINATED_THREADS_MINIMUM_VERSION: &str = "0.149.0";
 const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const CATALOG_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
@@ -191,11 +192,6 @@ fn protocol_floor(warning: Option<String>) -> CliRequirement {
         source: "protocol_floor",
         warning,
     }
-}
-
-fn protocol_minimum() -> Version {
-    Version::parse(PAGINATED_THREADS_MINIMUM_VERSION)
-        .expect("paginated threads minimum version must be valid semver")
 }
 
 fn parse_release_tag(tag: &str) -> Result<Version> {

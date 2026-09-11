@@ -46,3 +46,9 @@ npm test
 ```
 
 本仓库是 `codex-connector` 客户端本地应用的唯一发布单元；源码主线为 `baijimu/baijimu-codex-connector/main`，标签、制品、签名和市场版本必须保持同一版本号。
+
+## 调用与安装
+
+连接器启动和 `/invoke/*` 业务调用不会自动安装或升级 Codex CLI，也不读取安装制品目录。已有的 app-server 会话直接复用；需要启动 app-server 时才检查宿主 `PATH` 中的 CLI 和协议能力，失败时返回对应原始错误。
+
+`status` 不启动 CLI，并返回最近观测的运行状态和 `setup` 安装记录；即使历史安装失败或正在安装，也可查询。安装、升级与重试由显式管理接口 `/management/v1/setup/ensure-ready` 和 `/management/v1/setup/retry` 发起，目标版本来自安装制品目录。目录最新版本不再充当每次业务调用的准入门槛。

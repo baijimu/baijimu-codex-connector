@@ -149,6 +149,14 @@ pub struct SetupManager {
 }
 
 impl SetupManager {
+    #[cfg(test)]
+    pub(crate) fn with_status(status: SetupStatus) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(status)),
+            catalog: catalog::CatalogResolver::default(),
+        }
+    }
+
     pub fn load() -> Self {
         let (status, should_persist) = match fs::read(status_path())
             .ok()

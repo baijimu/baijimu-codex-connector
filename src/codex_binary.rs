@@ -8,6 +8,12 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+// Minimum app-server protocol used by paginated thread operations. This is
+// independent of the current installation catalog's release target.
+pub(crate) fn protocol_minimum() -> semver::Version {
+    semver::Version::new(0, 149, 0)
+}
+
 pub const COMMAND: &str = "codex";
 
 #[derive(Clone, Debug, Default)]

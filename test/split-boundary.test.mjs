@@ -67,7 +67,7 @@ test("Connector setup executes CLI installation from its own artifact catalog", 
   assert.doesNotMatch(execute, /ensure_desktop_app/);
   assert.doesNotMatch(execute, /launch_desktop/);
   assert.match(catalog, /CATALOG_REFRESH_INTERVAL/);
-  assert.match(catalog, /PAGINATED_THREADS_MINIMUM_VERSION/);
+  assert.match(catalog, /codex_binary::protocol_minimum/);
   assert.match(catalog, /verified_cache/);
   assert.match(artifactSource, /codex-artifacts\/v4/);
 });
