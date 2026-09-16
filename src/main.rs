@@ -5,9 +5,11 @@ mod cli;
 mod codex_binary;
 mod events;
 mod invoke;
+mod invoke_dispatch;
 mod json_compat;
 mod process_runtime;
 mod project_checkout;
+mod project_preparation;
 mod setup;
 mod thread_state;
 #[cfg(unix)]
@@ -17,9 +19,10 @@ mod websocket_transport;
 use app_server::retryable_event_status;
 use app_server::CodexClient;
 use cli::run;
-use invoke::handle_invoke;
 #[cfg(test)]
 use invoke::{read_json_file, resolve_state_project_references};
+#[cfg(test)]
+use invoke_dispatch::invoke_with_state;
 use process_runtime::*;
 use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Map, Value};
@@ -392,12 +395,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
             if let Some(response) = startup_not_ready_response(&state.startup) {
                 return write_json(&mut stream, 503, &response);
             }
-            let body = if request.body.is_empty() {
-                json!({})
-            } else {
-                serde_json::from_slice(&request.body).map_err(|error| error.to_string())?
-            };
-            let Some(_workspace_id) = request.workspace_id else {
+            let Some(workspace_id) = request.workspace_id else {
                 return write_json(
                     &mut stream,
                     400,
@@ -410,7 +408,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) -> Result<(), 
                     }),
                 );
             };
-            match invoke_with_state(path, &body, state.as_ref()) {
+            match invoke_dispatch::invoke_http(path, &request.body, workspace_id, state.as_ref()) {
                 Ok(data) => (200, json!({"ok": true, "data": data})),
                 Err(error) => (
                     error.status,
@@ -528,24 +526,6 @@ fn setup_readiness_value(
         "setup": setup,
         "cliRequirement": cli_requirement,
     })
-}
-
-fn invoke_with_state(path: &str, body: &Value, state: &AppState) -> Result<Value, HttpError> {
-    // Diagnostics remain available even while explicit installation holds the
-    // runtime lock. They neither resolve the release catalog nor launch Codex.
-    if path == "/invoke/status" {
-        let mut status = state.client.status();
-        status["setup"] = serde_json::to_value(state.setup.state())
-            .map_err(|error| HttpError::internal(error.to_string()))?;
-        return Ok(status);
-    }
-    let _runtime_guard = state
-        .runtime_operation
-        .read()
-        .map_err(|_| HttpError::internal("Codex 运行时状态锁异常"))?;
-    // The client reuses its ready session and inspects CLI compatibility only
-    // when it actually needs to start an app-server. Installation is management-only.
-    handle_invoke(path, body, &state.client)
 }
 
 fn ensure_codex_ready(state: &AppState) -> Result<Value, HttpError> {

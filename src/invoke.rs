@@ -149,6 +149,11 @@ pub(crate) fn handle_invoke(
                     params[key] = value;
                 }
             }
+            let turn = params
+                .as_object_mut()
+                .and_then(|map| map.remove("turnId"))
+                .ok_or_else(|| HttpError::new(400, "turnId required"))?;
+            params["expectedTurnId"] = turn;
             params["input"] = normalize_input(input);
             Ok(json!({
                 "result": client.request("turn/steer", params, timeout_ms(body))?,
@@ -166,6 +171,16 @@ pub(crate) fn handle_invoke(
                 "result": client.request("turn/interrupt", params, timeout_ms(body))?,
                 "recentEvents": client.recent_events(&json!({"limit": 50})),
             }))
+        }
+        "/invoke/respondToRequest" => {
+            let reply = serde_json::from_value(body.clone())
+                .map_err(|_| HttpError::new(400, "invalid server request response"))?;
+            Ok(json!({"result":client.respond_to_server_request(reply)?}))
+        }
+        "/invoke/pendingRequests" => {
+            let thread = string_field(body, "threadId")
+                .ok_or_else(|| HttpError::new(400, "threadId required"))?;
+            Ok(json!({"result":client.pending_server_requests(&thread)?}))
         }
         "/invoke/recentEvents" => Ok(client.recent_events(body)),
         "/invoke/request" => {

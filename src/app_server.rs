@@ -1,4 +1,5 @@
 mod event_store;
+mod server_requests;
 
 use crate::{child_process, codex_binary, timestamp, HttpError, ServerOptions, VERSION};
 #[cfg(test)]
@@ -47,6 +48,7 @@ struct ProcessSession {
     stdin: Mutex<Option<ChildStdin>>,
     transport: RpcTransportKind,
     pending: Mutex<HashMap<u64, SyncSender<Result<Value, RpcFailure>>>>,
+    server_requests: Mutex<HashMap<String, server_requests::ServerRequest>>,
     next_id: AtomicU64,
     initialized: AtomicBool,
     alive: AtomicBool,
@@ -412,6 +414,7 @@ impl CodexClient {
             stdin: Mutex::new(Some(stdin)),
             transport: RpcTransportKind::JsonLines,
             pending: Mutex::new(HashMap::new()),
+            server_requests: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             initialized: AtomicBool::new(false),
             alive: AtomicBool::new(true),
@@ -624,6 +627,7 @@ impl CodexClient {
             stdin: Mutex::new(Some(stdin)),
             transport: RpcTransportKind::WebSocketProxy,
             pending: Mutex::new(HashMap::new()),
+            server_requests: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             initialized: AtomicBool::new(false),
             alive: AtomicBool::new(true),
@@ -887,6 +891,10 @@ impl ProcessSession {
     }
 
     fn dispatch_value(&self, value: Value, events: &EventStore) {
+        if value.get("method").is_some() && value.get("id").is_some() {
+            self.receive_server_request(value, events);
+            return;
+        }
         if let Some(id) = value.get("id").and_then(Value::as_u64) {
             let sender = self
                 .pending
@@ -918,6 +926,33 @@ impl ProcessSession {
                 .unwrap_or("codex/notification")
                 .to_string();
             let params = value.get("params").cloned().unwrap_or(value);
+            if method == "serverRequest/resolved" {
+                if let (Some(id), Some(thread)) = (
+                    params.get("requestId"),
+                    params.get("threadId").and_then(Value::as_str),
+                ) {
+                    if let Ok(mut pending) = self.server_requests.lock() {
+                        if pending
+                            .get(&id.to_string())
+                            .is_some_and(|request| request.thread_id == thread)
+                        {
+                            pending.remove(&id.to_string());
+                        }
+                    }
+                }
+            }
+            if method == "turn/completed" {
+                if let (Some(thread), Some(turn)) = (
+                    params.get("threadId").and_then(Value::as_str),
+                    params.pointer("/turn/id").and_then(Value::as_str),
+                ) {
+                    if let Ok(mut pending) = self.server_requests.lock() {
+                        pending.retain(|_, request| {
+                            request.thread_id != thread || request.turn_id != turn
+                        });
+                    }
+                }
+            }
             events.push(&method, params);
         }
     }

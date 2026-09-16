@@ -134,6 +134,11 @@
       "name": "codex.turn.interrupt",
       "risk": "medium",
       "description": "中断正在执行的 Codex 轮次。"
+    },
+    {
+      "name": "codex.project.write",
+      "risk": "high",
+      "description": "在指定设备目录新建本地项目，或通过平台 CLI 检出当前授权工作区项目。"
     }
   ],
   "transport": {
@@ -790,6 +795,167 @@
         },
         "additionalProperties": false
       }
+    },
+    {
+      "name": "prepareProject",
+      "description": "验证已有本地目录、新建本地项目目录，或检出当前授权工作区项目；返回设备上的实际目录。",
+      "path": "/invoke/prepareProject",
+      "httpMethod": "POST",
+      "timeoutSecs": 120,
+      "input_schema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "LOCAL_DIRECTORY"
+              },
+              "directory": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "directory"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "NEW_LOCAL_DIRECTORY"
+              },
+              "parent": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "parent",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "WORKSPACE_PROJECT"
+              },
+              "projectId": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "type",
+              "projectId"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "pendingRequests",
+      "description": "读取指定 Codex 线程当前等待用户处理的请求。",
+      "path": "/invoke/pendingRequests",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "respondToRequest",
+      "description": "响应指定线程和轮次的待处理请求；审批只作用于本次操作。",
+      "path": "/invoke/respondToRequest",
+      "httpMethod": "POST",
+      "timeoutSecs": 30,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "result": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "enum": [
+                      "accept",
+                      "decline",
+                      "cancel"
+                    ]
+                  }
+                },
+                "required": [
+                  "decision"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "answers": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "answers": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "answers"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "answers"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "threadId",
+          "turnId",
+          "requestId",
+          "result"
+        ],
+        "additionalProperties": false
+      }
     }
   ],
   "events": [
@@ -824,7 +990,9 @@
         "properties": {
           "schemaVersion": {
             "type": "integer",
-            "enum": [1]
+            "enum": [
+              1
+            ]
           },
           "threadId": {
             "type": "string",
@@ -836,17 +1004,30 @@
           },
           "status": {
             "type": "string",
-            "enum": ["completed", "interrupted", "failed"]
+            "enum": [
+              "completed",
+              "interrupted",
+              "failed"
+            ]
           },
           "completedAt": {
-            "type": ["integer", "null"]
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "durationMs": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "minimum": 0
           },
           "error": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "additionalProperties": true
           },
           "occurredAt": {
@@ -855,11 +1036,15 @@
           },
           "source": {
             "type": "string",
-            "enum": ["codex-app-server"]
+            "enum": [
+              "codex-app-server"
+            ]
           },
           "sourceMethod": {
             "type": "string",
-            "enum": ["turn/completed"]
+            "enum": [
+              "turn/completed"
+            ]
           },
           "connectorVersion": {
             "type": "string",
@@ -875,14 +1060,45 @@
       "enabled": true,
       "payload_schema": {
         "type": "object",
-        "required": ["schemaVersion", "threadId", "occurredAt", "source", "sourceMethod", "connectorVersion"],
+        "required": [
+          "schemaVersion",
+          "threadId",
+          "occurredAt",
+          "source",
+          "sourceMethod",
+          "connectorVersion"
+        ],
         "properties": {
-          "schemaVersion": {"type": "integer", "enum": [1]},
-          "threadId": {"type": "string", "minLength": 1},
-          "occurredAt": {"type": "string", "minLength": 1},
-          "source": {"type": "string", "enum": ["codex-app-server"]},
-          "sourceMethod": {"type": "string", "enum": ["thread/closed"]},
-          "connectorVersion": {"type": "string", "minLength": 1}
+          "schemaVersion": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "threadId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "occurredAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "codex-app-server"
+            ]
+          },
+          "sourceMethod": {
+            "type": "string",
+            "enum": [
+              "thread/closed"
+            ]
+          },
+          "connectorVersion": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "additionalProperties": false
       }
@@ -893,14 +1109,45 @@
       "enabled": true,
       "payload_schema": {
         "type": "object",
-        "required": ["schemaVersion", "threadId", "occurredAt", "source", "sourceMethod", "connectorVersion"],
+        "required": [
+          "schemaVersion",
+          "threadId",
+          "occurredAt",
+          "source",
+          "sourceMethod",
+          "connectorVersion"
+        ],
         "properties": {
-          "schemaVersion": {"type": "integer", "enum": [1]},
-          "threadId": {"type": "string", "minLength": 1},
-          "occurredAt": {"type": "string", "minLength": 1},
-          "source": {"type": "string", "enum": ["codex-app-server"]},
-          "sourceMethod": {"type": "string", "enum": ["thread/archived"]},
-          "connectorVersion": {"type": "string", "minLength": 1}
+          "schemaVersion": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "threadId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "occurredAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "codex-app-server"
+            ]
+          },
+          "sourceMethod": {
+            "type": "string",
+            "enum": [
+              "thread/archived"
+            ]
+          },
+          "connectorVersion": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "additionalProperties": false
       }
@@ -911,14 +1158,45 @@
       "enabled": true,
       "payload_schema": {
         "type": "object",
-        "required": ["schemaVersion", "threadId", "occurredAt", "source", "sourceMethod", "connectorVersion"],
+        "required": [
+          "schemaVersion",
+          "threadId",
+          "occurredAt",
+          "source",
+          "sourceMethod",
+          "connectorVersion"
+        ],
         "properties": {
-          "schemaVersion": {"type": "integer", "enum": [1]},
-          "threadId": {"type": "string", "minLength": 1},
-          "occurredAt": {"type": "string", "minLength": 1},
-          "source": {"type": "string", "enum": ["codex-app-server"]},
-          "sourceMethod": {"type": "string", "enum": ["thread/deleted"]},
-          "connectorVersion": {"type": "string", "minLength": 1}
+          "schemaVersion": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "threadId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "occurredAt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "codex-app-server"
+            ]
+          },
+          "sourceMethod": {
+            "type": "string",
+            "enum": [
+              "thread/deleted"
+            ]
+          },
+          "connectorVersion": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "additionalProperties": false
       }

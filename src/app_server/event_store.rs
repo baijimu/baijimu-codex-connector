@@ -250,6 +250,15 @@ pub(crate) fn retryable_event_status(status: u16) -> bool {
 }
 
 impl EventStore {
+    #[cfg(test)]
+    pub(super) fn in_memory() -> Self {
+        Self {
+            state: Mutex::new(EventState::default()),
+            publisher: None,
+            stream_id: "test-stream".into(),
+        }
+    }
+
     pub(super) fn new() -> Self {
         Self {
             state: Mutex::new(EventState::default()),
