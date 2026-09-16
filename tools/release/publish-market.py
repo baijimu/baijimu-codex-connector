@@ -31,16 +31,21 @@ class Cli:
     def call(self, *args, missing=False):
         result = subprocess.run([self.executable, *args, "--workspace-id", str(self.workspace), "--json"],
                                 capture_output=True, text=True)
+        operation = " ".join(args[:3])
+        try:
+            envelope = json.loads(result.stdout)
+        except ValueError as error:
+            raise RuntimeError(f"Baijimu CLI {operation} returned invalid JSON (exit {result.returncode})") from error
+        require(isinstance(envelope, dict), "Invalid CLI response envelope")
         if result.returncode:
-            # Only the exact source-owner absence response permits creation.
-            if missing and re.fullmatch(
-                r"Error: downstream returned HTTP 200 OK with error code LOCAL_APP_SERVICE_NOT_FOUND\s*",
-                result.stderr,
-            ):
+            # --json writes the Owner's CModel to stdout, including failures.
+            code = envelope.get("errorCode")
+            if (missing and envelope.get("contractVersion") == "1.0.0"
+                    and code == "LOCAL_APP_SERVICE_NOT_FOUND" and "data" in envelope):
                 return None
-            sys.stderr.write(result.stderr)
-            raise RuntimeError("Baijimu CLI operation failed")
-        envelope = json.loads(result.stdout)
+            if not isinstance(code, str):
+                code = "CLIENT_ERROR"
+            raise RuntimeError(f"Baijimu CLI {operation} failed (exit {result.returncode}, errorCode={code})")
         require(envelope.get("errorCode") == "0" and envelope.get("contractVersion") == "1.0.0",
                 "Invalid source response envelope")
         return envelope["data"]

@@ -64,6 +64,8 @@ npm test
 
 发布流程使用固定版本 `baijimu` CLI，将签名制品上传至来源应用，冻结完整版本，再提交中心独立审核。来源身份由服务返回，所属工作区由发布配置提供；重跑会核对冻结清单、平台制品和回下载校验和，拒绝覆盖不同内容。`PENDING_REVIEW` 仅表示已提交审核，不表示市场已发布。
 
+制品已公开但来源登记或提交中断时，在 `main` 上运行同一工作流，选择原始 `release_ref=v<version>` 和 `publish=true`。恢复阶段使用该次工作流的准确主线提交作为发布器，从原始标签读取应用清单，并回下载、校验已有 GitHub/OSS 制品；不重新构建或覆盖制品。CLI 的 `--json` 成功与失败都读取 stdout 的结构化合同，仅来源 Owner 明确返回 `LOCAL_APP_SERVICE_NOT_FOUND` 时允许创建缺失记录。恢复成功可以处于待审状态，公开可安装状态仍须独立审核后验证。
+
 ### 平台会话审批
 
 `pendingRequests` 按 threadId 读取本连接尚未处理的命令/文件审批和用户问题；`respondToRequest` 精确匹配 threadId、turnId 与 JSON-RPC requestId。命令/文件仅接受 accept、decline、cancel；不授予 session 级审批豁免。用户回答必须匹配原问题 ID。收到服务请求时先按 method+id 区分双向 JSON-RPC，再处理客户端响应，避免编号相同吞掉审批。

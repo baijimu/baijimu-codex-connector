@@ -1,6 +1,7 @@
 import copy
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -69,18 +70,37 @@ class SourcePublicationTest(unittest.TestCase):
 
     def test_only_exact_source_absence_is_creatable(self):
         cli = publisher.Cli("baijimu", 1)
-        for stderr, missing in [
-            ("Error: downstream returned HTTP 200 OK with error code LOCAL_APP_SERVICE_NOT_FOUND\n", True),
-            ("Error: downstream returned HTTP 200 OK with error code LOCAL_APP_SERVICE_FORBIDDEN\n", False),
-            ("Error: HTTP 404 Not Found\n", False),
+        for envelope, absent in [
+            ({"contractVersion": "1.0.0", "errorCode": "LOCAL_APP_SERVICE_NOT_FOUND", "data": None}, True),
+            ({"contractVersion": "1.0.0", "errorCode": "LOCAL_APP_SERVICE_FORBIDDEN", "data": None}, False),
+            ({"contractVersion": "2.0.0", "errorCode": "LOCAL_APP_SERVICE_NOT_FOUND", "data": None}, False),
+            ({"contractVersion": "1.0.0", "errorCode": "LOCAL_APP_SERVICE_NOT_FOUND"}, False),
+            ({"contractVersion": "1.0.0", "errorCode": "0", "data": {}}, False),
+            ({"error": {"kind": "CLIENT_ERROR", "message": "HTTP 404 Not Found"}}, False),
         ]:
-            result = type("Result", (), {"returncode": 1, "stderr": stderr})()
+            result = subprocess.CompletedProcess([], 1, stdout=json.dumps(envelope), stderr="")
             with patch.object(publisher.subprocess, "run", return_value=result):
-                if missing:
+                if absent:
                     self.assertIsNone(cli.call("local-app", "get", "fixture", missing=True))
                 else:
                     with self.assertRaises(RuntimeError):
                         cli.call("local-app", "get", "fixture", missing=True)
+
+    def test_absence_is_not_ignored_for_required_reads(self):
+        result = subprocess.CompletedProcess([], 1, stdout=json.dumps({
+            "contractVersion": "1.0.0", "errorCode": "LOCAL_APP_SERVICE_NOT_FOUND", "data": None,
+        }), stderr="")
+        with patch.object(publisher.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "local-app version get.*LOCAL_APP_SERVICE_NOT_FOUND"):
+                publisher.Cli("baijimu", 1).call("local-app", "version", "get", "fixture", "1.0.0")
+
+    def test_legacy_stderr_and_invalid_output_do_not_allow_creation(self):
+        for stdout in ("", "not JSON", "null", "[]"):
+            result = subprocess.CompletedProcess([], 1, stdout=stdout,
+                stderr="Error: downstream returned HTTP 200 OK with error code LOCAL_APP_SERVICE_NOT_FOUND\n")
+            with patch.object(publisher.subprocess, "run", return_value=result):
+                with self.assertRaises((RuntimeError, ValueError)):
+                    publisher.Cli("baijimu", 1).call("local-app", "get", "fixture", missing=True)
 
     def test_pending_review_is_not_approved_or_recreated_on_rerun(self):
         parent, calls = self, []

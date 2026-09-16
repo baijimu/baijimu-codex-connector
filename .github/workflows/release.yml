@@ -93,6 +93,7 @@ jobs:
             if [ "$GITHUB_EVENT_NAME" = "push" ]; then
               test "$(git rev-parse origin/main)" = "$sha"
             else
+              test "$GITHUB_REF" = refs/heads/main
               git merge-base --is-ancestor "$sha" origin/main
               release_json=""
               release_error="$RUNNER_TEMP/release-view-error"
@@ -721,6 +722,22 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.sha }}
 
+      - name: Check out the exact default-branch publisher revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-publisher
+          persist-credentials: false
+
+      - name: Verify the recovery publisher
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git -C .release-publisher rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m unittest discover -s .release-publisher/test -p 'test_*.py'
+          bash -n .release-publisher/tools/release/publish-market.sh
+
       - name: Download and verify published release and OSS artifacts
         shell: bash
         env:
@@ -784,7 +801,7 @@ jobs:
           unzip -q "$archive" -d "$RUNNER_TEMP/baijimu-cli"
           test "$("$RUNNER_TEMP/baijimu-cli/bin/baijimu" --version)" = "$BAIJIMU_CLI_VERSION"
 
-      - name: Verify immutable market version
+      - name: Reconcile immutable source version and publication
         shell: bash
         env:
           BAIJIMU_CLI: ${{ runner.temp }}/baijimu-cli/bin/baijimu
@@ -794,5 +811,9 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          tools/release/publish-market.sh "$VERSION" connector.json "$RUNNER_TEMP/published-release/baijimu-codex-connector-${VERSION}-oss-manifest.json"
-          test "$(cat "$MARKET_PUBLICATION_STATUS_FILE")" = "PUBLISHED"
+          .release-publisher/tools/release/publish-market.sh "$VERSION" connector.json "$RUNNER_TEMP/published-release/baijimu-codex-connector-${VERSION}-oss-manifest.json"
+          case "$(cat "$MARKET_PUBLICATION_STATUS_FILE")" in
+            PENDING_REVIEW) echo "source version verified; market submission is pending independent review" ;;
+            PUBLISHED) echo "source version and published market content verified" ;;
+            *) echo "unexpected publication status" >&2; exit 1 ;;
+          esac
