@@ -26,6 +26,7 @@ pub(crate) fn invoke_http(
     } else {
         serde_json::from_slice(bytes).map_err(|e| HttpError::new(400, e.to_string()))?
     };
+    validate_request(path, &body)?;
     let c = &state.client;
     let value = match path {
         "/invoke/status" => return Ok(c.status()),
@@ -35,7 +36,7 @@ pub(crate) fn invoke_http(
         }
         "/invoke/listProjects" => {
             c.ensure_connected()?;
-            desktop_catalog::projects()?
+            desktop_catalog::projects(&body)?
         }
         "/invoke/readThread" | "/invoke/resumeThread" => {
             let mut read = c.read(required(&body, "threadId")?)?;
@@ -63,7 +64,7 @@ pub(crate) fn invoke_http(
         "/invoke/startTurn" => {
             let id = required(&body, "threadId")?;
             let mut request = json!({"threadId":id,"input":input(&body)?});
-            for k in ["model", "effort", "serviceTier", "summary"] {
+            for k in ["model", "cwd"] {
                 if let Some(v) = body.get(k) {
                     request[k] = v.clone();
                 }
@@ -122,6 +123,7 @@ pub(crate) fn invoke_http(
                 .iter()
                 .find(|r| &r["id"] == request_id)
                 .ok_or_else(|| HttpError::new(409, "request no longer pending"))?;
+            require_request_turn(request, required(&body, "turnId")?)?;
             let result = body
                 .get("result")
                 .ok_or_else(|| HttpError::new(400, "result required"))?;
@@ -157,7 +159,7 @@ pub(crate) fn invoke_http(
             } else {
                 result.clone()
             };
-            c.follower(id, method, 1, params)?
+            c.follower_for_owner(id, method, 1, params, required(&read, "ownerClientId")?)?
         }
         "/invoke/recentEvents" => return Ok(c.recent_events(&body)),
         "/invoke/prepareProject" => {
@@ -181,6 +183,82 @@ pub(crate) fn invoke_http(
         }
     };
     Ok(json!({"result":value}))
+}
+fn validate_request(path: &str, body: &Value) -> Result<(), HttpError> {
+    let manifest: Value =
+        serde_json::from_str(include_str!("../connector.json")).expect("valid manifest");
+    let Some(method) = manifest["methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["path"] == path)
+    else {
+        return Ok(());
+    };
+    let obj = body
+        .as_object()
+        .ok_or_else(|| HttpError::new(400, "request must be an object"))?;
+    let schema = &method["input_schema"];
+    // prepareProject owns its tagged-union validation in its typed deserializer.
+    if schema.get("oneOf").is_some() {
+        return Ok(());
+    }
+    if let Some(required) = schema["required"].as_array() {
+        for key in required {
+            let key = key.as_str().unwrap();
+            if !obj.contains_key(key) {
+                return Err(HttpError::new(400, format!("{key} is required")));
+            }
+        }
+    }
+    for (key, value) in obj {
+        if schema["properties"].get(key).is_none() {
+            return Err(HttpError::coded(
+                400,
+                format!("桌面 IPC 不支持参数 {key}"),
+                "UNSUPPORTED_PARAMETER",
+                json!({"parameter":key}),
+            ));
+        }
+        let field = &schema["properties"][key];
+        let matches_type = |kind: &str| match kind {
+            "string" => value.is_string(),
+            "boolean" => value.is_boolean(),
+            "integer" => value.is_i64() || value.is_u64(),
+            "null" => value.is_null(),
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            _ => false,
+        };
+        let valid_type = match &field["type"] {
+            Value::String(kind) => matches_type(kind),
+            Value::Array(kinds) => kinds.iter().filter_map(Value::as_str).any(matches_type),
+            Value::Null => true,
+            _ => false,
+        };
+        let valid_enum = field["enum"]
+            .as_array()
+            .is_none_or(|items| items.contains(value));
+        let in_range = value.as_f64().is_none_or(|n| {
+            field["minimum"].as_f64().is_none_or(|min| n >= min)
+                && field["maximum"].as_f64().is_none_or(|max| n <= max)
+        });
+        if !valid_type || !valid_enum || !in_range {
+            return Err(HttpError::new(400, format!("invalid {key}")));
+        }
+    }
+    Ok(())
+}
+fn require_request_turn(request: &Value, turn: &str) -> Result<(), HttpError> {
+    if request.pointer("/params/turnId").and_then(Value::as_str) != Some(turn) {
+        return Err(HttpError::coded(
+            409,
+            "待处理请求不属于指定轮次",
+            "PENDING_REQUEST_TURN_MISMATCH",
+            json!({}),
+        ));
+    }
+    Ok(())
 }
 fn turns(state: &Value) -> Result<Vec<Value>, HttpError> {
     if state.pointer("/turnHistory/kind") == Some(&json!("canonical")) {
@@ -215,6 +293,53 @@ fn turns(state: &Value) -> Result<Vec<Value>, HttpError> {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn approval_requires_matching_request_turn() {
+        let r = serde_json::json!({"params":{"turnId":"turn-a"}});
+        assert!(super::require_request_turn(&r, "turn-a").is_ok());
+        assert_eq!(
+            super::require_request_turn(&r, "turn-b").unwrap_err().code,
+            Some(serde_json::json!("PENDING_REQUEST_TURN_MISMATCH"))
+        );
+        assert!(super::require_request_turn(&serde_json::json!({}), "turn-a").is_err());
+    }
+    #[test]
+    fn unsupported_legacy_options_are_rejected() {
+        for (path, body) in [
+            (
+                "/invoke/listProjects",
+                serde_json::json!({"includeSaved":true}),
+            ),
+            (
+                "/invoke/listThreadTurns",
+                serde_json::json!({"threadId":"a","itemsView":"summary"}),
+            ),
+            (
+                "/invoke/startTurn",
+                serde_json::json!({"threadId":"a","input":"test","effort":"high"}),
+            ),
+        ] {
+            assert_eq!(
+                super::validate_request(path, &body).unwrap_err().code,
+                Some(serde_json::json!("UNSUPPORTED_PARAMETER"))
+            );
+        }
+        assert!(super::validate_request(
+            "/invoke/listProjects",
+            &serde_json::json!({"archived":"false"})
+        )
+        .is_err());
+        assert!(
+            super::validate_request("/invoke/listProjects", &serde_json::json!({"limit":0}))
+                .is_err()
+        );
+        assert!(super::validate_request(
+            "/invoke/interruptTurn",
+            &serde_json::json!({"threadId":"a"})
+        )
+        .is_err());
+    }
+
     use super::*;
     #[test]
     fn canonical_history_is_not_mistaken_for_empty_legacy_turns() {

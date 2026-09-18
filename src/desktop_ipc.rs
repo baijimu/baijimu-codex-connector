@@ -222,10 +222,36 @@ impl DesktopClient {
         thread: &str,
         method: &str,
         version: u64,
+        params: Value,
+    ) -> Result<Value, HttpError> {
+        self.follower_checked(thread, method, version, params, None)
+    }
+    pub(crate) fn follower_for_owner(
+        &self,
+        thread: &str,
+        method: &str,
+        version: u64,
+        params: Value,
+        owner: &str,
+    ) -> Result<Value, HttpError> {
+        self.follower_checked(thread, method, version, params, Some(owner))
+    }
+    fn follower_checked(
+        &self,
+        thread: &str,
+        method: &str,
+        version: u64,
         mut params: Value,
+        expected_owner: Option<&str>,
     ) -> Result<Value, HttpError> {
         let s = self.connect()?;
         let owner = s.owner(thread, self.options.request_timeout_ms)?;
+        if expected_owner.is_some_and(|expected| expected != owner) {
+            return Err(failure(
+                "IPC_OWNER_CHANGED",
+                "桌面任务所有者已变化，请重新读取待处理请求",
+            ));
+        }
         params["conversationId"] = json!(thread);
         s.rpc(
             method,
@@ -531,6 +557,7 @@ mod protocol_tests {
                         if drop_mutation {
                             break;
                         }
+                        assert_eq!(v["params"]["turnStart"]["request"]["cwd"], "/project-a");
                         result = json!({"result":{"turn":{"id":"new-turn"}}});
                     }
                     _ => {}
@@ -552,6 +579,35 @@ mod protocol_tests {
         });
         client.endpoint = path;
         (client, handle, dir)
+    }
+    #[test]
+    fn start_turn_preserves_cwd_and_approval_cannot_change_owner() {
+        let (c, h, dir) = fixture(false);
+        let state = crate::AppState {
+            client: c,
+            management_operation: std::sync::Mutex::new(()),
+            management_token: String::new(),
+        };
+        let body =
+            serde_json::to_vec(&json!({"threadId":"task-a","input":"hello","cwd":"/project-a"}))
+                .unwrap();
+        let value =
+            crate::desktop_invoke::invoke_http("/invoke/startTurn", &body, 1, &state).unwrap();
+        assert_eq!(value["result"]["turn"]["id"], "new-turn");
+        let error = state
+            .client
+            .follower_for_owner(
+                "task-a",
+                "thread-follower-command-approval-decision",
+                1,
+                json!({"requestId":1,"decision":"accept"}),
+                "different-owner",
+            )
+            .unwrap_err();
+        assert_eq!(error.code, Some(json!("IPC_OWNER_CHANGED")));
+        drop(state);
+        assert_eq!(h.join().unwrap(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn reads_owner_snapshot_through_fragmented_ipc() {

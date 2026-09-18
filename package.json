@@ -1,6 +1,6 @@
 {
   "name": "@baijimu/connector-codex",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "桌面 IPC Connector",
   "type": "module",
   "bin": {

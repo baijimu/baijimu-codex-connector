@@ -2,7 +2,7 @@
   "schemaVersion": "3.0.0",
   "appId": "codex-connector",
   "name": "Codex 桌面连接器",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "通过桌面 IPC 控制用户已有任务；桌面进程退出时明确不可用。",
   "icon": {
     "mediaType": "image/png",
@@ -15,7 +15,7 @@
   "source": {
     "type": "github",
     "repo": "baijimu/baijimu-codex-connector",
-    "revision": "v4.0.0"
+    "revision": "v4.0.1"
   },
   "runtime": {
     "type": "process",
@@ -179,7 +179,7 @@
     },
     {
       "name": "listProjects",
-      "description": "根据设备系统默认 Codex 状态、项目配置和任务元数据列出项目。",
+      "description": "分页读取桌面只读索引中的项目目录，支持路径筛选和归档状态筛选。",
       "path": "/invoke/listProjects",
       "httpMethod": "POST",
       "timeoutSecs": 30,
@@ -200,32 +200,7 @@
           "existsOnly": {
             "type": "boolean"
           },
-          "includeSaved": {
-            "type": "boolean"
-          },
-          "includeTrusted": {
-            "type": "boolean"
-          },
-          "includeThreadStats": {
-            "type": "boolean"
-          },
-          "threadCursor": {
-            "type": "string"
-          },
-          "threadPageLimit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 100
-          },
-          "maxThreadPages": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 500
-          },
           "archived": {
-            "type": "boolean"
-          },
-          "useStateDbOnly": {
             "type": "boolean"
           }
         },
@@ -367,14 +342,6 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 100
-          },
-          "itemsView": {
-            "type": "string",
-            "enum": [
-              "notLoaded",
-              "summary",
-              "full"
-            ]
           }
         },
         "additionalProperties": false
@@ -466,12 +433,16 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "threadId",
+          "turnId"
+        ]
       }
     },
     {
       "name": "recentEvents",
-      "description": "读取连接器缓存的近期 Codex app-server 通知。",
+      "description": "读取桌面 IPC 原始修订事件；缺口或断线后重新读取任务。",
       "path": "/invoke/recentEvents",
       "httpMethod": "POST",
       "timeoutSecs": 5,
@@ -577,7 +548,7 @@
     },
     {
       "name": "respondToRequest",
-      "description": "响应指定线程和轮次的待处理请求；审批只作用于本次操作。",
+      "description": "按线程、轮次和请求 ID 核对当前待处理请求，再向同一桌面所有者提交单次响应。",
       "path": "/invoke/respondToRequest",
       "httpMethod": "POST",
       "timeoutSecs": 30,

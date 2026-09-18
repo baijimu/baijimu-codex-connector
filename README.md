@@ -1,4 +1,4 @@
-# Codex 桌面连接器 4.0.0
+# Codex 桌面连接器 4.0.1
 
 连接用户正在运行的 Codex 桌面进程，通过桌面 IPC 发现任务所有者、读取完整任务历史、发送和引导轮次、中断以及响应待处理请求。关闭窗口不一定退出桌面进程；真正退出后，Connector 报告 `DESKTOP_IPC_UNAVAILABLE`，不会启动第二个 app-server。
 
@@ -26,3 +26,7 @@ macOS/Linux 默认连接用户 `.codex/ipc/ipc.sock`；Windows 使用 `\\.\pipe\
 `cargo fmt --check`、`cargo test --locked`、`npm test`、`python3 -m unittest discover -s test -p 'test_*.py'`。协议测试覆盖分片帧、所有者路由、快照、断线后写入结果未知和不自动重发。本机只读实测覆盖已有桌面任务和完整历史读取。
 
 唯一发布入口为本仓库 `.github/workflows/release.yml`，从主线精确提交生成三平台签名制品、公开 OSS 内容寻址归档和来源环境冻结版本。中心提交后的 `PENDING_REVIEW` 仍需独立审核。
+
+## 4.0.1 契约修正
+
+`startTurn.cwd` 会传递给桌面所有者。审批同时核对待处理请求的轮次与所有者；不匹配时拒绝发送。项目列表仅提供只读索引的分页、路径搜索、目录存在性和归档筛选；旧 app-server 的项目扫描选项与 `listThreadTurns.itemsView` 不属于桌面 IPC 契约，显式传入会返回 `UNSUPPORTED_PARAMETER`，不再静默忽略。任务轮次保留桌面的完整 canonical 数据。

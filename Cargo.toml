@@ -1,6 +1,6 @@
 [package]
 name = "baijimu-connector-codex"
-version = "4.0.0"
+version = "4.0.1"
 edition = "2021"
 license = "MIT"
 description = "通过桌面 IPC 管理用户任务的百积木连接器。"
