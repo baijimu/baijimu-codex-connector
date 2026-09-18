@@ -196,11 +196,25 @@ impl DesktopClient {
                     let fields = value.as_object().ok_or_else(|| {
                         failure("IPC_PROTOCOL_MISMATCH", "invalid desktop snapshot")
                     })?;
-                    let metadata: serde_json::Map<String, Value> = fields
+                    let mut metadata: serde_json::Map<String, Value> = fields
                         .iter()
                         .filter(|(k, _)| !matches!(k.as_str(), "turns" | "turnHistory"))
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
+                    if let Some(turn) = fields
+                        .get("turns")
+                        .and_then(Value::as_array)
+                        .and_then(|turns| turns.last())
+                    {
+                        let latest: serde_json::Map<String, Value> =
+                            ["turnId", "id", "status", "startedAt", "completedAt"]
+                                .into_iter()
+                                .filter_map(|key| {
+                                    turn.get(key).map(|value| (key.to_string(), value.clone()))
+                                })
+                                .collect();
+                        metadata.insert("latestTurn".into(), Value::Object(latest));
+                    }
                     return Ok(
                         json!({"thread":metadata,"revision":revision,"ownerClientId":owner,"transport":"desktop-ipc"}),
                     );
@@ -682,6 +696,7 @@ mod protocol_tests {
             assert!(value["thread"].get("turns").is_none());
             assert!(value["thread"].get("turnHistory").is_none());
             assert_eq!(value["thread"]["requests"], json!([]));
+            assert_eq!(value["thread"]["latestTurn"]["turnId"], "current");
         }
         drop(c);
         assert_eq!(h.join().unwrap(), 0);
