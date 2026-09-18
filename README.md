@@ -1,4 +1,4 @@
-# Codex 桌面连接器 3.0.0
+# Codex 桌面连接器 4.0.0
 
 连接用户正在运行的 Codex 桌面进程，通过桌面 IPC 发现任务所有者、读取完整任务历史、发送和引导轮次、中断以及响应待处理请求。关闭窗口不一定退出桌面进程；真正退出后，Connector 报告 `DESKTOP_IPC_UNAVAILABLE`，不会启动第二个 app-server。
 
