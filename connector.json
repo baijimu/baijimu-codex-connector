@@ -2,7 +2,7 @@
   "schemaVersion": "3.0.0",
   "appId": "codex-connector",
   "name": "Codex 桌面连接器",
-  "version": "4.0.1",
+  "version": "5.0.0",
   "description": "通过桌面 IPC 控制用户已有任务；桌面进程退出时明确不可用。",
   "icon": {
     "mediaType": "image/png",
@@ -15,7 +15,7 @@
   "source": {
     "type": "github",
     "repo": "baijimu/baijimu-codex-connector",
-    "revision": "v4.0.1"
+    "revision": "v5.0.0"
   },
   "runtime": {
     "type": "process",
