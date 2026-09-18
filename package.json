@@ -1,13 +1,13 @@
 {
   "name": "@baijimu/connector-codex",
-  "version": "2.2.0",
-  "description": "通过平台授权访问设备系统默认 Codex 的百积木远程连接器。",
+  "version": "3.0.0",
+  "description": "桌面 IPC Connector",
   "type": "module",
   "bin": {
     "baijimu-connector-codex": "./bin/baijimu-connector-codex.js"
   },
   "scripts": {
-    "test": "node --test test/split-boundary.test.mjs test/platform-cli-boundary.test.mjs",
+    "test": "node --test test/connector-contract.test.mjs test/platform-cli-boundary.test.mjs",
     "test:rust": "cargo test",
     "start": "cargo run -- start"
   },

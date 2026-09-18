@@ -151,19 +151,28 @@ fn server_options(parsed: &ParsedArgs) -> Result<ServerOptions, String> {
     } else {
         Vec::new()
     };
+    if value("listen").is_some_and(|v| v != DEFAULT_LISTEN)
+        || env::var("CODEX_CONNECTOR_LISTEN").is_ok_and(|v| v != DEFAULT_LISTEN)
+        || !extra_args.is_empty()
+    {
+        return Err("不支持切换 transport 或自定义 Codex 启动参数".into());
+    }
     Ok(ServerOptions {
         host: value("host")
             .map(str::to_string)
             .or_else(|| env::var("CODEX_CONNECTOR_HOST").ok())
             .unwrap_or_else(|| DEFAULT_HOST.to_string()),
         port: value("port")
-            .and_then(|value| value.parse().ok())
-            .or_else(|| {
-                env::var("CODEX_CONNECTOR_PORT")
+            .map(str::to_string)
+            .or_else(|| env::var("CODEX_CONNECTOR_PORT").ok())
+            .map(|v| {
+                v.parse::<u16>()
                     .ok()
-                    .and_then(|value| value.parse().ok())
+                    .filter(|p| *p > 0)
+                    .ok_or_else(|| "port must be an integer in 1..65535".to_string())
             })
-            .unwrap_or(DEFAULT_PORT),
+            .transpose()?
+            .unwrap_or_else(configured_port),
         listen: value("listen")
             .map(str::to_string)
             .or_else(|| env::var("CODEX_CONNECTOR_LISTEN").ok())

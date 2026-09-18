@@ -174,8 +174,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash .github/scripts/test-macos-installer-package-layout.sh \
-            installers/macos-configure-terminal-and-login.sh
           cargo test --locked
           cargo build --locked --release --target aarch64-apple-darwin
           cargo build --locked --release --target x86_64-apple-darwin
@@ -220,17 +218,6 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $PSNativeCommandUseErrorActionPreference = $true
-          $tokens = $null
-          $parseErrors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path "installers\windows-configure-terminal-and-login.ps1").Path,
-            [ref]$tokens,
-            [ref]$parseErrors
-          )
-          if ($parseErrors.Count -ne 0) {
-            $parseErrors | ForEach-Object { Write-Error $_.Message }
-            throw "Windows installer PowerShell syntax validation failed"
-          }
           cargo test --locked
           cargo build --locked --release
           $binDir = Join-Path $env:RUNNER_TEMP "codex-local-app\bin\${{ matrix.platform_dir }}"
@@ -328,7 +315,7 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync(path.join(packageDir, "connector.json"), "utf8"));
           if (manifest.version !== expectedVersion) throw new Error("connector package version mismatch");
           if (manifest.source?.type !== "github" || manifest.source?.repo !== "baijimu/baijimu-codex-connector" || manifest.source?.revision !== `v${expectedVersion}`) throw new Error("connector source identity mismatch");
-          if (manifest.appId !== "codex-connector" || manifest.name !== "Codex 远程连接器") throw new Error("connector identity mismatch");
+          if (manifest.appId !== "codex-connector" || manifest.name !== "Codex 桌面连接器") throw new Error("connector identity mismatch");
           if (manifest.schemaVersion !== "3.0.0" || manifest.runtime?.type !== "process" || manifest.runtime?.processOwnership !== "host" || typeof manifest.transport !== "object" || !Array.isArray(manifest.methods) || !Array.isArray(manifest.events) || manifest.ui !== undefined) throw new Error("connector package contract is invalid");
           NODE
           binary_name=baijimu-connector-codex
@@ -497,8 +484,8 @@ jobs:
             test "$(printf '%s' "$release_json" | jq -r .tagName)" = "$RELEASE_TAG"
           else
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" \
-              --draft --title "Codex 远程连接器 $VERSION" \
-              --notes "Codex 远程连接器 $VERSION 三平台签名发布。"
+              --draft --title "Codex 桌面连接器 $VERSION" \
+              --notes "Codex 桌面连接器 $VERSION 三平台签名发布。"
             release_is_draft=true
           fi
           existing="$RUNNER_TEMP/existing-release-assets"

@@ -1,73 +1,28 @@
-# 百积木 Codex 远程连接器
+# Codex 桌面连接器 3.0.0
 
-存量市场 appId `codex-connector` 对应面向百积木 Relay 的独立 Codex CLI 远程连接器。它只负责：
+连接用户正在运行的 Codex 桌面进程，通过桌面 IPC 发现任务所有者、读取完整任务历史、发送和引导轮次、中断以及响应待处理请求。关闭窗口不一定退出桌面进程；真正退出后，Connector 报告 `DESKTOP_IPC_UNAVAILABLE`，不会启动第二个 app-server。
 
-- 按百积木权威制品目录安装和定期同步官方 Codex CLI，并通过宿主注入的当前用户 `PATH` 验证版本、`codex` 与 `app-server` 能力；
-- 接收 Relay 鉴权后传入的可信 `workspaceId`；
-- 在 Unix 设备上通过 Codex 官方 daemon 生命周期管理系统默认 `~/.codex` 的唯一共享 app-server；
-- 提供 `session/thread/turn/event` 和原始 app-server 请求接口；
-- 将平台工作区身份仅作为调用授权上下文，不参与 Codex 状态或进程隔离。
+## 运行与边界
 
-它不安装或启动 ChatGPT/Codex 桌面应用，不创建 Codex 工作区档案，也不签发、切换或覆盖 `~/.codex/auth.json`。桌面安装和系统默认 Codex 认证由 appId `codex`（Codex 桌面管理器）负责；appId `codex-completion`（Codex 模型接口服务）继续独立提供 OpenAI 兼容模型接口，不并入本应用。
+使用独立签名原生包，由 Bridge Agent 托管进程。管理接口和业务接口需要宿主注入的 Connector token；业务调用还需要可信工作区 Header。HTTP 仅绑定 loopback。端口默认值来自 `connector.json`，可通过 `--port` 或 `CODEX_CONNECTOR_PORT` 配置。
 
-## 调用上下文
+macOS/Linux 默认连接用户 `.codex/ipc/ipc.sock`；Windows 使用 `\\.\pipe\codex-ipc`。部署方可以通过 `CODEX_DESKTOP_IPC_PATH` 指定实际桌面 IPC 端点。Unix 端点必须是当前用户拥有的 socket。此协议是桌面内部协议，目前实现 initialize v0、owner discovery v1、stream v11 及清单中列出的 follower 请求；不承诺任意桌面版本均兼容。
 
-Relay 从客户端令牌取得平台工作区，发送 `LocalAppInvokeRequest.workspace_id`；Bridge Agent 0.6.0 及以上把该值写入本机 HTTP 请求头 `x-baijimu-workspace-id`。Connector 不接受调用参数中的工作区覆盖。该字段只证明本次调用已经过平台授权，不选择 `CODEX_HOME`、账号、任务空间或 app-server。
+任务列表和项目目录从桌面 `state_5.sqlite` 只读索引读取，返回 `metadataOnly`，不代表该任务已在桌面打开。部署方可用 `CODEX_DESKTOP_STATE_DB` 指定对应版本的索引。任务内容、运行态和所有操作由 IPC 所有者提供；未找到所有者时需先在桌面打开任务。Connector 不修改桌面数据库、rollout、配置或登录态。
 
-所有获准调用都固定绑定系统默认 `~/.codex`。当前 Codex 账号、配置、会话、历史、技能和任务状态完全由该系统默认目录决定。Connector 私有目录只保存自身管理令牌、安装状态、日志和已读状态，不保存平台工作区到 Codex 运行时的映射。
+## 从 2.2.0 迁移
 
-在 macOS 上，Connector 通过 `codex app-server daemon start/version/stop` 管理 `~/.codex/app-server-control/app-server-control.sock`，并通过 `codex app-server proxy` 的标准 WebSocket 协议连接。CLI 使用官方 standalone 版本化目录安装；每次启动共享后端都必须验证 CLI 与 app-server 版本一致。Connector 正常停止或重连只关闭自己的 proxy，不停止共享 app-server；CLI 升级则在阻止新调用后停止受管后端，再原子切换 `current` 并启动新版本。升级 2.1.0 遗留的非受管后端时，Connector 只会终止由 control socket 对端、当前用户和完整启动参数共同确认的 Codex app-server。Linux 尚无连接器内置 CLI 安装链，继续从宿主 `PATH` 启动并复用共享 control socket，不强行套用 macOS 的安装布局。
+- `startThread`、`request`、`listApps` 和文件式 `setThreadReadState` 已移除。独立 app-server 功能使用另一个应用 `digital-employee-connector`。
+- `resumeThread` 表示连接桌面所有者并获取快照，不再调用独立 app-server 的 `thread/resume`。
+- `readThread` 返回带 `revision` 和 `ownerClientId` 的桌面状态；`listThreadTurns` 展开 canonical history，保留桌面轮次字段。
+- `steerTurn` 使用桌面当前轮次语义，不接受 app-server 的 `turnId` 条件。`interruptTurn` 要求 `turnId`，通过桌面 `expectedTurnId` 校验。
+- 移除 CLI 自动安装、daemon/proxy、transport 切换及 JavaScript app-server 实现。CLI 安装不属于桌面 Connector。
+- 桌面事件统一为 `codexDesktopEvent`，保留原始 IPC 消息和修订号。`recentEvents` 返回连接的 `streamId`、序号和有限事件窗口。流重置、序号缺口或修订缺口后重新调用 `readThread`；事件是实时通知，不是持久消息队列。
 
-Codex Desktop 只有在自身也使用这个 control socket 时才共享上述实时运行态；仍以独立 `stdio://` app-server 运行的桌面版本只共享 `~/.codex` 中的持久历史，不能自动共享内存中的轮次状态。Windows 上游目前没有稳定的 daemon/control-socket 生命周期，Connector 因此继续使用独立 `stdio://`，不伪造跨进程共享能力。
+`IPC_OPERATION_OUTCOME_UNKNOWN` 表示写入后响应丢失，任务可能已经执行。调用方必须读取桌面状态核对，禁止自动重发。连接恢复仅用于新请求，不回放旧写请求，不切换 app-server。
 
-## 本地运行
+## 验证与发布
 
-```bash
-cargo run -- start
-cargo run -- status
-cargo run -- stop
-```
+`cargo fmt --check`、`cargo test --locked`、`npm test`、`python3 -m unittest discover -s test -p 'test_*.py'`。协议测试覆盖分片帧、所有者路由、快照、断线后写入结果未知和不自动重发。本机只读实测覆盖已有桌面任务和完整历史读取。
 
-默认监听 `127.0.0.1:18111`。Bridge Agent 会注入：
-
-- `BAIJIMU_LOCAL_APP_DATA_DIR`：应用私有状态目录；
-- `CODEX_CONNECTOR_BAIJIMU_BINARY`：平台管理的 Baijimu CLI 绝对路径；
-- `PATH`：当前桌面用户的规范命令搜索路径；连接器的检查和运行均直接执行同一个 `codex` 命令，不再自行枚举安装目录或探测登录 Shell。
-
-连接器启动时刷新权威 CLI 制品目录，目录校验结果的进程内有效期为 6 小时，过期后的首次调用会再次刷新。目录不可用时使用本机已校验缓存，并以支持分页任务历史的最低协议版本作为最终下限。检测到版本落后或安装布局尚未受管时，连接器会等待当前调用结束、停止旧 app-server、安装并复验新 CLI，再启动同版本的受管 app-server；同步期间调用返回结构化的 `CODEX_CLI_INITIALIZING` 状态。
-
-远程能力、方法、事件、超时和输入 Schema 以 [connector.json](./connector.json) 为准。
-
-### 可选项目准备（待发布）
-
-`prepareProject` 仅接受三种明确选择：已有设备绝对目录、已有父目录下的新目录、工作区项目 ID。
-本地目录只在设备创建或验证，不会创建平台项目；工作区项目复用既有 Baijimu CLI 检出流程。
-工作区来自 Bridge 的可信请求头，参数不能覆盖。目录最长 1024 字节，与平台会话工作目录限制一致。
-
-新目录已存在时返回冲突，不覆盖或自动复用内容。准备成功但平台登记失败后，应改为选择已返回的绝对目录再登记。
-不选项目不调用此方法；员工身份、默认项目偏好及会话授权都由平台保存和校验。
-
-## 验证
-
-```bash
-cargo test
-npm test
-```
-
-本仓库是 `codex-connector` 客户端本地应用的唯一发布单元；源码主线为 `baijimu/baijimu-codex-connector/main`，标签、制品、签名和市场版本必须保持同一版本号。
-
-## 调用与安装
-
-连接器启动和 `/invoke/*` 业务调用不会自动安装或升级 Codex CLI，也不读取安装制品目录。已有的 app-server 会话直接复用；需要启动 app-server 时才检查宿主 `PATH` 中的 CLI 和协议能力，失败时返回对应原始错误。
-
-`status` 不启动 CLI，并返回最近观测的运行状态和 `setup` 安装记录；即使历史安装失败或正在安装，也可查询。安装、升级与重试由显式管理接口 `/management/v1/setup/ensure-ready` 和 `/management/v1/setup/retry` 发起，目标版本来自安装制品目录。目录最新版本不再充当每次业务调用的准入门槛。
-
-发布流程使用固定版本 `baijimu` CLI，将签名制品上传至来源应用，冻结完整版本，再提交中心独立审核。来源身份由服务返回，所属工作区由发布配置提供；重跑会核对冻结清单、平台制品和回下载校验和，拒绝覆盖不同内容。`PENDING_REVIEW` 仅表示已提交审核，不表示市场已发布。
-
-制品已公开但来源登记或提交中断时，在 `main` 上运行同一工作流，选择原始 `release_ref=v<version>` 和 `publish=true`。恢复阶段使用该次工作流的准确主线提交作为发布器，从原始标签读取应用清单，并回下载、校验已有 GitHub/OSS 制品；不重新构建或覆盖制品。CLI 的 `--json` 成功与失败都读取 stdout 的结构化合同，仅来源 Owner 明确返回 `LOCAL_APP_SERVICE_NOT_FOUND` 时允许创建缺失记录。恢复成功可以处于待审状态，公开可安装状态仍须独立审核后验证。
-
-### 平台会话审批
-
-`pendingRequests` 按 threadId 读取本连接尚未处理的命令/文件审批和用户问题；`respondToRequest` 精确匹配 threadId、turnId 与 JSON-RPC requestId。命令/文件仅接受 accept、decline、cancel；不授予 session 级审批豁免。用户回答必须匹配原问题 ID。收到服务请求时先按 method+id 区分双向 JSON-RPC，再处理客户端响应，避免编号相同吞掉审批。
-
-待处理请求为当前 App Server 连接的有界协议状态，断线后不恢复、不自动重发审批响应，不持久化额外授权账。响应结果不确定时需重新查询原生状态。未知原生服务请求明确返回不支持；本适配器不承诺实现全部上游协议。`steerTurn` 的 turnId 映射到原生 expectedTurnId，禁止把历史轮次当作当前轮次继续写入。
+唯一发布入口为本仓库 `.github/workflows/release.yml`，从主线精确提交生成三平台签名制品、公开 OSS 内容寻址归档和来源环境冻结版本。中心提交后的 `PENDING_REVIEW` 仍需独立审核。

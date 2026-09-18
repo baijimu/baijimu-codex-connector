@@ -24,7 +24,7 @@ test("Baijimu CLI exclusively owns platform authentication and Partner API calls
     assert.doesNotMatch(platformCli, new RegExp(forbidden));
   }
 
-  assert.match(platformCli, /\["auth", "status"\]/);
+  assert.match(platformCli, /Command::new\(binary\(\)\?\)/);
   assert.doesNotMatch(
     platformCli,
     /reqwest|bearer_auth|fs::read|fs::read_to_string|auth\.json/,
