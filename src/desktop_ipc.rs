@@ -1,5 +1,5 @@
 //! Desktop coordination IPC only. This module never starts a Codex process.
-use crate::{process_runtime, random_event_id, HttpError, ServerOptions};
+use crate::{random_event_id, HttpError, ServerOptions};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -66,7 +66,7 @@ async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, value: &Value) -> Re
 impl DesktopClient {
     pub(crate) fn new(options: ServerOptions) -> Self {
         #[cfg(unix)]
-        let default = process_runtime::system_codex_home().join("ipc/ipc.sock");
+        let default = crate::process_runtime::system_codex_home().join("ipc/ipc.sock");
         #[cfg(windows)]
         let default = PathBuf::from(r"\\.\pipe\codex-ipc");
         let endpoint = std::env::var_os("CODEX_DESKTOP_IPC_PATH")
