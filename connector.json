@@ -319,10 +319,10 @@
     },
     {
       "name": "listThreadTurns",
-      "description": "从桌面 IPC 完整历史快照分页读取轮次。",
+      "description": "只读查询 Codex 原生分页历史，默认返回最新一轮摘要；不通过 IPC 加载完整历史。详情使用 listThreadItems、readThreadItem。",
       "path": "/invoke/listThreadTurns",
       "httpMethod": "POST",
-      "timeoutSecs": 30,
+      "timeoutSecs": 10,
       "input_schema": {
         "type": "object",
         "required": [
@@ -336,12 +336,107 @@
             "type": [
               "string",
               "null"
+            ],
+            "description": "服务端返回的不透明游标；必须保持任务和排序不变；旧数字偏移游标不受支持。"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 1
+          },
+          "sortDirection": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "itemsView": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "notLoaded"
+            ],
+            "default": "summary",
+            "description": "summary 返回首条用户消息与最终/最近助手消息的短预览；大内容按条目分段读取。"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "readThreadItem",
+      "description": "分段读取原生条目 JSON 文本，每段最多8192个Unicode字符；按 nextCursor 拼接全部 content 后解析JSON。条目变化返回 HISTORY_CURSOR_STALE，需从头重读。",
+      "path": "/invoke/readThreadItem",
+      "httpMethod": "POST",
+      "timeoutSecs": 10,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "threadId",
+          "turnId",
+          "itemId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "itemId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "listThreadItems",
+      "description": "按轮次分页列出条目摘要，默认20条；不包含完整工具输出，详情调用 readThreadItem。",
+      "path": "/invoke/listThreadItems",
+      "httpMethod": "POST",
+      "timeoutSecs": 10,
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "threadId",
+          "turnId"
+        ],
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "limit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 100
+            "maximum": 100,
+            "default": 20
+          },
+          "sortDirection": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
           }
         },
         "additionalProperties": false

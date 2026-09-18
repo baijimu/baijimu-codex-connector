@@ -30,6 +30,7 @@ struct Session {
     outgoing: async_mpsc::Sender<Value>,
     pending: Mutex<HashMap<String, Pending>>,
     snapshots: Mutex<HashMap<String, (u64, Value)>>,
+    snapshot_serial: Mutex<HashMap<String, u64>>,
     changed: Condvar,
     owners: Mutex<HashMap<String, String>>,
     events: Mutex<(u64, std::collections::VecDeque<Value>)>,
@@ -126,6 +127,7 @@ impl DesktopClient {
             outgoing: tx,
             pending: Mutex::new(HashMap::new()),
             snapshots: Mutex::new(HashMap::new()),
+            snapshot_serial: Mutex::new(HashMap::new()),
             changed: Condvar::new(),
             owners: Mutex::new(HashMap::new()),
             events: Mutex::new((0, std::collections::VecDeque::new())),
@@ -176,6 +178,49 @@ impl DesktopClient {
     }
     pub(crate) fn ensure_connected(&self) -> Result<(), HttpError> {
         self.connect().map(|_| ())
+    }
+    /// Subscribe to the owner's current state without asking it to hydrate the
+    /// entire persisted history. Wait for a fresh snapshot, even if its desktop
+    /// revision is unchanged. Drop historical fields before cloning the response.
+    pub(crate) fn read_metadata(&self, thread: &str) -> Result<Value, HttpError> {
+        let s = self.connect()?;
+        let owner = s.owner(thread, self.options.request_timeout_ms)?;
+        let mut snapshots = s.snapshots.lock().unwrap();
+        let before = *s.snapshot_serial.lock().unwrap().get(thread).unwrap_or(&0);
+        s.send(json!({"type":"broadcast","method":"thread-stream-following-changed","version":1,"sourceClientId":s.id,"targetClientIds":[owner],"params":{"conversationId":thread,"hostId":"local","following":true}}))?;
+        let deadline = Instant::now() + Duration::from_millis(self.options.request_timeout_ms);
+        loop {
+            let serial = *s.snapshot_serial.lock().unwrap().get(thread).unwrap_or(&0);
+            if serial > before {
+                if let Some((revision, value)) = snapshots.get(thread) {
+                    let fields = value.as_object().ok_or_else(|| {
+                        failure("IPC_PROTOCOL_MISMATCH", "invalid desktop snapshot")
+                    })?;
+                    let metadata: serde_json::Map<String, Value> = fields
+                        .iter()
+                        .filter(|(k, _)| !matches!(k.as_str(), "turns" | "turnHistory"))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    return Ok(
+                        json!({"thread":metadata,"revision":revision,"ownerClientId":owner,"transport":"desktop-ipc"}),
+                    );
+                }
+            }
+            if !s.alive.load(Ordering::Acquire) {
+                return Err(failure(
+                    "DESKTOP_IPC_DISCONNECTED",
+                    "desktop disconnected during metadata read",
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(failure(
+                    "IPC_SNAPSHOT_TIMEOUT",
+                    "desktop did not deliver current metadata snapshot",
+                ));
+            }
+            snapshots = s.changed.wait_timeout(snapshots, remaining).unwrap().0;
+        }
     }
     pub(crate) fn read(&self, thread: &str) -> Result<Value, HttpError> {
         let s = self.connect()?;
@@ -428,10 +473,13 @@ impl Session {
                         let change = &params["change"];
                         if change["type"] == "snapshot" {
                             if let Some(revision) = change["revision"].as_u64() {
-                                self.snapshots.lock().unwrap().insert(
+                                let mut snapshots = self.snapshots.lock().unwrap();
+                                snapshots.insert(
                                     id.into(),
                                     (revision, change["conversationState"].clone()),
                                 );
+                                let mut serials = self.snapshot_serial.lock().unwrap();
+                                *serials.entry(id.into()).or_default() += 1;
                                 self.changed.notify_all();
                             }
                         }
@@ -540,7 +588,13 @@ mod protocol_tests {
                         assert_eq!(v["params"]["hostId"], "local");
                         result = json!({"supportsUntrustedAppInput":true});
                     }
-                    "thread-stream-following-changed" => continue,
+                    "thread-stream-following-changed" => {
+                        send(
+                            &mut socket,
+                            json!({"type":"broadcast","method":"thread-stream-state-changed","version":11,"sourceClientId":"owner-a","params":{"hostId":"local","conversationId":"task-a","change":{"type":"snapshot","revision":6,"conversationState":{"id":"task-a","requests":[],"turnHistory":{"kind":"canonical"},"turns":[{"turnId":"current"}]}}}}),
+                        );
+                        continue;
+                    }
                     "thread-follower-load-complete-history" => {
                         assert_eq!(v["targetClientId"], "owner-a");
                         assert_eq!(v["version"], 1);
@@ -618,6 +672,44 @@ mod protocol_tests {
         drop(c);
         assert_eq!(h.join().unwrap(), 0);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn metadata_read_does_not_request_full_history_and_refreshes_same_revision() {
+        let (c, h, dir) = fixture(false);
+        for _ in 0..2 {
+            let value = c.read_metadata("task-a").unwrap();
+            assert_eq!(value["revision"], 6); // Full history RPC would return 7.
+            assert!(value["thread"].get("turns").is_none());
+            assert!(value["thread"].get("turnHistory").is_none());
+            assert_eq!(value["thread"]["requests"], json!([]));
+        }
+        drop(c);
+        assert_eq!(h.join().unwrap(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    #[ignore = "explicit current Desktop IPC read-only probe"]
+    fn native_metadata_readonly_probe() {
+        let thread = std::env::var("CODEX_HISTORY_TEST_THREAD").expect("test thread required");
+        let c = DesktopClient::new(ServerOptions {
+            host: "127.0.0.1".into(),
+            port: 0,
+            listen: "stdio://".into(),
+            extra_args: vec![],
+            request_timeout_ms: 10000,
+            daemon: false,
+        });
+        for _ in 0..2 {
+            let start = Instant::now();
+            let value = c.read_metadata(&thread).unwrap();
+            assert!(value["thread"].get("turnHistory").is_none());
+            println!(
+                "metadata: {} bytes, {} ms, revision={}",
+                value.to_string().len(),
+                start.elapsed().as_millis(),
+                value["revision"]
+            );
+        }
     }
     #[test]
     fn disconnected_write_is_unknown_and_is_never_replayed() {

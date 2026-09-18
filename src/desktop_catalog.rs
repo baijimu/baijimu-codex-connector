@@ -1,6 +1,6 @@
 //! Read-only desktop metadata index. Never opens rollouts for writing or starts a runtime.
 use crate::{process_runtime, HttpError};
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 fn open() -> Result<Connection, HttpError> {
@@ -22,6 +22,22 @@ fn open() -> Result<Connection, HttpError> {
 }
 pub(crate) fn list(body: &Value) -> Result<Value, HttpError> {
     query(&open()?, body)
+}
+pub(crate) fn history_source(thread: &str) -> Result<(String, PathBuf), HttpError> {
+    open()?
+        .query_row(
+            "SELECT history_mode,rollout_path FROM threads WHERE id=?1",
+            [thread],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    PathBuf::from(r.get::<_, String>(1)?),
+                ))
+            },
+        )
+        .optional()
+        .map_err(schema)?
+        .ok_or_else(|| HttpError::coded(404, "任务不存在", "THREAD_NOT_FOUND", json!({})))
 }
 fn query(db: &Connection, body: &Value) -> Result<Value, HttpError> {
     let limit = body["limit"].as_u64().unwrap_or(50).clamp(1, 100) as i64;

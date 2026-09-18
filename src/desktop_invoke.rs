@@ -1,4 +1,4 @@
-use crate::{desktop_catalog, AppState, HttpError};
+use crate::{desktop_catalog, desktop_history, AppState, HttpError};
 use serde_json::{json, Value};
 fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, HttpError> {
     v.get(key)
@@ -39,27 +39,16 @@ pub(crate) fn invoke_http(
             desktop_catalog::projects(&body)?
         }
         "/invoke/readThread" | "/invoke/resumeThread" => {
-            let mut read = c.read(required(&body, "threadId")?)?;
+            let thread = required(&body, "threadId")?;
             if body["excludeTurns"] == true || body["includeTurns"] == false {
-                if let Some(o) = read["thread"].as_object_mut() {
-                    o.remove("turns");
-                    o.remove("turnHistory");
-                }
+                c.read_metadata(thread)?
+            } else {
+                c.read(thread)?
             }
-            read
         }
-        "/invoke/listThreadTurns" => {
-            let read = c.read(required(&body, "threadId")?)?;
-            let turns = turns(&read["thread"])?;
-            let offset = body["cursor"]
-                .as_str()
-                .unwrap_or("0")
-                .parse::<usize>()
-                .map_err(|_| HttpError::new(400, "invalid cursor"))?;
-            let limit = body["limit"].as_u64().unwrap_or(50).clamp(1, 100) as usize;
-            let next = offset.saturating_add(limit);
-            let more = next < turns.len();
-            json!({"data":turns.into_iter().skip(offset).take(limit).collect::<Vec<_>>(),"nextCursor":more.then(||next.to_string()),"revision":read["revision"]})
+        "/invoke/listThreadTurns" | "/invoke/listThreadItems" | "/invoke/readThreadItem" => {
+            c.ensure_connected()?;
+            desktop_history::invoke(path.trim_start_matches("/invoke/"), &body)?
         }
         "/invoke/startTurn" => {
             let id = required(&body, "threadId")?;
@@ -106,7 +95,7 @@ pub(crate) fn invoke_http(
             )?
         }
         "/invoke/pendingRequests" => {
-            let read = c.read(required(&body, "threadId")?)?;
+            let read = c.read_metadata(required(&body, "threadId")?)?;
             json!({"requests":read["thread"]["requests"],"revision":read["revision"]})
         }
         "/invoke/respondToRequest" => {
@@ -115,7 +104,7 @@ pub(crate) fn invoke_http(
                 .get("requestId")
                 .filter(|v| v.is_string() || v.is_number())
                 .ok_or_else(|| HttpError::new(400, "requestId required"))?;
-            let read = c.read(id)?;
+            let read = c.read_metadata(id)?;
             let requests = read["thread"]["requests"]
                 .as_array()
                 .ok_or_else(|| HttpError::new(409, "no pending request"))?;
@@ -215,7 +204,7 @@ fn validate_request(path: &str, body: &Value) -> Result<(), HttpError> {
         if schema["properties"].get(key).is_none() {
             return Err(HttpError::coded(
                 400,
-                format!("桌面 IPC 不支持参数 {key}"),
+                format!("Connector 不支持参数 {key}"),
                 "UNSUPPORTED_PARAMETER",
                 json!({"parameter":key}),
             ));
@@ -260,37 +249,6 @@ fn require_request_turn(request: &Value, turn: &str) -> Result<(), HttpError> {
     }
     Ok(())
 }
-fn turns(state: &Value) -> Result<Vec<Value>, HttpError> {
-    if state.pointer("/turnHistory/kind") == Some(&json!("canonical")) {
-        let history = &state["turnHistory"]["history"];
-        let islands = history["islands"]
-            .as_array()
-            .ok_or_else(|| HttpError::new(502, "invalid canonical turn history"))?;
-        let mut out = vec![];
-        for island in islands {
-            for entry in island["entries"]
-                .as_array()
-                .ok_or_else(|| HttpError::new(502, "invalid turn island"))?
-            {
-                let key = entry["value"]
-                    .as_str()
-                    .ok_or_else(|| HttpError::new(502, "invalid turn key"))?;
-                out.push(
-                    history["entitiesByKey"]
-                        .get(key)
-                        .ok_or_else(|| HttpError::new(502, "missing canonical turn"))?
-                        .clone(),
-                );
-            }
-        }
-        Ok(out)
-    } else {
-        state["turns"]
-            .as_array()
-            .cloned()
-            .ok_or_else(|| HttpError::new(502, "missing desktop turns"))
-    }
-}
 #[cfg(test)]
 mod tests {
     #[test]
@@ -312,7 +270,7 @@ mod tests {
             ),
             (
                 "/invoke/listThreadTurns",
-                serde_json::json!({"threadId":"a","itemsView":"summary"}),
+                serde_json::json!({"threadId":"a","unknownHistoryOption":true}),
             ),
             (
                 "/invoke/startTurn",
@@ -338,12 +296,5 @@ mod tests {
             &serde_json::json!({"threadId":"a"})
         )
         .is_err());
-    }
-
-    use super::*;
-    #[test]
-    fn canonical_history_is_not_mistaken_for_empty_legacy_turns() {
-        let s = json!({"turns":[],"turnHistory":{"kind":"canonical","history":{"islands":[{"entries":[{"value":"x"}]}],"entitiesByKey":{"x":{"turnId":"t"}}}}});
-        assert_eq!(turns(&s).unwrap()[0]["turnId"], "t");
     }
 }

@@ -1,5 +1,6 @@
 mod desktop_catalog;
 mod desktop_events;
+mod desktop_history;
 mod desktop_invoke;
 mod desktop_ipc;
 use desktop_invoke::invoke_http;
