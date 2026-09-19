@@ -626,7 +626,22 @@ mod protocol_tests {
                             break;
                         }
                         assert_eq!(v["params"]["turnStart"]["request"]["cwd"], "/project-a");
+                        assert_eq!(
+                            v["params"]["turnStart"]["request"]["input"],
+                            json!([{"type":"text","text":"hello","text_elements":[]}])
+                        );
                         result = json!({"result":{"turn":{"id":"new-turn"}}});
+                    }
+                    "thread-follower-steer-turn" => {
+                        writes += 1;
+                        assert_eq!(v["targetClientId"], "owner-a");
+                        assert_eq!(v["version"], 1);
+                        assert_eq!(
+                            v["params"]["input"],
+                            json!([
+                                {"type":"text","text":"hello","text_elements":[]}
+                            ])
+                        );
                     }
                     _ => {}
                 }
@@ -675,6 +690,31 @@ mod protocol_tests {
         assert_eq!(error.code, Some(json!("IPC_OWNER_CHANGED")));
         drop(state);
         assert_eq!(h.join().unwrap(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn array_inputs_are_normalized_on_both_ipc_write_paths() {
+        let (c, h, dir) = fixture(false);
+        let state = crate::AppState {
+            client: c,
+            management_operation: std::sync::Mutex::new(()),
+            management_token: String::new(),
+        };
+        for path in ["/invoke/startTurn", "/invoke/steerTurn"] {
+            let mut body = json!({"threadId":"task-a","input":[{"type":"text","text":"hello"}]});
+            if path == "/invoke/startTurn" {
+                body["cwd"] = json!("/project-a");
+            }
+            crate::desktop_invoke::invoke_http(
+                path,
+                &serde_json::to_vec(&body).unwrap(),
+                1,
+                &state,
+            )
+            .unwrap();
+        }
+        drop(state);
+        assert_eq!(h.join().unwrap(), 2);
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]

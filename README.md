@@ -94,3 +94,7 @@ macOS/Linux 默认连接用户 `.codex/ipc/ipc.sock`；Windows 使用 `\\.\pipe\
 - 原始 `codexDesktopEvent` 契约未变化，可能包含大快照。此版本限制的是查询响应；调用方不要通过轮询完整快照更新聊天记录。后续事件传输优化需独立契约，不把原始事件悄悄裁剪。
 
 验证：常规完整测试之外，可显式设置 `CODEX_HISTORY_TEST_THREAD`，运行 `cargo test --locked native_ -- --ignored --nocapture` 做本机只读验证，只打印大小、耗时和投影位置，不打印用户消息。
+
+## 5.0.1 文本输入修复
+
+`startTurn` 和 `steerTurn` 统一补齐文本输入中缺失的 `text_elements: []`，保留已有标记与非文本内容；显式传入错误类型时在发送 IPC 前拒绝。避免桌面端渲染外部数组输入时读取缺失字段而导致会话打不开。

@@ -11,7 +11,32 @@ fn input(v: &Value) -> Result<Value, HttpError> {
         Some(Value::String(s)) if !s.is_empty() => {
             Ok(json!([{"type":"text","text":s,"text_elements":[]}]))
         }
-        Some(Value::Array(a)) if !a.is_empty() => Ok(json!(a)),
+        Some(Value::Array(a)) if !a.is_empty() => {
+            let mut items = a.clone();
+            for (index, item) in items.iter_mut().enumerate() {
+                let item = item.as_object_mut().ok_or_else(|| {
+                    HttpError::new(400, format!("input[{index}] must be an object"))
+                })?;
+                if item.get("type").and_then(Value::as_str) == Some("text") {
+                    if !item.get("text").is_some_and(Value::is_string) {
+                        return Err(HttpError::new(
+                            400,
+                            format!("input[{index}].text must be a string"),
+                        ));
+                    }
+                    // Desktop renders the original IPC input before Core defaults it.
+                    // Preserve supplied annotations; only an absent field means empty.
+                    let elements = item.entry("text_elements").or_insert_with(|| json!([]));
+                    if !elements.is_array() {
+                        return Err(HttpError::new(
+                            400,
+                            format!("input[{index}].text_elements must be an array"),
+                        ));
+                    }
+                }
+            }
+            Ok(Value::Array(items))
+        }
         _ => Err(HttpError::new(400, "input is required")),
     }
 }
@@ -251,6 +276,42 @@ fn require_request_turn(request: &Value, turn: &str) -> Result<(), HttpError> {
 }
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn text_input_is_complete_for_desktop_rendering() {
+        let expected = json!([{"type":"text","text":"确认","text_elements":[]}]);
+        assert_eq!(super::input(&json!({"input":"确认"})).unwrap(), expected);
+        assert_eq!(
+            super::input(&json!({"input":[{"type":"text","text":"确认"}]})).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn input_preserves_annotations_and_other_content() {
+        let items = json!([
+            {"type":"text","text":"文件","text_elements":[{"byteRange":{"start":0,"end":6},"placeholder":"文件"}]},
+            {"type":"image","url":"https://example.test/image.png"},
+            {"type":"text","text":"后续","text_elements":[]}
+        ]);
+        assert_eq!(super::input(&json!({"input":items})).unwrap(), items);
+    }
+
+    #[test]
+    fn invalid_text_input_is_rejected_before_ipc() {
+        for items in [
+            json!([null]),
+            json!([{"type":"text"}]),
+            json!([{"type":"text","text":42}]),
+            json!([{"type":"text","text":"确认","text_elements":null}]),
+            json!([{"type":"text","text":"确认","text_elements":{}}]),
+            json!([{"type":"text","text":"确认","text_elements":"[]"}]),
+        ] {
+            assert!(super::input(&json!({"input":items})).is_err());
+        }
+    }
+
     #[test]
     fn approval_requires_matching_request_turn() {
         let r = serde_json::json!({"params":{"turnId":"turn-a"}});
