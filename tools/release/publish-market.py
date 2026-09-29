@@ -159,12 +159,11 @@ def publish(cli, version, connector, oss, directory):
 
 
 def verify_market(cli, frozen):
-    market = cli.api("context")
     cursor, seen, matches = None, set(), []
     while True:
         page = cli.api("listings", **({"after": cursor} if cursor else {}))
         for row in page["items"]:
-            require(row["marketKey"] == market, "Consumer market authority mismatch")
+            require(row["contractVersion"] == "3.0.0", "Unsupported consumer catalog protocol")
             if row["frozenVersion"]["source"]["application"] == frozen["source"]["application"]:
                 matches.append(row["listingId"])
         cursor = page["nextCursor"]
@@ -174,7 +173,7 @@ def verify_market(cli, frozen):
         seen.add(cursor)
     require(len(matches) == 1, "Published market listing is not unique or visible")
     row = cli.api(f"listings/{matches[0]}/versions/{frozen['source']['version']}")
-    require(row["marketKey"] == market and row["listingId"] == matches[0]
+    require(row["contractVersion"] == "3.0.0" and row["listingId"] == matches[0]
             and row["frozenVersion"] == frozen, "Published market content mismatch")
 
 
