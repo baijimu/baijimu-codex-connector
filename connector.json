@@ -90,33 +90,6 @@
     },
     "additionalProperties": false
   },
-  "remoteCapabilities": [
-    {
-      "name": "codex.project.read",
-      "risk": "medium",
-      "description": "从设备系统默认 Codex 状态、项目配置和任务元数据中读取项目根目录。"
-    },
-    {
-      "name": "codex.thread.read",
-      "risk": "medium",
-      "description": "读取、列出和搜索本地 Codex 任务元数据及流式输出。"
-    },
-    {
-      "name": "codex.turn.write",
-      "risk": "medium",
-      "description": "向本地 Codex 发送提示词和引导指令。"
-    },
-    {
-      "name": "codex.turn.interrupt",
-      "risk": "medium",
-      "description": "中断正在执行的 Codex 轮次。"
-    },
-    {
-      "name": "codex.project.write",
-      "risk": "high",
-      "description": "在指定设备目录新建本地项目，或通过平台 CLI 检出当前授权工作区项目。"
-    }
-  ],
   "transport": {
     "type": "http",
     "baseUrl": "http://127.0.0.1:18111"
